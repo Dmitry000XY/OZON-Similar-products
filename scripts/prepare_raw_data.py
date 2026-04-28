@@ -1,159 +1,246 @@
-"""Prepare raw data folders for the Ozon similar products project."""
+from __future__ import annotations
 
+import argparse
+import json
 import shutil
 import tarfile
-import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Any
 
-from ozon_similar_products.config import PROJECT_ROOT, load_data_config, load_paths_config
-from ozon_similar_products.paths import project_path
+import yaml
 
 
-class ArchiveConfig(TypedDict):
-    """Extraction settings for one configured archive."""
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-    destination: Path
+
+@dataclass(frozen=True)
+class ArchiveSpec:
+    dataset_name: str
+    archive_name: str
+    archive_path: Path
+    extract_to: Path
+    target_dir: Path
     payload_root_names: list[str]
+    parquet_glob: str
 
 
-def raw_paths() -> dict[str, Path]:
-    """Return configured raw data paths."""
-    paths_config = load_paths_config()["data"]
-    return {
-        "archives": project_path(paths_config["raw_archives_dir"]),
-        "product_information": project_path(paths_config["product_information_dir"]),
-        "user_actions": project_path(paths_config["user_actions_dir"]),
+def load_yaml(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"Config not found: {path}")
+
+    with path.open("r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
+
+
+def project_path(relative_path: str) -> Path:
+    return PROJECT_ROOT / relative_path
+
+
+def is_safe_member(base_dir: Path, target_path: Path) -> bool:
+    """
+    Защита от path traversal внутри tar-архива.
+    Архив не должен иметь возможность записать файл за пределы extract_to.
+    """
+    base_dir = base_dir.resolve()
+    target_path = target_path.resolve()
+    return target_path == base_dir or base_dir in target_path.parents
+
+
+def path_has_parquet(path: Path, parquet_glob: str) -> bool:
+    if not path.exists():
+        return False
+
+    return any(path.glob(parquet_glob))
+
+
+def get_candidate_payload_dirs(spec: ArchiveSpec) -> list[Path]:
+    """
+    Возможные места, где после распаковки окажется parquet-датасет.
+
+    Для product_information:
+      extract_to = data/raw
+      target_dir = data/raw/product_information
+
+    Для user_actions:
+      extract_to = data/raw/user_actions
+      target_dir = data/raw/user_actions
+      payload может лежать в data/raw/user_actions/user_actions_3_months
+    """
+    candidates: list[Path] = []
+
+    candidates.append(spec.target_dir)
+
+    for root_name in spec.payload_root_names:
+        candidates.append(spec.extract_to / root_name)
+        candidates.append(spec.target_dir / root_name)
+
+    unique_candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique_candidates.append(candidate)
+
+    return unique_candidates
+
+
+def find_existing_payload_dir(spec: ArchiveSpec) -> Path | None:
+    for candidate in get_candidate_payload_dirs(spec):
+        if path_has_parquet(candidate, spec.parquet_glob):
+            return candidate
+
+    return None
+
+
+def safe_extract_tar_gz(spec: ArchiveSpec, force: bool = False) -> Path:
+    if not spec.archive_path.exists():
+        raise FileNotFoundError(f"Archive not found: {spec.archive_path}")
+
+    existing_payload_dir = find_existing_payload_dir(spec)
+
+    if existing_payload_dir is not None and not force:
+        print(f"[prepare] Skip {spec.dataset_name}: already prepared")
+        print(f"[prepare] Existing payload: {existing_payload_dir}")
+        print("[prepare] Use --force to extract again.")
+        return existing_payload_dir
+
+    if force and spec.target_dir.exists():
+        print(f"[prepare] Removing existing target: {spec.target_dir}")
+        shutil.rmtree(spec.target_dir)
+
+    spec.extract_to.mkdir(parents=True, exist_ok=True)
+
+    print(f"[prepare] Extracting dataset: {spec.dataset_name}")
+    print(f"[prepare] Archive:            {spec.archive_path}")
+    print(f"[prepare] Extract to:         {spec.extract_to}")
+
+    with tarfile.open(spec.archive_path, mode="r:gz") as tar:
+        members = tar.getmembers()
+
+        for member in members:
+            target_path = spec.extract_to / member.name
+
+            if not is_safe_member(spec.extract_to, target_path):
+                raise RuntimeError(f"Unsafe path in archive: {member.name}")
+
+        tar.extractall(spec.extract_to)
+
+    payload_dir = find_existing_payload_dir(spec)
+
+    if payload_dir is None:
+        candidates = "\n".join(f"  - {path}" for path in get_candidate_payload_dirs(spec))
+        raise RuntimeError(
+            f"Extraction finished, but parquet payload was not found for "
+            f"{spec.dataset_name}.\nChecked:\n{candidates}"
+        )
+
+    parquet_files_count = sum(1 for _ in payload_dir.glob(spec.parquet_glob))
+
+    manifest = {
+        "dataset_name": spec.dataset_name,
+        "archive_name": spec.archive_name,
+        "archive_path": str(spec.archive_path.relative_to(PROJECT_ROOT)),
+        "extract_to": str(spec.extract_to.relative_to(PROJECT_ROOT)),
+        "target_dir": str(spec.target_dir.relative_to(PROJECT_ROOT)),
+        "payload_dir": str(payload_dir.relative_to(PROJECT_ROOT)),
+        "parquet_glob": spec.parquet_glob,
+        "parquet_files_count": parquet_files_count,
     }
 
+    spec.target_dir.mkdir(parents=True, exist_ok=True)
 
-def archive_plan() -> dict[str, ArchiveConfig]:
-    """Return configured tar.gz archives and their extraction targets."""
-    data_config = load_data_config()
-    paths = raw_paths()
-    return {
-        data_config["product_information"]["archive_name"]: {
-            "destination": paths["product_information"],
-            "payload_root_names": data_config["product_information"]["payload_root_names"],
-        },
-        data_config["user_actions"]["archive_name"]: {
-            "destination": paths["user_actions"],
-            "payload_root_names": data_config["user_actions"]["payload_root_names"],
-        },
-    }
+    marker_path = spec.target_dir / ".prepared.json"
+    marker_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
+    print(f"[prepare] Done:              {spec.dataset_name}")
+    print(f"[prepare] Payload:           {payload_dir}")
+    print(f"[prepare] Parquet files:     {parquet_files_count}")
+    print(f"[prepare] Marker:            {marker_path}")
 
-def ensure_directories(paths: dict[str, Path]) -> None:
-    """Create raw data directories if they do not exist."""
-    for path in paths.values():
-        path.mkdir(parents=True, exist_ok=True)
+    return payload_dir
 
 
-def move_archives(archives_dir: Path, archive_names: list[str], report_missing: bool = True) -> list[str]:
-    """Move configured archives from the project root into raw archives."""
-    actions: list[str] = []
-    for archive_name in archive_names:
-        source = PROJECT_ROOT / archive_name
-        target = archives_dir / archive_name
-        if source.exists() and not target.exists():
-            shutil.move(str(source), str(target))
-            actions.append(f"moved archive: {source.name} -> {target.relative_to(PROJECT_ROOT)}")
-        elif target.exists():
-            actions.append(f"archive already in place: {target.relative_to(PROJECT_ROOT)}")
-        elif report_missing:
-            actions.append(f"archive not found: {archive_name}")
-    return actions
+def print_archive_preview(archive_path: Path, limit: int = 30) -> None:
+    print(f"\n[preview] {archive_path}")
+
+    if not archive_path.exists():
+        print(f"[preview] Missing: {archive_path}")
+        return
+
+    with tarfile.open(archive_path, mode="r:gz") as tar:
+        for index, member in enumerate(tar):
+            if index >= limit:
+                print(f"[preview] ... first {limit} items shown")
+                break
+
+            print(f"  {member.name}")
 
 
-def has_payload(path: Path) -> bool:
-    """Return True when a directory contains files other than placeholders."""
-    ignored = {"README.md", ".gitkeep"}
-    return path.exists() and any(child.is_file() and child.name not in ignored for child in path.rglob("*"))
+def build_specs() -> list[ArchiveSpec]:
+    paths_config = load_yaml(PROJECT_ROOT / "configs" / "paths.yaml")
+    data_config = load_yaml(PROJECT_ROOT / "configs" / "data.yaml")
 
+    raw_dir = project_path(paths_config["data"]["raw_dir"])
+    archives_dir = project_path(paths_config["data"]["raw_archives_dir"])
+    product_information_dir = project_path(paths_config["data"]["product_information_dir"])
+    user_actions_dir = project_path(paths_config["data"]["user_actions_dir"])
 
-def safe_extract_tar_gz(archive: Path, destination: Path, payload_root_names: list[str]) -> str:
-    """Safely extract a tar.gz archive without allowing path traversal."""
-    if has_payload(destination):
-        return f"already extracted: {destination.relative_to(PROJECT_ROOT)}"
+    product_cfg = data_config["product_information"]
+    actions_cfg = data_config["user_actions"]
 
-    raw_dir = destination.parent
-    with tempfile.TemporaryDirectory(prefix="extract_", dir=raw_dir) as tmp_name:
-        tmp_dir = Path(tmp_name)
-        with tarfile.open(archive, mode="r:gz") as tar:
-            members = tar.getmembers()
-            for member in members:
-                target = (tmp_dir / member.name).resolve()
-                if not target.is_relative_to(tmp_dir.resolve()):
-                    raise RuntimeError(f"unsafe archive member path: {member.name}")
-            tar.extractall(tmp_dir, members=members)
-
-        payload_root = normalize_payload_root(tmp_dir, payload_root_names)
-        move_payload(payload_root, destination)
-
-    return f"extracted: {archive.relative_to(PROJECT_ROOT)} -> {destination.relative_to(PROJECT_ROOT)}"
-
-
-def normalize_payload_root(extracted_root: Path, payload_root_names: list[str]) -> Path:
-    """Collapse a single top-level folder when it matches a configured payload name."""
-    children = [child for child in extracted_root.iterdir() if child.name != ".gitkeep"]
-    if len(children) == 1 and children[0].is_dir() and children[0].name in payload_root_names:
-        return children[0]
-    return extracted_root
-
-
-def move_payload(source: Path, destination: Path) -> None:
-    """Move extracted payload files into a destination directory."""
-    destination.mkdir(parents=True, exist_ok=True)
-    for child in source.iterdir():
-        if child.name in {"README.md", ".gitkeep"}:
-            continue
-        target = destination / child.name
-        if not target.exists():
-            shutil.move(str(child), str(target))
-
-
-def extract_archives(archives_dir: Path, archives: dict[str, ArchiveConfig]) -> list[str]:
-    """Extract configured tar.gz archives into their raw data folders."""
-    actions: list[str] = []
-    for archive_name, archive_config in archives.items():
-        archive = archives_dir / archive_name
-        if archive.exists():
-            actions.append(
-                safe_extract_tar_gz(
-                    archive,
-                    archive_config["destination"],
-                    archive_config["payload_root_names"],
-                )
-            )
-    return actions
-
-
-def remove_success_markers(paths: dict[str, Path]) -> list[str]:
-    """Remove Spark marker files with the configured exact marker name."""
-    marker_name = load_data_config()["raw_data"]["success_marker_name"]
-    actions: list[str] = []
-    for raw_path in (paths["product_information"], paths["user_actions"]):
-        for marker in raw_path.rglob(marker_name):
-            if marker.is_file() and marker.name == marker_name:
-                marker.unlink()
-                actions.append(f"removed marker: {marker.relative_to(PROJECT_ROOT)}")
-    return actions
+    return [
+        ArchiveSpec(
+            dataset_name="product_information",
+            archive_name=product_cfg["archive_name"],
+            archive_path=archives_dir / product_cfg["archive_name"],
+            extract_to=raw_dir,
+            target_dir=product_information_dir,
+            payload_root_names=product_cfg["payload_root_names"],
+            parquet_glob=product_cfg["parquet_glob"],
+        ),
+        ArchiveSpec(
+            dataset_name="user_actions",
+            archive_name=actions_cfg["archive_name"],
+            archive_path=archives_dir / actions_cfg["archive_name"],
+            extract_to=user_actions_dir,
+            target_dir=user_actions_dir,
+            payload_root_names=actions_cfg["payload_root_names"],
+            parquet_glob=actions_cfg["parquet_glob"],
+        ),
+    ]
 
 
 def main() -> None:
-    """Run raw data preparation."""
-    paths = raw_paths()
-    archives = archive_plan()
+    parser = argparse.ArgumentParser(
+        description="Prepare raw parquet data from .tar.gz archives."
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Remove existing prepared data and extract archives again.",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Only show archive contents preview, do not extract.",
+    )
+    args = parser.parse_args()
 
-    ensure_directories(paths)
-    actions = []
-    actions.extend(move_archives(paths["archives"], list(archives)))
-    actions.extend(extract_archives(paths["archives"], archives))
-    actions.extend(remove_success_markers(paths))
+    print(f"[prepare] Project root: {PROJECT_ROOT}")
 
-    print("Raw data preparation report:")
-    for action in actions:
-        print(f"- {action}")
+    specs = build_specs()
+
+    for spec in specs:
+        if args.preview:
+            print_archive_preview(spec.archive_path)
+        else:
+            safe_extract_tar_gz(spec, force=args.force)
 
 
 if __name__ == "__main__":
