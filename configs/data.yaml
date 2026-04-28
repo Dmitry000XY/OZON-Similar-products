@@ -1,0 +1,37 @@
+product_information:
+  archive_name: product_information.tar.gz
+  parquet_glob: "**/*.parquet"
+  payload_root_names:
+    - product_information
+  id_column: item_id
+  expected_columns:
+    - item_id
+    - name
+    - brand
+    - type
+    - category_id
+    - category_name
+
+user_actions:
+  archive_name: user_actions.tar.gz
+  parquet_glob: "**/*.parquet"
+  payload_root_names:
+    - user_actions
+    - user_actions_3_months
+  expected_columns:
+    - user_id
+    - date
+    - timestamp
+    - action_type
+    - widget_name
+    - search_query
+    - item_id
+  known_action_types:
+    - search
+    - view
+    - click
+    - to_cart
+    - favorite
+
+raw_data:
+  success_marker_name: _SUCCESS

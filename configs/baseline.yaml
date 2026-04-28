@@ -1,0 +1,12 @@
+baseline:
+  name: co_visitation
+  top_k: 50
+  min_pair_count: 2
+  max_items_per_session: 50
+
+event_weights:
+  search: 0.2
+  view: 1.0
+  click: 2.0
+  favorite: 2.5
+  to_cart: 4.0

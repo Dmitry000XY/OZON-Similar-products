@@ -1,0 +1,13 @@
+evaluation:
+  split_type: time_based
+  metrics:
+    - recall_at_k
+    - hitrate_at_k
+    - ndcg_at_k
+    - coverage
+    - diversity
+  k_values:
+    - 5
+    - 10
+    - 20
+    - 50

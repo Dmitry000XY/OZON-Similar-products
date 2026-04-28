@@ -1,2 +1,29 @@
-# OZON-Similar-products
-Python pipeline for finding similar products based on user interests and behavior
+# OZON Similar Products
+
+Проект для кейса Ozon Fresh: виджет "Похожие товары по интересам пользователей".
+
+Цель: построить offline-пайплайн, который для каждого товара формирует список похожих товаров на основе пользовательского поведения.
+
+В постановке кейса используется название `sku`, в локальных данных ему соответствует колонка `item_id`.
+
+Текущий статус: создается начальная структура проекта, подготовка данных и базовые контракты. Алгоритмы рекомендаций пока не реализованы.
+
+## Данные
+
+- `product_information.tar.gz` - справочник товаров.
+- `user_actions.tar.gz` - логи действий пользователей.
+
+Сырые данные после подготовки лежат в `data/raw/` и не попадают в Git:
+
+- `data/raw/archives/` - исходные архивы;
+- `data/raw/product_information/` - распакованный справочник товаров;
+- `data/raw/user_actions/` - распакованные действия пользователей.
+
+## Подготовка
+
+```bash
+uv sync
+uv run python scripts/prepare_raw_data.py
+uv run python scripts/check_project_structure.py
+uv run pytest
+```
