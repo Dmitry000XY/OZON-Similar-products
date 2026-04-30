@@ -42,8 +42,8 @@ jobs:
       - name: Lint with Ruff
         run: uv run ruff check src scripts tests
 
-      - name: Type-check with mypy
-        run: uv run mypy src scripts tests
+      - name: Type-check with Pyrefly
+        run: uv run pyrefly check src scripts tests
 
       - name: Run tests
         run: uv run pytest
