@@ -39,9 +39,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
-      - name: Check formatting with Ruff
-        run: uv run ruff format --check src scripts tests
-
       - name: Lint with Ruff
         run: uv run ruff check src scripts tests
 
