@@ -11,7 +11,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "mypy>=1.17",
+    "pyrefly>=0.38",
     "pytest>=8.0",
     "pytest-cov>=6.0",
     "ruff>=0.12",
@@ -40,7 +40,6 @@ line-length = 100
 src = ["src", "scripts", "tests"]
 exclude = [
     ".git",
-    ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
     ".venv",
@@ -60,13 +59,3 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["ozon_similar_products"]
-
-[tool.mypy]
-python_version = "3.14"
-files = ["src", "scripts", "tests"]
-pretty = true
-ignore_missing_imports = true
-check_untyped_defs = true
-warn_redundant_casts = true
-warn_unused_configs = true
-warn_unused_ignores = true
