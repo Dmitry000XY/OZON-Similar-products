@@ -11,7 +11,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.17",
     "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.12",
 ]
 
 [build-system]
@@ -24,3 +27,46 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=ozon_similar_products",
+    "--cov-report=term-missing",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["src", "scripts", "tests"]
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "data",
+    "outputs",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ozon_similar_products"]
+
+[tool.mypy]
+python_version = "3.14"
+files = ["src", "scripts", "tests"]
+pretty = true
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
