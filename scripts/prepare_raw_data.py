@@ -49,9 +49,7 @@ def ensure_directories(paths: dict[str, Path]) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def move_archives(
-    archives_dir: Path, archive_names: list[str], report_missing: bool = True
-) -> list[str]:
+def move_archives(archives_dir: Path, archive_names: list[str], report_missing: bool = True) -> list[str]:
     """Move configured archives from the project root into raw archives."""
     actions: list[str] = []
     for archive_name in archive_names:
@@ -75,9 +73,7 @@ def has_payload(path: Path) -> bool:
     )
 
 
-def safe_extract_tar_gz(
-    archive: Path, destination: Path, payload_root_names: list[str]
-) -> str:
+def safe_extract_tar_gz(archive: Path, destination: Path, payload_root_names: list[str]) -> str:
     """Safely extract a tar.gz archive without allowing path traversal."""
     if has_payload(destination):
         return f"already extracted: {destination.relative_to(PROJECT_ROOT)}"
