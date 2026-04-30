@@ -3,7 +3,7 @@ name = "ozon-similar-products"
 version = "0.1.0"
 description = "Offline pipeline skeleton for Ozon Fresh similar products recommendations."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "polars>=1.40.1",
     "pyyaml>=6.0.3",

@@ -36,6 +36,14 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def project_path(relative_path: str) -> Path:
     return PROJECT_ROOT / relative_path
 
+def format_path_for_manifest(path: Path) -> str:
+    path = path.resolve()
+
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
 
 def is_safe_member(base_dir: Path, target_path: Path) -> bool:
     """
@@ -142,10 +150,10 @@ def safe_extract_tar_gz(spec: ArchiveSpec, force: bool = False) -> Path:
     manifest = {
         "dataset_name": spec.dataset_name,
         "archive_name": spec.archive_name,
-        "archive_path": str(spec.archive_path.relative_to(PROJECT_ROOT)),
-        "extract_to": str(spec.extract_to.relative_to(PROJECT_ROOT)),
-        "target_dir": str(spec.target_dir.relative_to(PROJECT_ROOT)),
-        "payload_dir": str(payload_dir.relative_to(PROJECT_ROOT)),
+        "archive_path": format_path_for_manifest(spec.archive_path),
+        "extract_to": format_path_for_manifest(spec.extract_to),
+        "target_dir": format_path_for_manifest(spec.target_dir),
+        "payload_dir": format_path_for_manifest(payload_dir),
         "parquet_glob": spec.parquet_glob,
         "parquet_files_count": parquet_files_count,
     }
