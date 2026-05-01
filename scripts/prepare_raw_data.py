@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import json
 import shutil
@@ -9,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,6 +32,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 def project_path(relative_path: str) -> Path:
     return PROJECT_ROOT / relative_path
+
 
 def format_path_for_manifest(path: Path) -> str:
     path = path.resolve()
@@ -75,9 +73,7 @@ def get_candidate_payload_dirs(spec: ArchiveSpec) -> list[Path]:
       target_dir = data/raw/user_actions
       payload может лежать в data/raw/user_actions/user_actions_3_months
     """
-    candidates: list[Path] = []
-
-    candidates.append(spec.target_dir)
+    candidates: list[Path] = [spec.target_dir]
 
     for root_name in spec.payload_root_names:
         candidates.append(spec.extract_to / root_name)
@@ -210,7 +206,7 @@ def build_specs() -> list[ArchiveSpec]:
             extract_to=raw_dir,
             target_dir=product_information_dir,
             payload_root_names=product_cfg["payload_root_names"],
-            parquet_glob=product_cfg["parquet_glob"],
+            parquet_glob=product_cfg["parquet_glob"]
         ),
         ArchiveSpec(
             dataset_name="user_actions",
@@ -219,8 +215,8 @@ def build_specs() -> list[ArchiveSpec]:
             extract_to=user_actions_dir,
             target_dir=user_actions_dir,
             payload_root_names=actions_cfg["payload_root_names"],
-            parquet_glob=actions_cfg["parquet_glob"],
-        ),
+            parquet_glob=actions_cfg["parquet_glob"]
+        )
     ]
 
 

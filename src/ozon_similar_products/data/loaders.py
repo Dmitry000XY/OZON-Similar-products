@@ -1,11 +1,8 @@
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Iterable
 
 import polars as pl
 import yaml
-
 
 ProjectConfig = dict[str, Any]
 
@@ -54,8 +51,8 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
 
 
 def load_configs(
-    config_dir: str | Path = "configs",
-    project_root: str | Path | None = None,
+        config_dir: str | Path = "configs",
+        project_root: str | Path | None = None,
 ) -> ProjectConfig:
     """
     Загружает основные конфиги проекта.
@@ -105,9 +102,9 @@ def _schema_names(lazy_frame: pl.LazyFrame) -> set[str]:
 
 
 def validate_columns(
-    lazy_frame: pl.LazyFrame,
-    expected_columns: Iterable[str],
-    dataset_name: str,
+        lazy_frame: pl.LazyFrame,
+        expected_columns: Iterable[str],
+        dataset_name: str,
 ) -> None:
     actual_columns = _schema_names(lazy_frame)
     expected_columns = set(expected_columns)
@@ -122,9 +119,9 @@ def validate_columns(
 
 
 def find_parquet_payload_dir(
-    base_dir: Path,
-    payload_root_names: Iterable[str],
-    parquet_glob: str,
+        base_dir: Path,
+        payload_root_names: Iterable[str],
+        parquet_glob: str,
 ) -> Path:
     """
     Находит папку, где реально лежит parquet-датасет.
@@ -174,11 +171,11 @@ def list_event_dates(events_dir: Path) -> list[str]:
 
 
 def _filter_dates(
-    available_dates: list[str],
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    sample_days: int | None = None,
+        available_dates: list[str],
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_days: int | None = None,
 ) -> list[str]:
     if dates is not None:
         selected = sorted(set(dates))
@@ -198,12 +195,12 @@ def _filter_dates(
 
 
 def _collect_event_parquet_files(
-    events_dir: Path,
-    dates: Iterable[str] | None = None,
-    action_types: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    sample_days: int | None = None,
+        events_dir: Path,
+        dates: Iterable[str] | None = None,
+        action_types: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_days: int | None = None,
 ) -> list[Path]:
     available_dates = list_event_dates(events_dir)
 
@@ -248,15 +245,15 @@ def _collect_event_parquet_files(
 
 
 def scan_events(
-    config: ProjectConfig | None = None,
-    *,
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    action_types: str | Iterable[str] | None = None,
-    sample_days: int | None = None,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        action_types: str | Iterable[str] | None = None,
+        sample_days: int | None = None,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.LazyFrame:
     """
     Лениво читает действия пользователей из parquet.
@@ -308,17 +305,17 @@ def scan_events(
 
 
 def load_events(
-    config: ProjectConfig | None = None,
-    *,
-    use_sample: bool = True,
-    sample_days: int = 1,
-    sample_rows: int | None = None,
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    action_types: str | Iterable[str] | None = None,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        use_sample: bool = True,
+        sample_days: int = 1,
+        sample_rows: int | None = None,
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        action_types: str | Iterable[str] | None = None,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.DataFrame:
     """
     Загружает действия пользователей в память.
@@ -346,8 +343,8 @@ def load_events(
 
 
 def _collect_product_parquet_files(
-    products_dir: Path,
-    parquet_glob: str,
+        products_dir: Path,
+        parquet_glob: str,
 ) -> list[Path]:
     parquet_files = sorted(products_dir.glob(parquet_glob))
 
@@ -358,10 +355,10 @@ def _collect_product_parquet_files(
 
 
 def scan_products(
-    config: ProjectConfig | None = None,
-    *,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.LazyFrame:
     """
     Лениво читает справочник товаров.
@@ -403,10 +400,10 @@ def scan_products(
 
 
 def load_products(
-    config: ProjectConfig | None = None,
-    *,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.DataFrame:
     """
     Загружает справочник товаров в память.

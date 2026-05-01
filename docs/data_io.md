@@ -90,7 +90,7 @@ data/raw/product_information/
 
 Из корня проекта:
 
-```powershell
+```bash
 uv run python scripts/prepare_raw_data.py --preview
 ```
 
@@ -102,7 +102,7 @@ uv run python scripts/prepare_raw_data.py --preview
 
 Из корня проекта:
 
-```powershell
+```bash
 uv run python scripts/prepare_raw_data.py
 ```
 
@@ -122,7 +122,7 @@ uv run python scripts/prepare_raw_data.py
 
 Чтобы удалить старую распаковку и распаковать архивы заново:
 
-```powershell
+```bash
 uv run python scripts/prepare_raw_data.py --force
 ```
 
@@ -146,7 +146,7 @@ data/raw/product_information/
 
 Также можно выполнить быструю проверку загрузчиков:
 
-```powershell
+```bash
 uv run python -c "from ozon_similar_products.data import load_configs, load_events, load_products; cfg = load_configs(); print(load_products(cfg).shape); print(load_events(cfg, use_sample=True, sample_days=1, sample_rows=100000).shape)"
 ```
 
@@ -439,13 +439,13 @@ product_information.tar.gz
 
 Сначала посмотрите структуру архива:
 
-```powershell
+```bash
 uv run python scripts/prepare_raw_data.py --preview
 ```
 
 Потом попробуйте распаковать заново:
 
-```powershell
+```bash
 uv run python scripts/prepare_raw_data.py --force
 ```
 
