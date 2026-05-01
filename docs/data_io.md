@@ -1,197 +1,155 @@
 # Работа с архивами и загрузчиками данных
 
-Этот документ описывает только две вещи:
+Короткая инструкция: как положить архивы, подготовить данные и читать их через `loaders.py`.
 
-1. как подготовить локальные данные из архивов;
-2. как читать подготовленные данные через `loaders.py`.
+## Быстрый старт
 
----
+Выполните эти шаги из корня проекта.
 
-## 1. Где должны лежать архивы
+```powershell
+cd D:\ITMO\OZON-Similar-products
+```
 
-Скачанные архивы нужно положить в папку:
+Положите архивы в папку:
 
 ```text
 data/raw/archives/
 ```
 
-Ожидаемые файлы:
+Должны получиться такие файлы:
 
 ```text
 data/raw/archives/user_actions.tar.gz
 data/raw/archives/product_information.tar.gz
 ```
 
-Архивы не нужно распаковывать вручную через Проводник.
-
-Для распаковки используется скрипт:
-
-```text
-scripts/prepare_raw_data.py
-```
-
----
-
-## 2. Что лежит внутри архивов
-
-### `user_actions.tar.gz`
-
-Архив содержит parquet-датасет с действиями пользователей.
-
-После распаковки ожидается структура:
-
-```text
-data/raw/user_actions/
-  user_actions_3_months/
-    date=2024-03-01/
-      action_type=click/
-        *.parquet
-      action_type=favorite/
-        *.parquet
-      action_type=search/
-        *.parquet
-      action_type=to_cart/
-        *.parquet
-      action_type=view/
-        *.parquet
-    date=2024-03-02/
-    ...
-```
-
-Датасет партиционирован по:
-
-```text
-date
-action_type
-```
-
-Это позволяет читать не весь датасет сразу, а отдельные даты или отдельные типы действий.
-
-### `product_information.tar.gz`
-
-Архив содержит папку:
-
-```text
-product_information/
-```
-
-Внутри неё лежит parquet-файл со справочником товаров.
-
-После распаковки ожидается структура:
-
-```text
-data/raw/product_information/
-  *.parquet
-```
-
----
-
-## 3. Как посмотреть содержимое архивов
-
-Из корня проекта:
-
-```powershell
-uv run python scripts/prepare_raw_data.py --preview
-```
-
-Команда ничего не распаковывает, а только показывает первые пути внутри архивов.
-
----
-
-## 4. Как распаковать архивы
-
-Из корня проекта:
+Подготовьте данные:
 
 ```powershell
 uv run python scripts/prepare_raw_data.py
 ```
 
-Скрипт:
-
-- читает пути и имена архивов из `configs/paths.yaml` и `configs/data.yaml`;
-- проверяет наличие архивов;
-- безопасно распаковывает `.tar.gz`;
-- создаёт ожидаемые папки в `data/raw/`;
-- создаёт `.prepared.json` с информацией о подготовке.
-
----
-
-## 5. Как распаковать заново
-
-Если данные уже были распакованы, повторный запуск пропустит существующие папки.
-
-Чтобы удалить старую распаковку и распаковать архивы заново:
-
-```powershell
-uv run python scripts/prepare_raw_data.py --force
-```
-
-Использовать `--force` стоит, если:
-
-- архивы были заменены;
-- структура данных изменилась;
-- предыдущая распаковка была прервана;
-- нужно гарантированно пересоздать `data/raw/user_actions/` и `data/raw/product_information/`.
-
----
-
-## 6. Проверка после распаковки
-
-После успешной подготовки должны существовать папки:
-
-```text
-data/raw/user_actions/
-data/raw/product_information/
-```
-
-Также можно выполнить быструю проверку загрузчиков:
+Проверьте, что загрузчики работают:
 
 ```powershell
 uv run python -c "from ozon_similar_products.data import load_configs, load_events, load_products; cfg = load_configs(); print(load_products(cfg).shape); print(load_events(cfg, use_sample=True, sample_days=1, sample_rows=100000).shape)"
 ```
 
-Ожидаемый результат примерно такой:
+Ожидаемый результат:
 
 ```text
 (130035, 6)
 (100000, 7)
 ```
 
-Первый вывод — размер справочника товаров.
+Если эти две строки вывелись, данные подготовлены корректно.
 
-Второй вывод — sample событий пользователей.
+> В PyCharm команды из блоков `powershell` можно запускать прямо из Markdown-файла кнопкой запуска рядом с блоком, если такая кнопка отображается. Если кнопки нет, скопируйте команду в терминал PyCharm.
 
 ---
 
-## 7. Как импортировать загрузчики
+## Что делает скрипт подготовки
 
-Загрузчики лежат в:
+Для подготовки данных используется скрипт:
+
+```text
+scripts/prepare_raw_data.py
+```
+
+Он:
+
+- читает пути и имена архивов из `configs/paths.yaml` и `configs/data.yaml`;
+- проверяет, что архивы лежат в `data/raw/archives/`;
+- распаковывает архивы в `data/raw/`;
+- проверяет, что после распаковки появились parquet-файлы;
+- создаёт служебный файл `.prepared.json`.
+
+Архивы не нужно распаковывать вручную через Проводник.
+
+---
+
+## Структура после подготовки
+
+После успешного запуска ожидается такая структура:
+
+```text
+data/
+  raw/
+    archives/
+      user_actions.tar.gz
+      product_information.tar.gz
+
+    user_actions/
+      date=2024-03-01/
+        action_type=click/
+          *.parquet
+        action_type=favorite/
+          *.parquet
+        action_type=search/
+          *.parquet
+        action_type=to_cart/
+          *.parquet
+        action_type=view/
+          *.parquet
+      date=2024-03-02/
+      ...
+
+    product_information/
+      *.parquet
+```
+
+`user_actions` — parquet-датасет с действиями пользователей. Он партиционирован по `date` и `action_type`.
+
+`product_information` — parquet-файл или набор parquet-файлов со справочником товаров.
+
+---
+
+## Команды для подготовки данных
+
+### Посмотреть содержимое архивов
+
+```powershell
+cd D:\ITMO\OZON-Similar-products
+uv run python scripts/prepare_raw_data.py --preview
+```
+
+Эта команда ничего не распаковывает. Она только показывает первые пути внутри архивов.
+
+### Распаковать архивы
+
+```powershell
+cd D:\ITMO\OZON-Similar-products
+uv run python scripts/prepare_raw_data.py
+```
+
+### Распаковать заново
+
+```powershell
+cd D:\ITMO\OZON-Similar-products
+uv run python scripts/prepare_raw_data.py --force
+```
+
+Используйте `--force`, если архивы были заменены или предыдущая распаковка была прервана.
+
+---
+
+## Как читать данные в Python
+
+Загрузчики лежат в файле:
 
 ```text
 src/ozon_similar_products/data/loaders.py
 ```
 
-Использовать их нужно через пакет:
+В коде импортируйте их так:
 
 ```python
-from ozon_similar_products.data import (
-    load_configs,
-    load_events,
-    load_products,
-    scan_events,
-    scan_products,
-)
+from ozon_similar_products.data import load_configs, load_events, load_products
 ```
 
----
-
-## 8. Загрузка конфигов
-
-Перед чтением данных нужно загрузить конфиги:
+Сначала загрузите конфиги:
 
 ```python
-from ozon_similar_products.data import load_configs
-
 config = load_configs()
 ```
 
@@ -202,49 +160,35 @@ configs/paths.yaml
 configs/data.yaml
 ```
 
-Поэтому пути, имена архивов, glob-паттерны и ожидаемые колонки должны храниться в конфигах, а не хардкодиться в ноутбуках.
+Пути к данным, имена архивов, glob-паттерны и ожидаемые колонки должны храниться в конфигах, а не в ноутбуках.
 
 ---
 
-## 9. Загрузка справочника товаров
+## Загрузка справочника товаров
 
 ```python
 from ozon_similar_products.data import load_configs, load_products
 
 config = load_configs()
-
 products = load_products(config)
 
 print(products.shape)
 print(products.head())
 ```
 
-На текущей версии данных ожидаемый размер:
+На текущих данных ожидаемый размер:
 
 ```text
 (130035, 6)
 ```
 
-Если нужно выбрать только часть колонок:
-
-```python
-products = load_products(
-    config,
-    columns=["item_id", "name"],
-)
-```
-
-Названия колонок нужно сверить с фактической схемой справочника товаров.
-
 ---
 
-## 10. Загрузка событий пользователей
+## Загрузка событий пользователей
 
-Для EDA не стоит сразу читать полный датасет.
+Для EDA не загружайте весь датасет сразу. Даже один день может содержать больше 10 млн строк.
 
-Даже один день может содержать больше 10 млн строк.
-
-Рекомендуемый безопасный вариант:
+Безопасный вариант для первого запуска:
 
 ```python
 from ozon_similar_products.data import load_configs, load_events
@@ -262,17 +206,13 @@ print(events.shape)
 print(events.head())
 ```
 
-Ожидаемый результат:
+Ожидаемый размер sample:
 
 ```text
 (100000, 7)
 ```
 
----
-
-## 11. Фактические колонки событий
-
-На текущей версии данных `load_events()` возвращает колонки:
+Фактические колонки событий:
 
 ```text
 user_id
@@ -284,23 +224,11 @@ search_query
 item_id
 ```
 
-Типы данных:
-
-```text
-user_id       Int32
-date          Date
-timestamp     Datetime[ns]
-action_type   String
-widget_name   String
-search_query  String
-item_id       Int32
-```
-
 ---
 
-## 12. Чтение событий по `action_type`
+## Полезные примеры
 
-Один тип действия:
+### Загрузить только один тип действия
 
 ```python
 events_click = load_events(
@@ -312,7 +240,7 @@ events_click = load_events(
 )
 ```
 
-Несколько типов действий:
+### Загрузить несколько типов действий
 
 ```python
 events_subset = load_events(
@@ -324,11 +252,7 @@ events_subset = load_events(
 )
 ```
 
----
-
-## 13. Чтение событий по датам
-
-Конкретные даты:
+### Загрузить конкретные даты
 
 ```python
 events = load_events(
@@ -338,7 +262,7 @@ events = load_events(
 )
 ```
 
-Диапазон дат:
+### Загрузить диапазон дат
 
 ```python
 events = load_events(
@@ -351,15 +275,11 @@ events = load_events(
 
 ---
 
-## 14. Lazy-загрузка для больших вычислений
+## Lazy-загрузка для больших вычислений
 
 `load_events()` сразу загружает данные в память.
 
-Для больших операций лучше использовать `scan_events()`.
-
-Он возвращает `polars.LazyFrame` и позволяет Polars оптимизировать чтение.
-
-Пример:
+Для больших операций используйте `scan_events()`. Он возвращает `polars.LazyFrame`.
 
 ```python
 from ozon_similar_products.data import load_configs, scan_events
@@ -389,17 +309,12 @@ print(result.head())
 from ozon_similar_products.data import load_configs, scan_products
 
 config = load_configs()
-
 products_lazy = scan_products(config)
 ```
 
 ---
 
-## 15. Рекомендуемый шаблон для ноутбуков
-
-В ноутбуках не нужно вручную искать parquet-файлы.
-
-Используйте такой шаблон:
+## Рекомендуемый шаблон для ноутбуков
 
 ```python
 from ozon_similar_products.data import load_configs, load_events, load_products
@@ -416,9 +331,11 @@ events = load_events(
 products = load_products(config)
 ```
 
+В ноутбуках не нужно вручную искать parquet-файлы и писать `pl.read_parquet(...)`.
+
 ---
 
-## 16. Что делать, если загрузка не работает
+## Что делать, если что-то пошло не так
 
 ### Не найден архив
 
@@ -437,26 +354,26 @@ product_information.tar.gz
 
 ### Не найдены parquet-файлы
 
-Сначала посмотрите структуру архива:
+Посмотрите содержимое архивов:
 
 ```powershell
+cd D:\ITMO\OZON-Similar-products
 uv run python scripts/prepare_raw_data.py --preview
 ```
 
-Потом попробуйте распаковать заново:
+Потом распакуйте заново:
 
 ```powershell
+cd D:\ITMO\OZON-Similar-products
 uv run python scripts/prepare_raw_data.py --force
 ```
 
 ### Загрузка слишком долгая
 
-Не читайте весь датасет сразу.
-
-Используйте:
+Ограничьте sample:
 
 ```python
-load_events(
+events = load_events(
     config,
     use_sample=True,
     sample_days=1,
@@ -464,23 +381,23 @@ load_events(
 )
 ```
 
-или lazy-вариант:
+Или используйте lazy-загрузку:
 
 ```python
-scan_events(config)
+events_lazy = scan_events(config)
 ```
 
 ---
 
-## 17. Что не нужно делать
+## Что не нужно делать
 
 Не нужно:
 
 - распаковывать архивы вручную через Проводник;
 - коммитить архивы в Git;
 - коммитить распакованные parquet-файлы;
-- писать `pl.read_parquet(...)` вручную в каждом ноутбуке;
-- хардкодить пути к данным внутри EDA-ноутбуков.
+- хардкодить абсолютные пути к данным в ноутбуках;
+- вручную писать чтение parquet-файлов в каждом ноутбуке.
 
 Правильный путь:
 
