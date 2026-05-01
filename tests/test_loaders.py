@@ -66,19 +66,19 @@ def create_test_products(project_root: Path) -> None:
 
 
 def write_event_partition(
-    project_root: Path,
-    date: str,
-    action_type: str,
-    frame: pl.DataFrame,
+        project_root: Path,
+        date: str,
+        action_type: str,
+        frame: pl.DataFrame,
 ) -> None:
     """Write one Hive-style event partition."""
     partition_dir = (
-        project_root
-        / "data"
-        / "raw"
-        / "user_actions"
-        / f"date={date}"
-        / f"action_type={action_type}"
+            project_root
+            / "data"
+            / "raw"
+            / "user_actions"
+            / f"date={date}"
+            / f"action_type={action_type}"
     )
     partition_dir.mkdir(parents=True)
     frame.write_parquet(partition_dir / "part-000.parquet")
@@ -202,7 +202,7 @@ def test_load_events_filters_by_action_type(tmp_path: Path) -> None:
 
 
 def test_load_events_explicit_date_range_overrides_default_sample(
-    tmp_path: Path,
+        tmp_path: Path,
 ) -> None:
     """Explicit date ranges should not be truncated by default sample_days."""
     create_test_events(tmp_path)

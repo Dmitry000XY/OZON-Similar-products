@@ -70,8 +70,8 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
 
 
 def load_configs(
-    config_dir: str | Path = "configs",
-    project_root: str | Path | None = None,
+        config_dir: str | Path = "configs",
+        project_root: str | Path | None = None,
 ) -> ProjectConfig:
     """Load project path and data configs.
 
@@ -83,9 +83,7 @@ def load_configs(
     Returns:
         Dictionary with ``project_root``, ``paths`` and ``data`` keys.
     """
-    root = (
-        find_project_root(Path(project_root)) if project_root else find_project_root()
-    )
+    root = find_project_root(Path(project_root)) if project_root else find_project_root()
     config_path = root / config_dir
 
     return {
@@ -144,9 +142,9 @@ def _schema_names(lazy_frame: pl.LazyFrame) -> set[str]:
 
 
 def validate_columns(
-    lazy_frame: pl.LazyFrame,
-    expected_columns: Iterable[str],
-    dataset_name: str,
+        lazy_frame: pl.LazyFrame,
+        expected_columns: Iterable[str],
+        dataset_name: str,
 ) -> None:
     """Validate that a LazyFrame contains all expected columns.
 
@@ -171,9 +169,9 @@ def validate_columns(
 
 
 def find_parquet_payload_dir(
-    base_dir: Path,
-    payload_root_names: Iterable[str],
-    parquet_glob: str,
+        base_dir: Path,
+        payload_root_names: Iterable[str],
+        parquet_glob: str,
 ) -> Path:
     """Find the directory that contains a parquet dataset.
 
@@ -233,11 +231,11 @@ def list_event_dates(events_dir: Path) -> list[str]:
 
 
 def _filter_dates(
-    available_dates: list[str],
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    sample_days: int | None = None,
+        available_dates: list[str],
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_days: int | None = None,
 ) -> list[str]:
     """Filter available dates by explicit list, range and optional sample size."""
     if dates is not None:
@@ -258,12 +256,12 @@ def _filter_dates(
 
 
 def _collect_event_parquet_files(
-    events_dir: Path,
-    dates: Iterable[str] | None = None,
-    action_types: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    sample_days: int | None = None,
+        events_dir: Path,
+        dates: Iterable[str] | None = None,
+        action_types: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_days: int | None = None,
 ) -> list[Path]:
     """Collect parquet files for selected dates and action types.
 
@@ -325,15 +323,15 @@ def _collect_event_parquet_files(
 
 
 def scan_events(
-    config: ProjectConfig | None = None,
-    *,
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    action_types: str | Iterable[str] | None = None,
-    sample_days: int | None = None,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        action_types: str | Iterable[str] | None = None,
+        sample_days: int | None = None,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.LazyFrame:
     """Scan user events as a Polars LazyFrame.
 
@@ -399,10 +397,10 @@ def scan_events(
 
 
 def _should_apply_sample_days(
-    use_sample: bool,
-    dates: Iterable[str] | None,
-    start_date: str | None,
-    end_date: str | None,
+        use_sample: bool,
+        dates: Iterable[str] | None,
+        start_date: str | None,
+        end_date: str | None,
 ) -> bool:
     """Return whether the default day sampling should be applied.
 
@@ -411,23 +409,23 @@ def _should_apply_sample_days(
     requested range, not only the first day of that range.
     """
     has_explicit_date_filter = (
-        dates is not None or start_date is not None or end_date is not None
+            dates is not None or start_date is not None or end_date is not None
     )
     return use_sample and not has_explicit_date_filter
 
 
 def load_events(
-    config: ProjectConfig | None = None,
-    *,
-    use_sample: bool = True,
-    sample_days: int = 1,
-    sample_rows: int | None = None,
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    action_types: str | Iterable[str] | None = None,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        use_sample: bool = True,
+        sample_days: int = 1,
+        sample_rows: int | None = None,
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        action_types: str | Iterable[str] | None = None,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.DataFrame:
     """Load user events into memory.
 
@@ -485,8 +483,8 @@ def load_events(
 
 
 def _collect_product_parquet_files(
-    products_dir: Path,
-    parquet_glob: str,
+        products_dir: Path,
+        parquet_glob: str,
 ) -> list[Path]:
     """Collect product parquet files.
 
@@ -510,10 +508,10 @@ def _collect_product_parquet_files(
 
 
 def scan_products(
-    config: ProjectConfig | None = None,
-    *,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.LazyFrame:
     """Scan product information as a Polars LazyFrame.
 
@@ -567,10 +565,10 @@ def scan_products(
 
 
 def load_products(
-    config: ProjectConfig | None = None,
-    *,
-    columns: Iterable[str] | None = None,
-    validate: bool = True,
+        config: ProjectConfig | None = None,
+        *,
+        columns: Iterable[str] | None = None,
+        validate: bool = True,
 ) -> pl.DataFrame:
     """Load product information into memory.
 
