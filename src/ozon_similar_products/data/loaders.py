@@ -1,21 +1,26 @@
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Iterable
 
 import polars as pl
 import yaml
 
-
 ProjectConfig = dict[str, Any]
 
 
 def find_project_root(start: Path | None = None) -> Path:
+    """Find the project root by looking for ``configs/paths.yaml``.
+
+    Args:
+        start: Optional path to start the search from. When omitted, the
+            current working directory and this file location are used.
+
+    Returns:
+        Path to the project root.
+
+    Raises:
+        FileNotFoundError: If no parent directory contains ``configs/paths.yaml``.
     """
-    Ищет корень проекта по наличию configs/paths.yaml.
-    Работает и из notebooks, и из scripts, и из src.
-    """
-    start_points = []
+    start_points: list[Path] = []
 
     if start is not None:
         start_points.append(Path(start).resolve())
@@ -24,22 +29,32 @@ def find_project_root(start: Path | None = None) -> Path:
     start_points.append(Path(__file__).resolve())
 
     for start_point in start_points:
-        candidates = [start_point, *start_point.parents]
-
-        for candidate in candidates:
+        for candidate in [start_point, *start_point.parents]:
             if (candidate / "configs" / "paths.yaml").exists():
                 return candidate
 
-    raise FileNotFoundError(
-        "Could not find project root. Expected configs/paths.yaml somewhere above."
-    )
+    msg = "Could not find project root. Expected configs/paths.yaml somewhere above."
+    raise FileNotFoundError(msg)
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
+    """Load a YAML file as a dictionary.
+
+    Args:
+        path: Path to a YAML file.
+
+    Returns:
+        Parsed YAML content. Empty YAML files are returned as an empty dict.
+
+    Raises:
+        FileNotFoundError: If the YAML file does not exist.
+        TypeError: If the YAML root object is not a dictionary.
+    """
     path = Path(path)
 
     if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {path}")
+        msg = f"Config file not found: {path}"
+        raise FileNotFoundError(msg)
 
     with path.open("r", encoding="utf-8") as file:
         data = yaml.safe_load(file)
@@ -48,7 +63,8 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
         return {}
 
     if not isinstance(data, dict):
-        raise TypeError(f"YAML config must contain a dictionary: {path}")
+        msg = f"YAML config must contain a dictionary: {path}"
+        raise TypeError(msg)
 
     return data
 
@@ -57,37 +73,59 @@ def load_configs(
     config_dir: str | Path = "configs",
     project_root: str | Path | None = None,
 ) -> ProjectConfig:
-    """
-    Загружает основные конфиги проекта.
+    """Load project path and data configs.
 
-    Возвращает словарь вида:
-    {
-        "project_root": Path(...),
-        "paths": ...,
-        "data": ...
-    }
+    Args:
+        config_dir: Directory with project configs, relative to the project root.
+        project_root: Optional explicit project root. When omitted, the root is
+            detected automatically.
+
+    Returns:
+        Dictionary with ``project_root``, ``paths`` and ``data`` keys.
     """
-    root = find_project_root(Path(project_root)) if project_root else find_project_root()
-    config_dir = root / config_dir
+    root = (
+        find_project_root(Path(project_root)) if project_root else find_project_root()
+    )
+    config_path = root / config_dir
 
     return {
         "project_root": root,
-        "paths": load_yaml(config_dir / "paths.yaml"),
-        "data": load_yaml(config_dir / "data.yaml"),
+        "paths": load_yaml(config_path / "paths.yaml"),
+        "data": load_yaml(config_path / "data.yaml"),
     }
 
 
 def resolve_project_path(config: ProjectConfig, relative_path: str | Path) -> Path:
+    """Resolve a project-relative path.
+
+    Args:
+        config: Project config returned by ``load_configs``.
+        relative_path: Path relative to the project root.
+
+    Returns:
+        Absolute resolved path.
+    """
     root = Path(config["project_root"])
     return (root / relative_path).resolve()
 
 
 def get_path_from_config(config: ProjectConfig, section: str, key: str) -> Path:
+    """Read a path from ``configs/paths.yaml`` and resolve it.
+
+    Args:
+        config: Project config returned by ``load_configs``.
+        section: Top-level section inside ``paths.yaml``.
+        key: Path key inside the selected section.
+
+    Returns:
+        Absolute resolved path.
+    """
     relative_path = config["paths"][section][key]
     return resolve_project_path(config, relative_path)
 
 
 def _as_list(value: str | Iterable[str] | None) -> list[str] | None:
+    """Convert a string or iterable of strings to a list."""
     if value is None:
         return None
 
@@ -98,6 +136,7 @@ def _as_list(value: str | Iterable[str] | None) -> list[str] | None:
 
 
 def _schema_names(lazy_frame: pl.LazyFrame) -> set[str]:
+    """Return column names from a Polars LazyFrame schema."""
     try:
         return set(lazy_frame.collect_schema().names())
     except AttributeError:
@@ -109,16 +148,26 @@ def validate_columns(
     expected_columns: Iterable[str],
     dataset_name: str,
 ) -> None:
+    """Validate that a LazyFrame contains all expected columns.
+
+    Args:
+        lazy_frame: LazyFrame to validate.
+        expected_columns: Required column names.
+        dataset_name: Dataset name used in the error message.
+
+    Raises:
+        ValueError: If at least one expected column is missing.
+    """
     actual_columns = _schema_names(lazy_frame)
     expected_columns = set(expected_columns)
-
     missing_columns = expected_columns - actual_columns
 
     if missing_columns:
-        raise ValueError(
+        msg = (
             f"{dataset_name}: missing expected columns: {sorted(missing_columns)}. "
             f"Actual columns: {sorted(actual_columns)}"
         )
+        raise ValueError(msg)
 
 
 def find_parquet_payload_dir(
@@ -126,14 +175,23 @@ def find_parquet_payload_dir(
     payload_root_names: Iterable[str],
     parquet_glob: str,
 ) -> Path:
-    """
-    Находит папку, где реально лежит parquet-датасет.
+    """Find the directory that contains a parquet dataset.
 
-    Важно: сначала проверяем ожидаемые payload-root папки,
-    например user_actions_3_months, и только потом base_dir.
+    The function supports both layouts:
 
-    Иначе для user_actions base_dir тоже содержит parquet-файлы рекурсивно,
-    но date=* лежат не сразу в base_dir, а внутри user_actions_3_months.
+    - ``base_dir/date=.../*.parquet``
+    - ``base_dir/<payload_root>/date=.../*.parquet``
+
+    Args:
+        base_dir: Base dataset directory from ``configs/paths.yaml``.
+        payload_root_names: Optional root directory names from ``configs/data.yaml``.
+        parquet_glob: Glob pattern used to find parquet files.
+
+    Returns:
+        Directory that contains parquet files.
+
+    Raises:
+        FileNotFoundError: If no matching parquet files are found.
     """
     candidates: list[Path] = []
 
@@ -147,23 +205,24 @@ def find_parquet_payload_dir(
             return candidate
 
     checked = "\n".join(f"  - {candidate}" for candidate in candidates)
-
-    raise FileNotFoundError(
-        f"Could not find parquet payload directory.\n"
+    msg = (
+        "Could not find parquet payload directory.\n"
         f"Base directory: {base_dir}\n"
         f"Checked:\n{checked}"
     )
+    raise FileNotFoundError(msg)
 
 
 def list_event_dates(events_dir: Path) -> list[str]:
-    """
-    Возвращает даты из hive-partitioned структуры:
+    """List available event dates from a Hive-partitioned dataset.
 
-    date=2024-03-01/
-    date=2024-03-02/
-    ...
+    Args:
+        events_dir: Directory with ``date=YYYY-MM-DD`` partitions.
+
+    Returns:
+        Sorted list of available date strings.
     """
-    dates = []
+    dates: list[str] = []
 
     for path in events_dir.glob("date=*"):
         if path.is_dir() and "=" in path.name:
@@ -180,6 +239,7 @@ def _filter_dates(
     end_date: str | None = None,
     sample_days: int | None = None,
 ) -> list[str]:
+    """Filter available dates by explicit list, range and optional sample size."""
     if dates is not None:
         selected = sorted(set(dates))
     else:
@@ -205,6 +265,22 @@ def _collect_event_parquet_files(
     end_date: str | None = None,
     sample_days: int | None = None,
 ) -> list[Path]:
+    """Collect parquet files for selected dates and action types.
+
+    Args:
+        events_dir: Event dataset directory with ``date=`` partitions.
+        dates: Optional explicit list of dates.
+        action_types: Optional list of action types.
+        start_date: Optional inclusive date range start.
+        end_date: Optional inclusive date range end.
+        sample_days: Optional number of first selected dates to keep.
+
+    Returns:
+        Sorted list of parquet file paths.
+
+    Raises:
+        FileNotFoundError: If no parquet files match the filters.
+    """
     available_dates = list_event_dates(events_dir)
 
     selected_dates = _filter_dates(
@@ -215,34 +291,35 @@ def _collect_event_parquet_files(
         sample_days=sample_days,
     )
 
-    action_types = _as_list(action_types)
-
+    selected_action_types = _as_list(action_types)
     parquet_files: list[Path] = []
 
     for date in selected_dates:
         date_dir = events_dir / f"date={date}"
 
-        if action_types is None:
+        if selected_action_types is None:
             action_dirs = sorted(date_dir.glob("action_type=*"))
         else:
-            action_dirs = [date_dir / f"action_type={action_type}" for action_type in action_types]
+            action_dirs = [
+                date_dir / f"action_type={action_type}"
+                for action_type in selected_action_types
+            ]
 
         for action_dir in action_dirs:
-            if not action_dir.exists():
-                continue
-
-            parquet_files.extend(sorted(action_dir.glob("*.parquet")))
+            if action_dir.exists():
+                parquet_files.extend(sorted(action_dir.glob("*.parquet")))
 
     if not parquet_files:
-        raise FileNotFoundError(
+        msg = (
             "No event parquet files found for selected filters. "
             f"events_dir={events_dir}, "
             f"dates={dates}, "
             f"start_date={start_date}, "
             f"end_date={end_date}, "
             f"sample_days={sample_days}, "
-            f"action_types={action_types}"
+            f"action_types={selected_action_types}"
         )
+        raise FileNotFoundError(msg)
 
     return parquet_files
 
@@ -258,11 +335,25 @@ def scan_events(
     columns: Iterable[str] | None = None,
     validate: bool = True,
 ) -> pl.LazyFrame:
-    """
-    Лениво читает действия пользователей из parquet.
+    """Scan user events as a Polars LazyFrame.
 
-    Возвращает pl.LazyFrame, то есть данные не загружаются в память сразу.
-    Это удобно для больших датасетов.
+    Args:
+        config: Project config returned by ``load_configs``. When omitted,
+            configs are loaded automatically.
+        dates: Optional explicit list of dates to read.
+        start_date: Optional inclusive date range start.
+        end_date: Optional inclusive date range end.
+        action_types: Optional action type or list of action types.
+        sample_days: Optional number of first selected dates to read.
+        columns: Optional subset of columns to select.
+        validate: Whether to validate expected columns from ``configs/data.yaml``.
+
+    Returns:
+        LazyFrame with user events.
+
+    Raises:
+        FileNotFoundError: If event parquet files are not found.
+        ValueError: If validation is enabled and expected columns are missing.
     """
     config = config or load_configs()
 
@@ -307,6 +398,24 @@ def scan_events(
     return lazy_frame
 
 
+def _should_apply_sample_days(
+    use_sample: bool,
+    dates: Iterable[str] | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> bool:
+    """Return whether the default day sampling should be applied.
+
+    Explicit date filters have priority over the default sample mode. For
+    example, ``load_events(start_date=..., end_date=...)`` must read the whole
+    requested range, not only the first day of that range.
+    """
+    has_explicit_date_filter = (
+        dates is not None or start_date is not None or end_date is not None
+    )
+    return use_sample and not has_explicit_date_filter
+
+
 def load_events(
     config: ProjectConfig | None = None,
     *,
@@ -320,13 +429,43 @@ def load_events(
     columns: Iterable[str] | None = None,
     validate: bool = True,
 ) -> pl.DataFrame:
-    """
-    Загружает действия пользователей в память.
+    """Load user events into memory.
 
-    По умолчанию грузит sample за 1 день, чтобы случайно не прочитать
-    весь большой датасет.
+    By default, the function reads only the first available day to avoid loading
+    the full dataset accidentally. Explicit date filters disable the default
+    ``sample_days`` behavior.
+
+    Args:
+        config: Project config returned by ``load_configs``. When omitted,
+            configs are loaded automatically.
+        use_sample: Whether to apply the default sample mode.
+        sample_days: Number of first available days to read when sample mode is
+            active and no explicit date filters are passed.
+        sample_rows: Optional row limit applied after file selection.
+        dates: Optional explicit list of dates to read.
+        start_date: Optional inclusive date range start.
+        end_date: Optional inclusive date range end.
+        action_types: Optional action type or list of action types.
+        columns: Optional subset of columns to select.
+        validate: Whether to validate expected columns from ``configs/data.yaml``.
+
+    Returns:
+        DataFrame with user events.
+
+    Raises:
+        FileNotFoundError: If event parquet files are not found.
+        ValueError: If validation is enabled and expected columns are missing.
     """
-    effective_sample_days = sample_days if use_sample and dates is None else None
+    effective_sample_days = (
+        sample_days
+        if _should_apply_sample_days(
+            use_sample=use_sample,
+            dates=dates,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        else None
+    )
 
     lazy_frame = scan_events(
         config=config,
@@ -349,10 +488,23 @@ def _collect_product_parquet_files(
     products_dir: Path,
     parquet_glob: str,
 ) -> list[Path]:
+    """Collect product parquet files.
+
+    Args:
+        products_dir: Product dataset directory.
+        parquet_glob: Glob pattern used to find parquet files.
+
+    Returns:
+        Sorted list of product parquet files.
+
+    Raises:
+        FileNotFoundError: If no product parquet files are found.
+    """
     parquet_files = sorted(products_dir.glob(parquet_glob))
 
     if not parquet_files:
-        raise FileNotFoundError(f"No product parquet files found in: {products_dir}")
+        msg = f"No product parquet files found in: {products_dir}"
+        raise FileNotFoundError(msg)
 
     return parquet_files
 
@@ -363,8 +515,20 @@ def scan_products(
     columns: Iterable[str] | None = None,
     validate: bool = True,
 ) -> pl.LazyFrame:
-    """
-    Лениво читает справочник товаров.
+    """Scan product information as a Polars LazyFrame.
+
+    Args:
+        config: Project config returned by ``load_configs``. When omitted,
+            configs are loaded automatically.
+        columns: Optional subset of columns to select.
+        validate: Whether to validate expected columns from ``configs/data.yaml``.
+
+    Returns:
+        LazyFrame with product information.
+
+    Raises:
+        FileNotFoundError: If product parquet files are not found.
+        ValueError: If validation is enabled and expected columns are missing.
     """
     config = config or load_configs()
 
@@ -408,8 +572,20 @@ def load_products(
     columns: Iterable[str] | None = None,
     validate: bool = True,
 ) -> pl.DataFrame:
-    """
-    Загружает справочник товаров в память.
+    """Load product information into memory.
+
+    Args:
+        config: Project config returned by ``load_configs``. When omitted,
+            configs are loaded automatically.
+        columns: Optional subset of columns to select.
+        validate: Whether to validate expected columns from ``configs/data.yaml``.
+
+    Returns:
+        DataFrame with product information.
+
+    Raises:
+        FileNotFoundError: If product parquet files are not found.
+        ValueError: If validation is enabled and expected columns are missing.
     """
     return scan_products(
         config=config,

@@ -1,6 +1,10 @@
 """Check the project skeleton and raw data layout."""
 
-from ozon_similar_products.config import PROJECT_ROOT, load_data_config, load_paths_config
+from ozon_similar_products.config import (
+    PROJECT_ROOT,
+    load_data_config,
+    load_paths_config,
+)
 from ozon_similar_products.paths import project_path
 
 

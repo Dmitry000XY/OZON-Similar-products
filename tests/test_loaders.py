@@ -1,18 +1,21 @@
 """Tests for data loaders."""
 
-from __future__ import annotations
-
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 
-from ozon_similar_products.data import load_events, load_products, scan_events, scan_products
+from ozon_similar_products.data import (
+    load_events,
+    load_products,
+    scan_events,
+    scan_products,
+)
 
 
 def make_test_config(project_root: Path) -> dict[str, Any]:
-    """Create minimal config compatible with loaders.py."""
+    """Create a minimal config compatible with loaders.py."""
     return {
         "project_root": project_root,
         "paths": {
@@ -23,7 +26,7 @@ def make_test_config(project_root: Path) -> dict[str, Any]:
         },
         "data": {
             "user_actions": {
-                "payload_root_names": ["user_actions_3_months"],
+                "payload_root_names": [],
                 "parquet_glob": "**/*.parquet",
                 "expected_columns": [
                     "user_id",
@@ -36,7 +39,7 @@ def make_test_config(project_root: Path) -> dict[str, Any]:
                 ],
             },
             "product_information": {
-                "payload_root_names": ["product_information"],
+                "payload_root_names": [],
                 "parquet_glob": "*.parquet",
                 "expected_columns": [
                     "item_id",
@@ -49,7 +52,7 @@ def make_test_config(project_root: Path) -> dict[str, Any]:
 
 
 def create_test_products(project_root: Path) -> None:
-    """Create small product_information parquet dataset."""
+    """Create a small product information parquet dataset."""
     products_dir = project_root / "data" / "raw" / "product_information"
     products_dir.mkdir(parents=True)
 
@@ -62,53 +65,78 @@ def create_test_products(project_root: Path) -> None:
     ).write_parquet(products_dir / "products.parquet")
 
 
+def write_event_partition(
+    project_root: Path,
+    date: str,
+    action_type: str,
+    frame: pl.DataFrame,
+) -> None:
+    """Write one Hive-style event partition."""
+    partition_dir = (
+        project_root
+        / "data"
+        / "raw"
+        / "user_actions"
+        / f"date={date}"
+        / f"action_type={action_type}"
+    )
+    partition_dir.mkdir(parents=True)
+    frame.write_parquet(partition_dir / "part-000.parquet")
+
+
 def create_test_events(project_root: Path) -> None:
-    """Create small hive-partitioned user_actions parquet dataset."""
-    click_dir = (
-            project_root
-            / "data"
-            / "raw"
-            / "user_actions"
-            / "user_actions_3_months"
-            / "date=2024-03-01"
-            / "action_type=click"
+    """Create a small Hive-partitioned user actions parquet dataset."""
+    write_event_partition(
+        project_root=project_root,
+        date="2024-03-01",
+        action_type="click",
+        frame=pl.DataFrame(
+            {
+                "user_id": [1, 2, 3],
+                "timestamp": [
+                    datetime(2024, 3, 1, 10, 0, 0),
+                    datetime(2024, 3, 1, 10, 1, 0),
+                    datetime(2024, 3, 1, 10, 2, 0),
+                ],
+                "widget_name": ["search", "search", "search"],
+                "search_query": ["milk", "bread", "eggs"],
+                "item_id": [101, 102, 103],
+            }
+        ),
     )
-    view_dir = (
-            project_root
-            / "data"
-            / "raw"
-            / "user_actions"
-            / "user_actions_3_months"
-            / "date=2024-03-01"
-            / "action_type=view"
+
+    write_event_partition(
+        project_root=project_root,
+        date="2024-03-01",
+        action_type="view",
+        frame=pl.DataFrame(
+            {
+                "user_id": [4],
+                "timestamp": [datetime(2024, 3, 1, 11, 0, 0)],
+                "widget_name": ["catalog"],
+                "search_query": [None],
+                "item_id": [104],
+            }
+        ),
     )
 
-    click_dir.mkdir(parents=True)
-    view_dir.mkdir(parents=True)
-
-    pl.DataFrame(
-        {
-            "user_id": [1, 2, 3],
-            "timestamp": [
-                datetime(2024, 3, 1, 10, 0, 0),
-                datetime(2024, 3, 1, 10, 1, 0),
-                datetime(2024, 3, 1, 10, 2, 0),
-            ],
-            "widget_name": ["search", "search", "search"],
-            "search_query": ["milk", "bread", "eggs"],
-            "item_id": [101, 102, 103],
-        }
-    ).write_parquet(click_dir / "part-000.parquet")
-
-    pl.DataFrame(
-        {
-            "user_id": [4],
-            "timestamp": [datetime(2024, 3, 1, 11, 0, 0)],
-            "widget_name": ["catalog"],
-            "search_query": [None],
-            "item_id": [104],
-        }
-    ).write_parquet(view_dir / "part-000.parquet")
+    write_event_partition(
+        project_root=project_root,
+        date="2024-03-02",
+        action_type="click",
+        frame=pl.DataFrame(
+            {
+                "user_id": [5, 6],
+                "timestamp": [
+                    datetime(2024, 3, 2, 12, 0, 0),
+                    datetime(2024, 3, 2, 12, 1, 0),
+                ],
+                "widget_name": ["search", "search"],
+                "search_query": ["cheese", "coffee"],
+                "item_id": [105, 106],
+            }
+        ),
+    )
 
 
 def test_load_products_reads_product_parquet(tmp_path: Path) -> None:
@@ -134,7 +162,7 @@ def test_scan_products_returns_lazy_frame(tmp_path: Path) -> None:
 
 
 def test_load_events_reads_sample_and_hive_partitions(tmp_path: Path) -> None:
-    """load_events should read event parquet files with date/action_type partitions."""
+    """load_events should read a row-limited sample from event partitions."""
     create_test_events(tmp_path)
     config = make_test_config(tmp_path)
 
@@ -170,7 +198,44 @@ def test_load_events_filters_by_action_type(tmp_path: Path) -> None:
     )
 
     assert events.shape == (3, 7)
-    assert events["action_type"].unique().to_list() == ["click"]
+    assert set(events["action_type"].unique().to_list()) == {"click"}
+
+
+def test_load_events_explicit_date_range_overrides_default_sample(
+    tmp_path: Path,
+) -> None:
+    """Explicit date ranges should not be truncated by default sample_days."""
+    create_test_events(tmp_path)
+    config = make_test_config(tmp_path)
+
+    events = load_events(
+        config,
+        start_date="2024-03-01",
+        end_date="2024-03-02",
+    )
+
+    assert events.shape == (6, 7)
+    assert set(events["date"].cast(pl.String).unique().to_list()) == {
+        "2024-03-01",
+        "2024-03-02",
+    }
+
+
+def test_load_events_explicit_dates_override_default_sample(tmp_path: Path) -> None:
+    """Explicit date lists should not be truncated by default sample_days."""
+    create_test_events(tmp_path)
+    config = make_test_config(tmp_path)
+
+    events = load_events(
+        config,
+        dates=["2024-03-01", "2024-03-02"],
+    )
+
+    assert events.shape == (6, 7)
+    assert set(events["date"].cast(pl.String).unique().to_list()) == {
+        "2024-03-01",
+        "2024-03-02",
+    }
 
 
 def test_scan_events_returns_lazy_frame(tmp_path: Path) -> None:
@@ -186,3 +251,19 @@ def test_scan_events_returns_lazy_frame(tmp_path: Path) -> None:
 
     assert isinstance(events_lazy, pl.LazyFrame)
     assert events_lazy.collect().shape == (4, 7)
+
+
+def test_load_events_selects_columns(tmp_path: Path) -> None:
+    """load_events should support reading a selected column subset."""
+    create_test_events(tmp_path)
+    config = make_test_config(tmp_path)
+
+    events = load_events(
+        config,
+        use_sample=True,
+        sample_days=1,
+        columns=["user_id", "item_id", "action_type"],
+    )
+
+    assert events.shape == (4, 3)
+    assert events.columns == ["user_id", "item_id", "action_type"]
