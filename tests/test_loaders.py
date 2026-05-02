@@ -9,19 +9,14 @@ import pytest
 import yaml
 
 import ozon_similar_products.data.loaders as loaders
-from ozon_similar_products.data import (
-    load_events,
-    load_products,
-    scan_events,
-    scan_products
-)
+from ozon_similar_products.data import load_events, load_products, scan_events, scan_products
 from ozon_similar_products.data.loaders import (
     find_parquet_payload_dir,
     find_project_root,
     get_path_from_config,
     load_yaml,
     resolve_project_path,
-    validate_columns
+    validate_columns,
 )
 
 
@@ -77,19 +72,19 @@ def write_product_dataset(project_root: Path) -> None:
 
 
 def write_event_partition(
-    project_root: Path,
-    date: str,
-    action_type: str,
-    frame: pl.DataFrame,
+        project_root: Path,
+        date: str,
+        action_type: str,
+        frame: pl.DataFrame,
 ) -> None:
     """Write one Hive-style event partition."""
     partition_dir = (
-        project_root
-        / "data"
-        / "raw"
-        / "user_actions"
-        / f"date={date}"
-        / f"action_type={action_type}"
+            project_root
+            / "data"
+            / "raw"
+            / "user_actions"
+            / f"date={date}"
+            / f"action_type={action_type}"
     )
     partition_dir.mkdir(parents=True)
     frame.write_parquet(partition_dir / "part-000.parquet")
@@ -171,7 +166,7 @@ def event_config(tmp_path: Path) -> dict[str, Any]:
 
 
 def test_load_products_reads_product_parquet(
-    product_config: dict[str, Any],
+        product_config: dict[str, Any],
 ) -> None:
     """load_products should read product parquet files."""
     products = load_products(product_config)
@@ -189,7 +184,7 @@ def test_scan_products_returns_lazy_frame(product_config: dict[str, Any]) -> Non
 
 
 def test_load_events_reads_sample_and_hive_partitions(
-    event_config: dict[str, Any],
+        event_config: dict[str, Any],
 ) -> None:
     """load_events should read a row-limited sample from event partitions."""
     events = load_events(
@@ -225,7 +220,7 @@ def test_load_events_filters_by_action_type(event_config: dict[str, Any]) -> Non
 
 
 def test_load_events_explicit_date_range_overrides_default_sample(
-    event_config: dict[str, Any],
+        event_config: dict[str, Any],
 ) -> None:
     """Explicit date ranges should not be truncated by default sample_days."""
     events = load_events(
@@ -242,7 +237,7 @@ def test_load_events_explicit_date_range_overrides_default_sample(
 
 
 def test_load_events_explicit_dates_override_default_sample(
-    event_config: dict[str, Any],
+        event_config: dict[str, Any],
 ) -> None:
     """Explicit date lists should not be truncated by default sample_days."""
     events = load_events(
@@ -298,17 +293,17 @@ def test_find_project_root_from_nested_directory(tmp_path: Path) -> None:
 
 
 def test_find_project_root_raises_when_config_is_missing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """find_project_root should fail when all search roots miss paths.yaml."""
     isolated_root = tmp_path / "isolated"
     fake_loader_file = (
-        isolated_root
-        / "src"
-        / "ozon_similar_products"
-        / "data"
-        / "loaders.py"
+            isolated_root
+            / "src"
+            / "ozon_similar_products"
+            / "data"
+            / "loaders.py"
     )
     fake_loader_file.parent.mkdir(parents=True)
     fake_loader_file.write_text("", encoding="utf-8")
@@ -356,7 +351,7 @@ def test_resolve_project_path_returns_absolute_path(tmp_path: Path) -> None:
     config = {"project_root": tmp_path}
 
     assert resolve_project_path(config, "data/raw") == (
-        tmp_path / "data/raw"
+            tmp_path / "data/raw"
     ).resolve()
 
 
@@ -372,7 +367,7 @@ def test_get_path_from_config_reads_nested_path(tmp_path: Path) -> None:
     }
 
     assert get_path_from_config(config, "data", "raw_dir") == (
-        tmp_path / "data/raw"
+            tmp_path / "data/raw"
     ).resolve()
 
 
@@ -389,7 +384,7 @@ def test_validate_columns_raises_for_missing_columns() -> None:
 
 
 def test_find_parquet_payload_dir_raises_when_no_parquet_exists(
-    tmp_path: Path,
+        tmp_path: Path,
 ) -> None:
     """find_parquet_payload_dir should fail when parquet payload is missing."""
     base_dir = tmp_path / "data" / "raw" / "user_actions"
@@ -404,7 +399,7 @@ def test_find_parquet_payload_dir_raises_when_no_parquet_exists(
 
 
 def test_load_products_raises_when_dataset_is_missing(
-    test_config: dict[str, Any],
+        test_config: dict[str, Any],
 ) -> None:
     """load_products should fail clearly when product parquet files are absent."""
     with pytest.raises(FileNotFoundError, match="Could not find parquet payload"):
@@ -412,7 +407,7 @@ def test_load_products_raises_when_dataset_is_missing(
 
 
 def test_load_events_raises_when_dataset_is_missing(
-    test_config: dict[str, Any],
+        test_config: dict[str, Any],
 ) -> None:
     """load_events should fail clearly when event parquet files are absent."""
     with pytest.raises(FileNotFoundError, match="Could not find parquet payload"):
