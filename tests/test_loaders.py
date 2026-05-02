@@ -5,12 +5,23 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pytest
+import yaml
 
+import ozon_similar_products.data.loaders as loaders
 from ozon_similar_products.data import (
     load_events,
     load_products,
     scan_events,
-    scan_products,
+    scan_products
+)
+from ozon_similar_products.data.loaders import (
+    find_parquet_payload_dir,
+    find_project_root,
+    get_path_from_config,
+    load_yaml,
+    resolve_project_path,
+    validate_columns
 )
 
 
@@ -51,7 +62,7 @@ def make_test_config(project_root: Path) -> dict[str, Any]:
     }
 
 
-def create_test_products(project_root: Path) -> None:
+def write_product_dataset(project_root: Path) -> None:
     """Create a small product information parquet dataset."""
     products_dir = project_root / "data" / "raw" / "product_information"
     products_dir.mkdir(parents=True)
@@ -66,25 +77,25 @@ def create_test_products(project_root: Path) -> None:
 
 
 def write_event_partition(
-        project_root: Path,
-        date: str,
-        action_type: str,
-        frame: pl.DataFrame,
+    project_root: Path,
+    date: str,
+    action_type: str,
+    frame: pl.DataFrame,
 ) -> None:
     """Write one Hive-style event partition."""
     partition_dir = (
-            project_root
-            / "data"
-            / "raw"
-            / "user_actions"
-            / f"date={date}"
-            / f"action_type={action_type}"
+        project_root
+        / "data"
+        / "raw"
+        / "user_actions"
+        / f"date={date}"
+        / f"action_type={action_type}"
     )
     partition_dir.mkdir(parents=True)
     frame.write_parquet(partition_dir / "part-000.parquet")
 
 
-def create_test_events(project_root: Path) -> None:
+def write_event_dataset(project_root: Path) -> None:
     """Create a small Hive-partitioned user actions parquet dataset."""
     write_event_partition(
         project_root=project_root,
@@ -139,35 +150,50 @@ def create_test_events(project_root: Path) -> None:
     )
 
 
-def test_load_products_reads_product_parquet(tmp_path: Path) -> None:
-    """load_products should read product parquet files."""
-    create_test_products(tmp_path)
-    config = make_test_config(tmp_path)
+@pytest.fixture
+def test_config(tmp_path: Path) -> dict[str, Any]:
+    """Return a minimal loaders config rooted in a temporary directory."""
+    return make_test_config(tmp_path)
 
-    products = load_products(config)
+
+@pytest.fixture
+def product_config(tmp_path: Path) -> dict[str, Any]:
+    """Return a config with a small product dataset prepared on disk."""
+    write_product_dataset(tmp_path)
+    return make_test_config(tmp_path)
+
+
+@pytest.fixture
+def event_config(tmp_path: Path) -> dict[str, Any]:
+    """Return a config with a small event dataset prepared on disk."""
+    write_event_dataset(tmp_path)
+    return make_test_config(tmp_path)
+
+
+def test_load_products_reads_product_parquet(
+    product_config: dict[str, Any],
+) -> None:
+    """load_products should read product parquet files."""
+    products = load_products(product_config)
 
     assert products.shape == (3, 3)
     assert products.columns == ["item_id", "sku", "name"]
 
 
-def test_scan_products_returns_lazy_frame(tmp_path: Path) -> None:
+def test_scan_products_returns_lazy_frame(product_config: dict[str, Any]) -> None:
     """scan_products should return a Polars LazyFrame."""
-    create_test_products(tmp_path)
-    config = make_test_config(tmp_path)
-
-    products_lazy = scan_products(config)
+    products_lazy = scan_products(product_config)
 
     assert isinstance(products_lazy, pl.LazyFrame)
     assert products_lazy.collect().shape == (3, 3)
 
 
-def test_load_events_reads_sample_and_hive_partitions(tmp_path: Path) -> None:
+def test_load_events_reads_sample_and_hive_partitions(
+    event_config: dict[str, Any],
+) -> None:
     """load_events should read a row-limited sample from event partitions."""
-    create_test_events(tmp_path)
-    config = make_test_config(tmp_path)
-
     events = load_events(
-        config,
+        event_config,
         use_sample=True,
         sample_days=1,
         sample_rows=2,
@@ -185,13 +211,10 @@ def test_load_events_reads_sample_and_hive_partitions(tmp_path: Path) -> None:
     }
 
 
-def test_load_events_filters_by_action_type(tmp_path: Path) -> None:
+def test_load_events_filters_by_action_type(event_config: dict[str, Any]) -> None:
     """load_events should support filtering by action_type."""
-    create_test_events(tmp_path)
-    config = make_test_config(tmp_path)
-
     events = load_events(
-        config,
+        event_config,
         use_sample=True,
         sample_days=1,
         action_types="click",
@@ -202,14 +225,11 @@ def test_load_events_filters_by_action_type(tmp_path: Path) -> None:
 
 
 def test_load_events_explicit_date_range_overrides_default_sample(
-        tmp_path: Path,
+    event_config: dict[str, Any],
 ) -> None:
     """Explicit date ranges should not be truncated by default sample_days."""
-    create_test_events(tmp_path)
-    config = make_test_config(tmp_path)
-
     events = load_events(
-        config,
+        event_config,
         start_date="2024-03-01",
         end_date="2024-03-02",
     )
@@ -221,13 +241,12 @@ def test_load_events_explicit_date_range_overrides_default_sample(
     }
 
 
-def test_load_events_explicit_dates_override_default_sample(tmp_path: Path) -> None:
+def test_load_events_explicit_dates_override_default_sample(
+    event_config: dict[str, Any],
+) -> None:
     """Explicit date lists should not be truncated by default sample_days."""
-    create_test_events(tmp_path)
-    config = make_test_config(tmp_path)
-
     events = load_events(
-        config,
+        event_config,
         dates=["2024-03-01", "2024-03-02"],
     )
 
@@ -238,13 +257,10 @@ def test_load_events_explicit_dates_override_default_sample(tmp_path: Path) -> N
     }
 
 
-def test_scan_events_returns_lazy_frame(tmp_path: Path) -> None:
+def test_scan_events_returns_lazy_frame(event_config: dict[str, Any]) -> None:
     """scan_events should return a Polars LazyFrame."""
-    create_test_events(tmp_path)
-    config = make_test_config(tmp_path)
-
     events_lazy = scan_events(
-        config,
+        event_config,
         action_types=["click", "view"],
         sample_days=1,
     )
@@ -253,13 +269,10 @@ def test_scan_events_returns_lazy_frame(tmp_path: Path) -> None:
     assert events_lazy.collect().shape == (4, 7)
 
 
-def test_load_events_selects_columns(tmp_path: Path) -> None:
+def test_load_events_selects_columns(event_config: dict[str, Any]) -> None:
     """load_events should support reading a selected column subset."""
-    create_test_events(tmp_path)
-    config = make_test_config(tmp_path)
-
     events = load_events(
-        config,
+        event_config,
         use_sample=True,
         sample_days=1,
         columns=["user_id", "item_id", "action_type"],
@@ -267,3 +280,140 @@ def test_load_events_selects_columns(tmp_path: Path) -> None:
 
     assert events.shape == (4, 3)
     assert events.columns == ["user_id", "item_id", "action_type"]
+
+
+def test_find_project_root_from_nested_directory(tmp_path: Path) -> None:
+    """find_project_root should find configs/paths.yaml in parent directories."""
+    project_root = tmp_path / "project"
+    nested_dir = project_root / "notebooks" / "eda"
+
+    (project_root / "configs").mkdir(parents=True)
+    nested_dir.mkdir(parents=True)
+    (project_root / "configs" / "paths.yaml").write_text(
+        "data: {}\n",
+        encoding="utf-8",
+    )
+
+    assert find_project_root(nested_dir) == project_root
+
+
+def test_find_project_root_raises_when_config_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """find_project_root should fail when all search roots miss paths.yaml."""
+    isolated_root = tmp_path / "isolated"
+    fake_loader_file = (
+        isolated_root
+        / "src"
+        / "ozon_similar_products"
+        / "data"
+        / "loaders.py"
+    )
+    fake_loader_file.parent.mkdir(parents=True)
+    fake_loader_file.write_text("", encoding="utf-8")
+
+    monkeypatch.chdir(isolated_root)
+    monkeypatch.setattr(loaders, "__file__", str(fake_loader_file))
+
+    with pytest.raises(FileNotFoundError, match="Could not find project root"):
+        find_project_root(isolated_root)
+
+
+def test_load_yaml_reads_mapping(tmp_path: Path) -> None:
+    """load_yaml should read YAML mappings."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("data:\n  raw_dir: data/raw\n", encoding="utf-8")
+
+    assert load_yaml(config_path) == {"data": {"raw_dir": "data/raw"}}
+
+
+def test_load_yaml_returns_empty_dict_for_empty_file(tmp_path: Path) -> None:
+    """load_yaml should treat empty YAML files as empty dictionaries."""
+    config_path = tmp_path / "empty.yaml"
+    config_path.write_text("", encoding="utf-8")
+
+    assert load_yaml(config_path) == {}
+
+
+def test_load_yaml_raises_for_missing_file(tmp_path: Path) -> None:
+    """load_yaml should fail when config file does not exist."""
+    with pytest.raises(FileNotFoundError, match="Config file not found"):
+        load_yaml(tmp_path / "missing.yaml")
+
+
+def test_load_yaml_raises_for_non_mapping_yaml(tmp_path: Path) -> None:
+    """load_yaml should fail when YAML root is not a mapping."""
+    config_path = tmp_path / "list.yaml"
+    config_path.write_text(yaml.safe_dump(["a", "b"]), encoding="utf-8")
+
+    with pytest.raises(TypeError, match="YAML config must contain a dictionary"):
+        load_yaml(config_path)
+
+
+def test_resolve_project_path_returns_absolute_path(tmp_path: Path) -> None:
+    """resolve_project_path should resolve paths relative to project root."""
+    config = {"project_root": tmp_path}
+
+    assert resolve_project_path(config, "data/raw") == (
+        tmp_path / "data/raw"
+    ).resolve()
+
+
+def test_get_path_from_config_reads_nested_path(tmp_path: Path) -> None:
+    """get_path_from_config should read and resolve a configured path."""
+    config = {
+        "project_root": tmp_path,
+        "paths": {
+            "data": {
+                "raw_dir": "data/raw",
+            }
+        },
+    }
+
+    assert get_path_from_config(config, "data", "raw_dir") == (
+        tmp_path / "data/raw"
+    ).resolve()
+
+
+def test_validate_columns_raises_for_missing_columns() -> None:
+    """validate_columns should fail when required columns are missing."""
+    lazy_frame = pl.DataFrame({"item_id": [1, 2]}).lazy()
+
+    with pytest.raises(ValueError, match="missing expected columns"):
+        validate_columns(
+            lazy_frame=lazy_frame,
+            expected_columns=["item_id", "sku"],
+            dataset_name="product_information",
+        )
+
+
+def test_find_parquet_payload_dir_raises_when_no_parquet_exists(
+    tmp_path: Path,
+) -> None:
+    """find_parquet_payload_dir should fail when parquet payload is missing."""
+    base_dir = tmp_path / "data" / "raw" / "user_actions"
+    base_dir.mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="Could not find parquet payload"):
+        find_parquet_payload_dir(
+            base_dir=base_dir,
+            payload_root_names=["user_actions_3_months"],
+            parquet_glob="**/*.parquet",
+        )
+
+
+def test_load_products_raises_when_dataset_is_missing(
+    test_config: dict[str, Any],
+) -> None:
+    """load_products should fail clearly when product parquet files are absent."""
+    with pytest.raises(FileNotFoundError, match="Could not find parquet payload"):
+        load_products(test_config)
+
+
+def test_load_events_raises_when_dataset_is_missing(
+    test_config: dict[str, Any],
+) -> None:
+    """load_events should fail clearly when event parquet files are absent."""
+    with pytest.raises(FileNotFoundError, match="Could not find parquet payload"):
+        load_events(test_config)

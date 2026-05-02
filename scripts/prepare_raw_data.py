@@ -2,10 +2,12 @@ import argparse
 import json
 import logging
 import shutil
+import sys
 import tarfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import yaml
 
@@ -34,6 +36,85 @@ class ArchiveSpec:
     target_dir: Path
     payload_root_names: list[str]
     parquet_glob: str
+
+
+class ExtractionProgress:
+    """Render archive extraction progress in terminal and CI logs.
+
+    Interactive terminals get a one-line progress bar. Non-interactive logs,
+    including CI, get periodic progress messages instead of many carriage-return
+    updates.
+    """
+
+    def __init__(
+        self,
+        total: int,
+        label: str = "[prepare] Extracting",
+        stream: TextIO = sys.stderr,
+        width: int = 32,
+    ) -> None:
+        """Create a progress reporter.
+
+        Args:
+            total: Total number of archive members to extract.
+            label: Text shown before the progress indicator.
+            stream: Output stream for interactive progress.
+            width: Width of the visual progress bar.
+        """
+        self.total = max(total, 1)
+        self.label = label
+        self.stream = stream
+        self.width = width
+        self.started_at = time.monotonic()
+        self.is_interactive = stream.isatty()
+        self.log_every = max(self.total // 20, 1)
+
+    def update(self, current: int, member_name: str) -> None:
+        """Update progress after extracting one archive member.
+
+        Args:
+            current: Number of already extracted members.
+            member_name: Name of the last extracted member.
+        """
+        if self.is_interactive:
+            self._write_progress_bar(current=current, member_name=member_name)
+            return
+
+        should_log = current == 1 or current == self.total or current % self.log_every == 0
+        if should_log:
+            percent = current / self.total * 100
+            LOGGER.info(
+                "%s %s/%s members (%.1f%%)",
+                self.label,
+                current,
+                self.total,
+                percent,
+            )
+
+    def finish(self) -> None:
+        """Finish progress output and move to the next line if needed."""
+        if self.is_interactive:
+            self.stream.write("\n")
+            self.stream.flush()
+
+    def _write_progress_bar(self, current: int, member_name: str) -> None:
+        """Write a one-line progress bar to the output stream."""
+        percent = current / self.total
+        filled_width = int(self.width * percent)
+        bar = "#" * filled_width + "-" * (self.width - filled_width)
+        elapsed_seconds = max(time.monotonic() - self.started_at, 0.001)
+        speed = current / elapsed_seconds
+
+        short_name = member_name
+        max_name_length = 48
+        if len(short_name) > max_name_length:
+            short_name = "..." + short_name[-max_name_length:]
+
+        self.stream.write(
+            f"\r{self.label}: [{bar}] {current}/{self.total} "
+            f"({percent * 100:5.1f}%) {speed:5.1f} members/s {short_name}"
+        )
+        self.stream.flush()
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -110,8 +191,8 @@ def is_safe_member(base_dir: Path, target_path: Path) -> bool:
     resolved_target_path = target_path.resolve()
 
     return (
-            resolved_target_path == resolved_base_dir
-            or resolved_base_dir in resolved_target_path.parents
+        resolved_target_path == resolved_base_dir
+        or resolved_base_dir in resolved_target_path.parents
     )
 
 
@@ -200,9 +281,9 @@ def remove_path(path: Path) -> None:
 
 
 def find_payload_dir(
-        base_dir: Path,
-        payload_root_names: list[str],
-        parquet_glob: str,
+    base_dir: Path,
+    payload_root_names: list[str],
+    parquet_glob: str,
 ) -> Path:
     """Find the directory that contains extracted parquet files.
 
@@ -246,15 +327,22 @@ def extract_tar_gz(archive_path: Path, staging_dir: Path) -> None:
         RuntimeError: If the archive contains an unsafe path.
     """
     with tarfile.open(archive_path, mode="r:gz") as tar:
+        LOGGER.info("[prepare] Reading archive index: %s", archive_path.name)
         members = tar.getmembers()
+        LOGGER.info("[prepare] Archive members:      %s", len(members))
 
         for member in members:
             target_path = staging_dir / member.name
             if not is_safe_member(staging_dir, target_path):
                 raise RuntimeError(f"Unsafe path in archive: {member.name}")
 
-        for member in members:
-            tar.extract(member, path=staging_dir, filter="data")
+        progress = ExtractionProgress(total=len(members))
+        try:
+            for index, member in enumerate(members, start=1):
+                tar.extract(member, path=staging_dir, filter="data")
+                progress.update(current=index, member_name=member.name)
+        finally:
+            progress.finish()
 
 
 def move_payload_contents(payload_dir: Path, target_dir: Path) -> None:
@@ -292,9 +380,9 @@ def remove_success_files(path: Path) -> int:
 
 
 def write_manifest(
-        spec: ArchiveSpec,
-        parquet_files_count: int,
-        removed_success_files_count: int,
+    spec: ArchiveSpec,
+    parquet_files_count: int,
+    removed_success_files_count: int,
 ) -> None:
     """Write `.prepared.json` for a successfully prepared dataset.
 
@@ -363,6 +451,9 @@ def safe_extract_tar_gz(spec: ArchiveSpec, force: bool = False) -> Path:
     LOGGER.info("[prepare] Archive:            %s", spec.archive_path)
     LOGGER.info("[prepare] Temporary dir:      %s", staging_dir)
     LOGGER.info("[prepare] Target:             %s", spec.target_dir)
+
+    parquet_files_count = 0
+    removed_success_files_count = 0
 
     try:
         extract_tar_gz(spec.archive_path, staging_dir)

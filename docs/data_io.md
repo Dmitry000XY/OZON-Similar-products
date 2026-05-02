@@ -1,13 +1,16 @@
 # Работа с архивами и загрузчиками данных
 
-Короткая инструкция: как положить архивы, подготовить данные и читать их через `loaders.py`.
+Документ описывает, как подготовить локальные данные из архивов и как читать их через `loaders.py`.
+
+Все команды ниже написаны для `bash` и должны выполняться **из корня проекта** — из папки, где лежат `pyproject.toml`, `configs/`, `scripts/` и `src/`.
 
 ## Быстрый старт
 
-Выполните эти шаги из корня проекта.
+Проверьте, что вы находитесь в корне проекта:
 
-```powershell
-cd D:\ITMO\OZON-Similar-products
+```bash
+pwd
+ls pyproject.toml configs scripts src
 ```
 
 Положите архивы в папку:
@@ -16,7 +19,7 @@ cd D:\ITMO\OZON-Similar-products
 data/raw/archives/
 ```
 
-Должны получиться такие файлы:
+Ожидаемые файлы:
 
 ```text
 data/raw/archives/user_actions.tar.gz
@@ -25,14 +28,14 @@ data/raw/archives/product_information.tar.gz
 
 Подготовьте данные:
 
-```powershell
+```bash
 uv run python scripts/prepare_raw_data.py
 ```
 
 Проверьте, что загрузчики работают:
 
-```powershell
-uv run python -c "from ozon_similar_products.data import load_configs, load_events, load_products; cfg = load_configs(); print(load_products(cfg).shape); print(load_events(cfg, use_sample=True, sample_days=1, sample_rows=100000).shape)"
+```bash
+uv run python -c "from ozon_similar_products.data import load_configs, load_events, load_products; cfg = load_configs(); print(load_products(cfg).shape); print(load_events(cfg, sample_rows=100000).shape)"
 ```
 
 Ожидаемый результат:
@@ -42,10 +45,9 @@ uv run python -c "from ozon_similar_products.data import load_configs, load_even
 (100000, 7)
 ```
 
-Если эти две строки вывелись, данные подготовлены корректно.
+Если эти две строки вывелись, архивы распакованы корректно, а загрузчики видят подготовленные parquet-файлы.
 
-> В PyCharm команды из блоков `powershell` можно запускать прямо из Markdown-файла кнопкой запуска рядом с блоком, если
-> такая кнопка отображается. Если кнопки нет, скопируйте команду в терминал PyCharm.
+> В PyCharm команды из блоков `bash` можно запускать кнопкой запуска рядом с блоком Markdown, если она отображается. Если кнопки нет, откройте терминал PyCharm в корне проекта и выполните команду вручную.
 
 ---
 
@@ -63,9 +65,10 @@ scripts/prepare_raw_data.py
 - проверяет, что архивы лежат в `data/raw/archives/`;
 - распаковывает архивы в `data/raw/`;
 - проверяет, что после распаковки появились parquet-файлы;
+- удаляет служебные файлы `_SUCCESS`;
 - создаёт служебный файл `.prepared.json`.
 
-Архивы не нужно распаковывать вручную через Проводник.
+Архивы не нужно распаковывать вручную через Проводник или файловый менеджер.
 
 ---
 
@@ -107,30 +110,31 @@ data/
 
 ## Команды для подготовки данных
 
+Все команды выполняются из корня проекта.
+
 ### Посмотреть содержимое архивов
 
-```powershell
-cd D:\ITMO\OZON-Similar-products
+```bash
 uv run python scripts/prepare_raw_data.py --preview
 ```
 
-Эта команда ничего не распаковывает. Она только показывает первые пути внутри архивов.
+Команда ничего не распаковывает. Она только показывает первые пути внутри архивов.
 
 ### Распаковать архивы
 
-```powershell
-cd D:\ITMO\OZON-Similar-products
+```bash
 uv run python scripts/prepare_raw_data.py
 ```
 
+Если данные уже подготовлены и есть `.prepared.json`, повторный запуск пропустит готовые датасеты.
+
 ### Распаковать заново
 
-```powershell
-cd D:\ITMO\OZON-Similar-products
+```bash
 uv run python scripts/prepare_raw_data.py --force
 ```
 
-Используйте `--force`, если архивы были заменены или предыдущая распаковка была прервана.
+Используйте `--force`, если архивы были заменены, предыдущая распаковка была прервана или нужно гарантированно пересобрать папки `data/raw/user_actions/` и `data/raw/product_information/`.
 
 ---
 
@@ -142,10 +146,16 @@ uv run python scripts/prepare_raw_data.py --force
 src/ozon_similar_products/data/loaders.py
 ```
 
-В коде импортируйте их так:
+Импортируйте публичные функции так:
 
 ```python
-from ozon_similar_products.data import load_configs, load_events, load_products
+from ozon_similar_products.data import (
+    load_configs,
+    load_events,
+    load_products,
+    scan_events,
+    scan_products,
+)
 ```
 
 Сначала загрузите конфиги:
@@ -165,7 +175,38 @@ configs/data.yaml
 
 ---
 
-## Загрузка справочника товаров
+## Публичные функции из `loaders.py`
+
+### `load_configs(config_dir="configs", project_root=None)`
+
+Загружает конфиги проекта.
+
+| Параметр | Что означает |
+|---|---|
+| `config_dir` | Папка с конфигами относительно корня проекта. Обычно менять не нужно. |
+| `project_root` | Явный путь к корню проекта. Если не передан, корень ищется автоматически по `configs/paths.yaml`. |
+
+Возвращает словарь с ключами:
+
+```text
+project_root
+paths
+data
+```
+
+---
+
+### `load_products(config=None, columns=None, validate=True)`
+
+Читает справочник товаров в память и возвращает `polars.DataFrame`.
+
+| Параметр | Что означает |
+|---|---|
+| `config` | Конфиг из `load_configs()`. Если не передан, будет загружен автоматически. |
+| `columns` | Список колонок, которые нужно оставить. Если `None`, читаются все колонки. |
+| `validate` | Проверять ли наличие ожидаемых колонок из `configs/data.yaml`. |
+
+Пример:
 
 ```python
 from ozon_similar_products.data import load_configs, load_products
@@ -185,9 +226,70 @@ print(products.head())
 
 ---
 
-## Загрузка событий пользователей
+### `scan_products(config=None, columns=None, validate=True)`
 
-Для EDA не загружайте весь датасет сразу. Даже один день может содержать больше 10 млн строк.
+Лениво читает справочник товаров и возвращает `polars.LazyFrame`.
+
+Используйте `scan_products()`, если дальше планируются фильтрации, join, group by или другие операции Polars, которые не нужно выполнять сразу.
+
+| Параметр | Что означает |
+|---|---|
+| `config` | Конфиг из `load_configs()`. Если не передан, будет загружен автоматически. |
+| `columns` | Список колонок, которые нужно оставить. Если `None`, читаются все колонки. |
+| `validate` | Проверять ли наличие ожидаемых колонок из `configs/data.yaml`. |
+
+Пример:
+
+```python
+from ozon_similar_products.data import load_configs, scan_products
+
+config = load_configs()
+products_lazy = scan_products(config)
+```
+
+---
+
+### `load_events(...)`
+
+Читает действия пользователей в память и возвращает `polars.DataFrame`.
+
+Сигнатура:
+
+```python
+load_events(
+    config=None,
+    *,
+    use_sample=True,
+    sample_days=1,
+    sample_rows=None,
+    dates=None,
+    start_date=None,
+    end_date=None,
+    action_types=None,
+    columns=None,
+    validate=True,
+)
+```
+
+| Параметр | Что означает |
+|---|---|
+| `config` | Конфиг из `load_configs()`. Если не передан, будет загружен автоматически. |
+| `use_sample` | Включает безопасный режим по умолчанию: если даты явно не указаны, читается только `sample_days` первых доступных дней. |
+| `sample_days` | Сколько первых дней читать в sample-режиме. По умолчанию `1`. |
+| `sample_rows` | Ограничение на число строк после выбора файлов. Например, `100_000` для быстрой EDA. |
+| `dates` | Явный список дат, например `["2024-03-01", "2024-03-02"]`. Если передан, `sample_days` по умолчанию не обрезает список дат. |
+| `start_date` | Начало диапазона дат включительно. |
+| `end_date` | Конец диапазона дат включительно. |
+| `action_types` | Один тип действия или список типов: `"click"` или `["view", "click"]`. |
+| `columns` | Список колонок, которые нужно оставить. Если `None`, читаются все колонки. |
+| `validate` | Проверять ли наличие ожидаемых колонок из `configs/data.yaml`. |
+
+Важно про `use_sample=True`:
+
+- это защита от случайной загрузки всего большого датасета;
+- по умолчанию без явных дат читается только первый доступный день;
+- если передать `dates`, `start_date` или `end_date`, явный выбор дат имеет приоритет над default sample-режимом;
+- `sample_rows` можно использовать вместе с любым вариантом выбора дат, чтобы ограничить число строк.
 
 Безопасный вариант для первого запуска:
 
@@ -198,13 +300,22 @@ config = load_configs()
 
 events = load_events(
     config,
-    use_sample=True,
-    sample_days=1,
     sample_rows=100_000,
 )
 
 print(events.shape)
 print(events.head())
+```
+
+Эквивалентно более явной записи:
+
+```python
+events = load_events(
+    config,
+    use_sample=True,
+    sample_days=1,
+    sample_rows=100_000,
+)
 ```
 
 Ожидаемый размер sample:
@@ -213,17 +324,98 @@ print(events.head())
 (100000, 7)
 ```
 
+---
+
+### `scan_events(...)`
+
+Лениво читает действия пользователей и возвращает `polars.LazyFrame`.
+
+Сигнатура:
+
+```python
+scan_events(
+    config=None,
+    *,
+    dates=None,
+    start_date=None,
+    end_date=None,
+    action_types=None,
+    sample_days=None,
+    columns=None,
+    validate=True,
+)
+```
+
+| Параметр | Что означает |
+|---|---|
+| `config` | Конфиг из `load_configs()`. Если не передан, будет загружен автоматически. |
+| `dates` | Явный список дат. |
+| `start_date` | Начало диапазона дат включительно. |
+| `end_date` | Конец диапазона дат включительно. |
+| `action_types` | Один тип действия или список типов. |
+| `sample_days` | Сколько первых дат оставить после фильтрации. В отличие от `load_events()`, здесь нет `use_sample`; если нужно ограничение по дням, передайте `sample_days` явно. |
+| `columns` | Список колонок, которые нужно оставить. |
+| `validate` | Проверять ли наличие ожидаемых колонок из `configs/data.yaml`. |
+
+Используйте `scan_events()` для больших вычислений:
+
+```python
+from ozon_similar_products.data import load_configs, scan_events
+
+config = load_configs()
+
+events_lazy = scan_events(
+    config,
+    start_date="2024-03-01",
+    end_date="2024-03-07",
+    action_types=["view", "click", "to_cart"],
+)
+
+result = (
+    events_lazy
+    .group_by("item_id", "action_type")
+    .len()
+    .collect()
+)
+
+print(result.head())
+```
+
+---
+
+## Колонки датасетов
+
+Точный контракт колонок хранится в `configs/data.yaml`. Быстро посмотреть фактические колонки можно так:
+
+```bash
+uv run python -c "from ozon_similar_products.data import load_configs, load_events, load_products; cfg = load_configs(); print('products:', load_products(cfg).columns); print('events:', load_events(cfg, sample_rows=1).columns)"
+```
+
+### `user_actions`
+
 Фактические колонки событий:
 
-```text
-user_id
-date
-timestamp
-action_type
-widget_name
-search_query
-item_id
-```
+| Колонка | Описание |
+|---|---|
+| `user_id` | Идентификатор пользователя. |
+| `date` | Дата события. Также используется как партиция в parquet-датасете. |
+| `timestamp` | Точное время события. |
+| `action_type` | Тип действия пользователя: например, `view`, `click`, `search`, `to_cart`, `favorite`. |
+| `widget_name` | Название виджета или зоны интерфейса, где произошло действие. |
+| `search_query` | Поисковый запрос пользователя, если он применим к событию. |
+| `item_id` | Идентификатор товара. Используется для связи с `product_information`. |
+
+### `product_information`
+
+Справочник товаров содержит 6 колонок на текущей версии данных. Ключевые колонки:
+
+| Колонка | Описание |
+|---|---|
+| `item_id` | Внутренний идентификатор товара. Используется для связи с `user_actions.item_id`. |
+| `sku` | SKU товара. Идентификаторы лучше хранить как строки, чтобы не потерять формат. |
+| Остальные колонки из `configs/data.yaml` | Атрибуты товара: название, категория, бренд или другие признаки, доступные в текущей выгрузке. |
+
+Если фактический список колонок справочника изменился, обновите `configs/data.yaml` и этот раздел документации.
 
 ---
 
@@ -234,8 +426,6 @@ item_id
 ```python
 events_click = load_events(
     config,
-    use_sample=True,
-    sample_days=1,
     action_types="click",
     sample_rows=100_000,
 )
@@ -246,8 +436,6 @@ events_click = load_events(
 ```python
 events_subset = load_events(
     config,
-    use_sample=True,
-    sample_days=1,
     action_types=["view", "click", "to_cart"],
     sample_rows=100_000,
 )
@@ -274,43 +462,19 @@ events = load_events(
 )
 ```
 
----
-
-## Lazy-загрузка для больших вычислений
-
-`load_events()` сразу загружает данные в память.
-
-Для больших операций используйте `scan_events()`. Он возвращает `polars.LazyFrame`.
+### Выбрать только нужные колонки
 
 ```python
-from ozon_similar_products.data import load_configs, scan_events
-
-config = load_configs()
-
-events_lazy = scan_events(
+events = load_events(
     config,
-    start_date="2024-03-01",
-    end_date="2024-03-07",
-    action_types=["view", "click", "to_cart"],
+    columns=["user_id", "timestamp", "action_type", "item_id"],
+    sample_rows=100_000,
 )
 
-result = (
-    events_lazy
-    .group_by("item_id", "action_type")
-    .len()
-    .collect()
+products = load_products(
+    config,
+    columns=["item_id", "sku"],
 )
-
-print(result.head())
-```
-
-Для справочника товаров есть аналогичная функция:
-
-```python
-from ozon_similar_products.data import load_configs, scan_products
-
-config = load_configs()
-products_lazy = scan_products(config)
 ```
 
 ---
@@ -324,8 +488,6 @@ config = load_configs()
 
 events = load_events(
     config,
-    use_sample=True,
-    sample_days=1,
     sample_rows=100_000,
 )
 
@@ -357,15 +519,13 @@ product_information.tar.gz
 
 Посмотрите содержимое архивов:
 
-```powershell
-cd D:\ITMO\OZON-Similar-products
+```bash
 uv run python scripts/prepare_raw_data.py --preview
 ```
 
 Потом распакуйте заново:
 
-```powershell
-cd D:\ITMO\OZON-Similar-products
+```bash
 uv run python scripts/prepare_raw_data.py --force
 ```
 
@@ -376,8 +536,6 @@ uv run python scripts/prepare_raw_data.py --force
 ```python
 events = load_events(
     config,
-    use_sample=True,
-    sample_days=1,
     sample_rows=100_000,
 )
 ```
@@ -394,7 +552,7 @@ events_lazy = scan_events(config)
 
 Не нужно:
 
-- распаковывать архивы вручную через Проводник;
+- распаковывать архивы вручную через Проводник или файловый менеджер;
 - коммитить архивы в Git;
 - коммитить распакованные parquet-файлы;
 - хардкодить абсолютные пути к данным в ноутбуках;
