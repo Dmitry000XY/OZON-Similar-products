@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_clean_events, validate_item_popularity
+from ozon_similar_products.data.validation import validate_clean_events
 
 
 class ItemPopularityBuilder:

@@ -2,7 +2,6 @@
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_pair_aggregates
 
 
 class PairAggregator:

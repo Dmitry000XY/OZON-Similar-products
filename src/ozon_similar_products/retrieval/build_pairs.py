@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_sessions, validate_daily_item_pairs
+from ozon_similar_products.data.validation import validate_sessions
 
 
 class ItemPairBuilder:

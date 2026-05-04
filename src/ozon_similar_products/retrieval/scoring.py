@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_pair_aggregates, validate_pair_scores
+from ozon_similar_products.data.validation import validate_pair_aggregates
 
 
 class CoVisitationScorer:

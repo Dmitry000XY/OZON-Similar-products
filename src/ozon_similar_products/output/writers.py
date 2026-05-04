@@ -4,7 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_recommendations, validate_widget_output
+from ozon_similar_products.data.validation import validate_recommendations
 
 
 class RecommendationWriter:

@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_pair_scores, validate_recommendations
+from ozon_similar_products.data.validation import validate_pair_scores
 
 
 class TopKSelector:
