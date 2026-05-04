@@ -2,6 +2,7 @@
 
 import polars as pl
 
+from ozon_similar_products.data import schemas
 from ozon_similar_products.data.validation import validate_clean_events, validate_sessions
 
 
@@ -27,6 +28,8 @@ class SessionBuilder:
     ) -> pl.DataFrame:
         """Build sessions for multiple daily partitions."""
         session_days = [self.transform_day(events) for events in daily_clean_events]
-        result = pl.concat(session_days) if session_days else pl.DataFrame()
+        if not session_days:
+            return pl.DataFrame(schema={col: pl.Utf8 for col in schemas.SESSIONS_COLUMNS})
+        result = pl.concat(session_days)
         validate_sessions(result)
         return result

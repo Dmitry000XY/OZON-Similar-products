@@ -68,7 +68,9 @@ def move_archives(archives_dir: Path, archive_names: list[str], report_missing: 
 def has_payload(path: Path) -> bool:
     """Return True when a directory contains files other than placeholders."""
     ignored = {"README.md", ".gitkeep"}
-    return path.exists() and any(child.is_file() and child.name not in ignored for child in path.rglob("*"))
+    return path.exists() and any(
+        child.is_file() and child.name not in ignored for child in path.rglob("*")
+    )
 
 
 def safe_extract_tar_gz(archive: Path, destination: Path, payload_root_names: list[str]) -> str:

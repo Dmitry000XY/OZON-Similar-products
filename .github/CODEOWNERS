@@ -1,0 +1,3 @@
+# Default code owner for the whole repository.
+# GitHub will request review from this owner when pull requests touch matching files.
+* @Dmitry000XY

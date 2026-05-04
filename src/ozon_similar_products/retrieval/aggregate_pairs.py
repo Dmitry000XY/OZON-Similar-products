@@ -3,7 +3,6 @@
 import polars as pl
 
 
-
 class PairAggregator:
     """Aggregate daily item pairs over a rolling window."""
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_recommendations
+from ozon_similar_products.data.validation import validate_recommendations, validate_widget_output
 
 
 class RecommendationWriter:
@@ -25,5 +25,5 @@ class RecommendationWriter:
         output_path: str | Path,
     ) -> None:
         """Save item_id, similar_items_sku_list."""
-        validate_recommendations(recommendations)
+        validate_widget_output(recommendations)
         raise NotImplementedError

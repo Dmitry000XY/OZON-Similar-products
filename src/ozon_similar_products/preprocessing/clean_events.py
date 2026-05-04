@@ -2,7 +2,8 @@
 
 import polars as pl
 
-from ozon_similar_products.data.validation import validate_raw_events, validate_clean_events
+from ozon_similar_products.data import schemas
+from ozon_similar_products.data.validation import validate_clean_events, validate_raw_events
 
 
 class EventCleaner:
@@ -27,6 +28,8 @@ class EventCleaner:
     ) -> pl.DataFrame:
         """Clean multiple daily partitions and concatenate result."""
         cleaned_days = [self.transform_day(events) for events in daily_events]
-        result = pl.concat(cleaned_days) if cleaned_days else pl.DataFrame()
+        if not cleaned_days:
+            return pl.DataFrame(schema={col: pl.Utf8 for col in schemas.CLEAN_EVENTS_COLUMNS})
+        result = pl.concat(cleaned_days)
         validate_clean_events(result)
         return result
