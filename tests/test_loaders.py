@@ -49,8 +49,11 @@ def make_test_config(project_root: Path) -> dict[str, Any]:
                 "parquet_glob": "*.parquet",
                 "expected_columns": [
                     "item_id",
-                    "sku",
                     "name",
+                    "brand",
+                    "type",
+                    "category_id",
+                    "category_name",
                 ],
             },
         },
@@ -65,8 +68,11 @@ def write_product_dataset(project_root: Path) -> None:
     pl.DataFrame(
         {
             "item_id": [1, 2, 3],
-            "sku": ["sku_1", "sku_2", "sku_3"],
             "name": ["product_1", "product_2", "product_3"],
+            "brand": ["brand_1", "brand_2", "brand_3"],
+            "type": ["type_1", "type_2", "type_3"],
+            "category_id": [10, 20, 30],
+            "category_name": ["category_1", "category_2", "category_3"],
         }
     ).write_parquet(products_dir / "products.parquet")
 
@@ -171,8 +177,15 @@ def test_load_products_reads_product_parquet(
     """load_products should read product parquet files."""
     products = load_products(product_config)
 
-    assert products.shape == (3, 3)
-    assert products.columns == ["item_id", "sku", "name"]
+    assert products.shape == (3, 6)
+    assert products.columns == [
+        "item_id",
+        "name",
+        "brand",
+        "type",
+        "category_id",
+        "category_name",
+    ]
 
 
 def test_scan_products_returns_lazy_frame(product_config: dict[str, Any]) -> None:
@@ -180,7 +193,7 @@ def test_scan_products_returns_lazy_frame(product_config: dict[str, Any]) -> Non
     products_lazy = scan_products(product_config)
 
     assert isinstance(products_lazy, pl.LazyFrame)
-    assert products_lazy.collect().shape == (3, 3)
+    assert products_lazy.collect().shape == (3, 6)
 
 
 def test_load_events_reads_sample_and_hive_partitions(

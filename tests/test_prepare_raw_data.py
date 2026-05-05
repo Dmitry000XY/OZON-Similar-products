@@ -186,3 +186,36 @@ def test_safe_extract_tar_gz_skips_prepared_target_without_force(
     assert target_dir == spec.target_dir
     assert (target_dir / "existing.parquet").is_file()
     assert not (target_dir / "fresh.parquet").exists()
+
+
+def test_safe_extract_tar_gz_rebuilds_prepared_target_with_force(
+        tmp_path: Path,
+) -> None:
+    """force=True should remove prepared data and extract the archive again."""
+    archive_path = tmp_path / "product_information.tar.gz"
+    create_product_archive(
+        archive_path=archive_path,
+        source_root=tmp_path / "source",
+        parquet_name="fresh.parquet",
+        item_ids=[10, 20],
+    )
+
+    spec = make_product_spec(tmp_path=tmp_path, archive_path=archive_path)
+
+    prepared_target = spec.target_dir
+    prepared_target.mkdir(parents=True)
+    write_product_parquet(prepared_target / "existing.parquet", item_ids=[1])
+    (prepared_target / ".prepared.json").write_text("{}", encoding="utf-8")
+
+    target_dir = safe_extract_tar_gz(spec, force=True)
+
+    assert target_dir == spec.target_dir
+    assert not (target_dir / "existing.parquet").exists()
+    assert (target_dir / "fresh.parquet").is_file()
+
+    manifest_path = target_dir / ".prepared.json"
+    assert manifest_path.is_file()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["dataset_name"] == "product_information"
+    assert manifest["parquet_files_count"] == 1
