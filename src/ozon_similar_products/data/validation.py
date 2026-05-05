@@ -6,7 +6,9 @@ from ozon_similar_products.data import schemas
 import polars as pl
 
 
-def validate_columns(actual_columns: Iterable[str], expected_columns: Iterable[str]) -> None:
+def validate_columns(
+    actual_columns: Iterable[str], expected_columns: Iterable[str]
+) -> None:
     """Validate that all expected columns are present."""
     missing = set(expected_columns) - set(actual_columns)
     if missing:

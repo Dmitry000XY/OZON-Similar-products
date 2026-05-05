@@ -21,9 +21,26 @@
 
 ## Подготовка
 
+Установить зависимости:
+
 ```bash
 uv sync
+```
+
+Подготовить сырые данные:
+
+```bash
 uv run python scripts/prepare_raw_data.py
+```
+
+Проверить структуру проекта:
+
+```bash
 uv run python scripts/check_project_structure.py
-uv run pytest
+```
+
+Запустить тесты:
+
+```bash
+uv run python -m pytest
 ```
