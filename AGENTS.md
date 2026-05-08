@@ -60,7 +60,10 @@ src/ozon_similar_products/
   paths.py
 
   data/
-    loaders.py
+    archives.py
+    config.py
+    partitions.py
+    readers.py
     schemas.py
     validation.py
 
@@ -545,7 +548,7 @@ Validation should check required columns. It does not need to enforce strict dty
 
 ## 11. Module responsibilities and interfaces
 
-### 11.1 `data/loaders.py`
+### 11.1 `data/readers.py`
 
 Responsibility:
 
@@ -562,7 +565,7 @@ Do not build sessions here.
 
 Do not build item pairs here.
 
-Known issue to check: if `load_data_config()` reads `configs/data.yaml`, ensure that file exists or refactor the loader to use the current config files.
+Known issue to check: if `load_data_config()` reads `configs/data.yaml`, ensure that file exists or refactor the reader to use the current config files.
 
 ---
 

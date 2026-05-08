@@ -1,6 +1,6 @@
 # Работа с архивами и загрузчиками данных
 
-Документ описывает, как подготовить локальные данные из архивов и как читать их через `loaders.py`.
+Документ описывает, как подготовить локальные данные из архивов и как читать их через data readers.
 
 Все команды ниже должны выполняться **из корня проекта** — из папки, где лежат `pyproject.toml`,
 `configs/`, `scripts/` и `src/`.
@@ -148,10 +148,10 @@ uv run python scripts/prepare_raw_data.py --force
 
 ## Как читать данные в Python
 
-Загрузчики лежат в файле:
+Чтение данных лежит в файле:
 
 ```text
-src/ozon_similar_products/data/loaders.py
+src/ozon_similar_products/data/readers.py
 ```
 
 Импортируйте публичные функции так:
@@ -183,7 +183,7 @@ configs/data.yaml
 
 ---
 
-## Публичные функции из `loaders.py`
+## Публичные функции data readers
 
 ### `load_configs(config_dir="configs", project_root=None)`
 
@@ -571,5 +571,5 @@ events_lazy = scan_events(config)
 Правильный путь:
 
 ```text
-архивы -> scripts/prepare_raw_data.py -> loaders.py -> notebooks / baseline / pipeline
+архивы -> scripts/prepare_raw_data.py -> data/readers.py -> notebooks / baseline / pipeline
 ```

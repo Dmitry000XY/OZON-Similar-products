@@ -1,26 +1,16 @@
 """DataFrame schemas and column contracts for MVP pipeline."""
 
-ITEM_ID_COLUMN = "item_id"
+from ozon_similar_products.config import load_data_config
+
 EXTERNAL_SKU_COLUMN = "sku"
 
+_DATA_CONFIG = load_data_config()
+_USER_ACTIONS = _DATA_CONFIG.get("user_actions", {})
+_PRODUCTS = _DATA_CONFIG.get("product_information", {})
 
-KNOWN_ACTION_TYPES = [
-    "search",
-    "view",
-    "click",
-    "to_cart",
-    "favorite",
-]
-
-RAW_EVENTS_COLUMNS = [
-    "user_id",
-    "date",
-    "timestamp",
-    "action_type",
-    "widget_name",
-    "search_query",
-    "item_id",
-]
+ITEM_ID_COLUMN = _PRODUCTS.get("id_column", "item_id")
+KNOWN_ACTION_TYPES = _USER_ACTIONS.get("known_action_types", [])
+RAW_EVENTS_COLUMNS = _USER_ACTIONS.get("expected_columns", [])
 
 CLEAN_EVENTS_COLUMNS = [
     "user_id",
@@ -33,14 +23,7 @@ CLEAN_EVENTS_COLUMNS = [
     "action_weight",
 ]
 
-PRODUCT_INFORMATION_COLUMNS = [
-    ITEM_ID_COLUMN,
-    "name",
-    "brand",
-    "type",
-    "category_id",
-    "category_name",
-]
+PRODUCT_INFORMATION_COLUMNS = _PRODUCTS.get("expected_columns", [])
 
 
 SESSIONS_COLUMNS = [

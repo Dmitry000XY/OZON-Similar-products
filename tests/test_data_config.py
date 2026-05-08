@@ -10,7 +10,7 @@ def test_data_config_matches_schemas() -> None:
     product_config = data_config["product_information"]
     user_actions_config = data_config["user_actions"]
 
-    assert product_config["expected_columns"] == schemas.PRODUCT_INFORMATION_COLUMNS
-    assert product_config["id_column"] == schemas.ITEM_ID_COLUMN
-    assert user_actions_config["expected_columns"] == schemas.RAW_EVENTS_COLUMNS
-    assert user_actions_config["known_action_types"] == schemas.KNOWN_ACTION_TYPES
+    assert schemas.PRODUCT_INFORMATION_COLUMNS == product_config["expected_columns"]
+    assert schemas.ITEM_ID_COLUMN == product_config.get("id_column", "item_id")
+    assert schemas.RAW_EVENTS_COLUMNS == user_actions_config["expected_columns"]
+    assert schemas.KNOWN_ACTION_TYPES == user_actions_config["known_action_types"]

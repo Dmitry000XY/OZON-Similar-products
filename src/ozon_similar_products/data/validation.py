@@ -2,22 +2,49 @@
 
 from collections.abc import Iterable
 
-from ozon_similar_products.data import schemas
 import polars as pl
+
+from ozon_similar_products.data import schemas
+
+
+def _frame_columns(frame: pl.DataFrame | pl.LazyFrame) -> list[str]:
+    """Return column names from a Polars DataFrame or LazyFrame."""
+    if isinstance(frame, pl.LazyFrame):
+        try:
+            return list(frame.collect_schema().names())
+        except AttributeError:
+            return list(frame.schema.keys())
+    return list(frame.columns)
 
 
 def validate_columns(
-    actual_columns: Iterable[str], expected_columns: Iterable[str]
+    actual_columns: Iterable[str],
+    expected_columns: Iterable[str],
+    dataset_name: str | None = None,
 ) -> None:
     """Validate that all expected columns are present."""
     missing = set(expected_columns) - set(actual_columns)
     if missing:
-        raise ValueError(f"Missing expected columns: {sorted(missing)}")
+        message = f"missing expected columns: {sorted(missing)}"
+        if dataset_name:
+            message = (
+                f"{dataset_name}: {message}. "
+                f"Actual columns: {sorted(actual_columns)}"
+            )
+        raise ValueError(message)
 
 
-def validate_frame_has_columns(frame: pl.DataFrame | pl.LazyFrame, expected_columns: list[str]) -> None:
+def validate_frame_has_columns(
+    frame: pl.DataFrame | pl.LazyFrame,
+    expected_columns: Iterable[str],
+    dataset_name: str | None = None,
+) -> None:
     """Validate DataFrame/LazyFrame columns."""
-    validate_columns(list(frame.columns), expected_columns)
+    validate_columns(
+        _frame_columns(frame),
+        expected_columns,
+        dataset_name=dataset_name,
+    )
 
 
 def validate_raw_events(frame: pl.DataFrame | pl.LazyFrame) -> None:
