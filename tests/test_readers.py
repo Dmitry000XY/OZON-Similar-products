@@ -4,12 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import ozon_similar_products.data.config as data_config
 import polars as pl
 import pytest
 import yaml
-
-import ozon_similar_products.data.config as data_config
-import ozon_similar_products.data.readers as readers
 from ozon_similar_products.data import load_events, load_products, scan_events, scan_products
 from ozon_similar_products.data.config import (
     find_project_root,
