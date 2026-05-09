@@ -12,6 +12,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.1",
+    "nbclient>=0.10",
+    "nbformat>=5.10",
     "pyrefly>=0.38",
     "pytest>=8.0",
     "pytest-cov>=6.0",
@@ -60,3 +63,9 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["ozon_similar_products"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = [
+    "E402",
+    "I001",
+]
