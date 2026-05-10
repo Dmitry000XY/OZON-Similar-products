@@ -43,6 +43,7 @@ ITEM_POPULARITY_COLUMNS = [
     "clicks_count",
     "favorites_count",
     "to_cart_count",
+    "weighted_events",
 ]
 
 DAILY_ITEM_PAIRS_COLUMNS = [
