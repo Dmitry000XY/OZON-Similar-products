@@ -47,11 +47,11 @@ class ExtractionProgress:
     """
 
     def __init__(
-        self,
-        total: int,
-        label: str = "[prepare] Extracting",
-        stream: TextIO = sys.stderr,
-        width: int = 32,
+            self,
+            total: int,
+            label: str = "[prepare] Extracting",
+            stream: TextIO = sys.stderr,
+            width: int = 32,
     ) -> None:
         """Create a progress reporter.
 
@@ -137,8 +137,8 @@ def is_safe_member(base_dir: Path, target_path: Path) -> bool:
     resolved_target_path = target_path.resolve()
 
     return (
-        resolved_target_path == resolved_base_dir
-        or resolved_base_dir in resolved_target_path.parents
+            resolved_target_path == resolved_base_dir
+            or resolved_base_dir in resolved_target_path.parents
     )
 
 
@@ -182,9 +182,9 @@ def remove_path(path: Path) -> None:
 
 
 def find_payload_dir(
-    base_dir: Path,
-    payload_root_names: list[str],
-    parquet_glob: str,
+        base_dir: Path,
+        payload_root_names: list[str],
+        parquet_glob: str,
 ) -> Path:
     """Find the directory that contains extracted parquet files."""
     candidates = [base_dir / root_name for root_name in payload_root_names]
@@ -242,10 +242,10 @@ def remove_success_files(path: Path) -> int:
 
 
 def write_manifest(
-    spec: ArchiveSpec,
-    parquet_files_count: int,
-    removed_success_files_count: int,
-    project_root: Path,
+        spec: ArchiveSpec,
+        parquet_files_count: int,
+        removed_success_files_count: int,
+        project_root: Path,
 ) -> None:
     """Write `.prepared.json` for a successfully prepared dataset."""
     manifest = {
@@ -266,10 +266,10 @@ def write_manifest(
 
 
 def safe_extract_tar_gz(
-    spec: ArchiveSpec,
-    project_root: Path,
-    *,
-    force: bool = False,
+        spec: ArchiveSpec,
+        project_root: Path,
+        *,
+        force: bool = False,
 ) -> Path:
     """Prepare one dataset from a `.tar.gz` archive."""
     if not spec.archive_path.exists():

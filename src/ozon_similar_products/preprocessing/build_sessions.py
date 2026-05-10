@@ -7,12 +7,12 @@ from ozon_similar_products.data.validation import validate_clean_events, validat
 
 
 class SessionBuilder:
-    """Build user sessions from clean events."""
+    """Build user sessions from clean events.""" # TODO build sessions taking into account the daily pass
 
     def __init__(
-        self,
-        timeout_minutes: int = 30,
-        max_items_per_session: int = 50,
+            self,
+            timeout_minutes: int = 30,
+            max_items_per_session: int = 50,  # TODO move to config
     ) -> None:
         self.timeout_minutes = timeout_minutes
         self.max_items_per_session = max_items_per_session
@@ -23,8 +23,8 @@ class SessionBuilder:
         raise NotImplementedError
 
     def transform_window(
-        self,
-        daily_clean_events: list[pl.DataFrame | pl.LazyFrame],
+            self,
+            daily_clean_events: list[pl.DataFrame | pl.LazyFrame],
     ) -> pl.DataFrame:
         """Build sessions for multiple daily partitions."""
         session_days = [self.transform_day(events) for events in daily_clean_events]

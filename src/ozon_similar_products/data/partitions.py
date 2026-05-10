@@ -24,11 +24,11 @@ def list_event_dates(events_dir: Path) -> list[str]:
 
 
 def filter_dates(
-    available_dates: list[str],
-    dates: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    sample_days: int | None = None,
+        available_dates: list[str],
+        dates: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_days: int | None = None,
 ) -> list[str]:
     """Filter available dates by explicit list, range and optional sample size."""
     if dates is not None:
@@ -49,12 +49,12 @@ def filter_dates(
 
 
 def collect_event_parquet_files(
-    events_dir: Path,
-    dates: Iterable[str] | None = None,
-    action_types: Iterable[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    sample_days: int | None = None,
+        events_dir: Path,
+        dates: Iterable[str] | None = None,
+        action_types: Iterable[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sample_days: int | None = None,
 ) -> list[Path]:
     """Collect parquet files for selected dates and action types.
 

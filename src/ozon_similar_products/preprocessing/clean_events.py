@@ -10,9 +10,9 @@ class EventCleaner:
     """Clean raw user actions and prepare item-level events."""
 
     def __init__(
-        self,
-        item_action_types: list[str],
-        action_weights: dict[str, float],
+            self,
+            item_action_types: list[str],
+            action_weights: dict[str, float],
     ) -> None:
         self.item_action_types = item_action_types
         self.action_weights = action_weights
@@ -23,8 +23,8 @@ class EventCleaner:
         raise NotImplementedError
 
     def transform_window(
-        self,
-        daily_events: list[pl.DataFrame | pl.LazyFrame],
+            self,
+            daily_events: list[pl.DataFrame | pl.LazyFrame],
     ) -> pl.DataFrame:
         """Clean multiple daily partitions and concatenate result."""
         cleaned_days = [self.transform_day(events) for events in daily_events]

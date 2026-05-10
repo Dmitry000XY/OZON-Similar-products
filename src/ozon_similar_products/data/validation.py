@@ -18,9 +18,9 @@ def _frame_columns(frame: pl.DataFrame | pl.LazyFrame) -> list[str]:
 
 
 def validate_columns(
-    actual_columns: Iterable[str],
-    expected_columns: Iterable[str],
-    dataset_name: str | None = None,
+        actual_columns: Iterable[str],
+        expected_columns: Iterable[str],
+        dataset_name: str | None = None,
 ) -> None:
     """Validate that all expected columns are present."""
     missing = set(expected_columns) - set(actual_columns)
@@ -35,9 +35,9 @@ def validate_columns(
 
 
 def validate_frame_has_columns(
-    frame: pl.DataFrame | pl.LazyFrame,
-    expected_columns: Iterable[str],
-    dataset_name: str | None = None,
+        frame: pl.DataFrame | pl.LazyFrame,
+        expected_columns: Iterable[str],
+        dataset_name: str | None = None,
 ) -> None:
     """Validate DataFrame/LazyFrame columns."""
     validate_columns(

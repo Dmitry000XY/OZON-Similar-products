@@ -25,7 +25,6 @@ CLEAN_EVENTS_COLUMNS = [
 
 PRODUCT_INFORMATION_COLUMNS = _PRODUCTS.get("expected_columns", [])
 
-
 SESSIONS_COLUMNS = [
     "user_id",
     "session_id",

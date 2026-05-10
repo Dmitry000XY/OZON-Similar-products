@@ -4,9 +4,9 @@ from pathlib import Path
 
 
 def run_mvp_pipeline(
-    train_until_date: str,
-    lookback_days: int,
-    config_path: str | Path = "configs/baseline.yaml",
+        train_until_date: str,
+        lookback_days: int,
+        config_path: str | Path = "configs/baseline.yaml",
 ) -> None:
     """Run full MVP pipeline over a rolling window.
 

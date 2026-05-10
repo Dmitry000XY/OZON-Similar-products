@@ -8,7 +8,7 @@ from ozon_similar_products.data.validation import validate_pair_aggregates
 class CoVisitationScorer:
     """Score item-item pair aggregates."""
 
-    def __init__(self, method: str = "pair_count") -> None:
+    def __init__(self, method: str = "pair_count") -> None:  # TODO use default method from ~ consts
         self.method = method
 
     def score(self, pair_aggregates: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:

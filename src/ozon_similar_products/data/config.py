@@ -71,8 +71,8 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
 
 
 def load_configs(
-    config_dir: str | Path = "configs",
-    project_root: str | Path | None = None,
+        config_dir: str | Path = "configs",
+        project_root: str | Path | None = None,
 ) -> ProjectConfig:
     """Load project path and data configs.
 

@@ -14,8 +14,8 @@ class ItemPopularityBuilder:
         raise NotImplementedError
 
     def aggregate_window(
-        self,
-        daily_popularity: list[pl.DataFrame | pl.LazyFrame],
+            self,
+            daily_popularity: list[pl.DataFrame | pl.LazyFrame],
     ) -> pl.DataFrame:
         """Aggregate item popularity over a rolling window."""
         raise NotImplementedError

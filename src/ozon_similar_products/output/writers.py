@@ -11,18 +11,18 @@ class RecommendationWriter:
     """Save detailed and widget recommendation outputs."""
 
     def save_detailed(
-        self,
-        recommendations: pl.DataFrame,
-        output_path: str | Path,
+            self,
+            recommendations: pl.DataFrame,
+            output_path: str | Path,
     ) -> None:
         """Save item_id, similar_item_id, score, rank, source."""
         validate_recommendations(recommendations)
         raise NotImplementedError
 
     def save_widget_format(
-        self,
-        recommendations: pl.DataFrame,
-        output_path: str | Path,
+            self,
+            recommendations: pl.DataFrame,
+            output_path: str | Path,
     ) -> None:
         """Save item_id, similar_items_sku_list."""
         validate_widget_output(recommendations)
