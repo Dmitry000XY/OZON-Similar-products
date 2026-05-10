@@ -4,7 +4,7 @@ from datetime import datetime
 
 import polars as pl
 
-from ozon_similar_products.features.item_popularity import weighted_item_popularity
+from ozon_similar_products.features.eda_item_popularity import weighted_item_popularity
 
 
 def test_weighted_item_popularity_uses_direct_item_actions_only() -> None:
