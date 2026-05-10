@@ -1,4 +1,4 @@
-"""Tests for data loaders."""
+"""Tests for data readers."""
 
 from datetime import datetime
 from pathlib import Path
@@ -8,20 +8,20 @@ import polars as pl
 import pytest
 import yaml
 
-import ozon_similar_products.data.loaders as loaders
+import ozon_similar_products.data.config as data_config
 from ozon_similar_products.data import load_events, load_products, scan_events, scan_products
-from ozon_similar_products.data.loaders import (
-    find_parquet_payload_dir,
+from ozon_similar_products.data.config import (
     find_project_root,
     get_path_from_config,
     load_yaml,
     resolve_project_path,
-    validate_columns,
 )
+from ozon_similar_products.data.readers import find_parquet_payload_dir
+from ozon_similar_products.data.validation import validate_frame_has_columns
 
 
 def make_test_config(project_root: Path) -> dict[str, Any]:
-    """Create a minimal config compatible with loaders.py."""
+    """Create a minimal config compatible with readers.py."""
     return {
         "project_root": project_root,
         "paths": {
@@ -153,7 +153,7 @@ def write_event_dataset(project_root: Path) -> None:
 
 @pytest.fixture
 def test_config(tmp_path: Path) -> dict[str, Any]:
-    """Return a minimal loaders config rooted in a temporary directory."""
+    """Return a minimal readers config rooted in a temporary directory."""
     return make_test_config(tmp_path)
 
 
@@ -316,13 +316,13 @@ def test_find_project_root_raises_when_config_is_missing(
             / "src"
             / "ozon_similar_products"
             / "data"
-            / "loaders.py"
+            / "readers.py"
     )
     fake_loader_file.parent.mkdir(parents=True)
     fake_loader_file.write_text("", encoding="utf-8")
 
     monkeypatch.chdir(isolated_root)
-    monkeypatch.setattr(loaders, "__file__", str(fake_loader_file))
+    monkeypatch.setattr(data_config, "__file__", str(fake_loader_file))
 
     with pytest.raises(FileNotFoundError, match="Could not find project root"):
         find_project_root(isolated_root)
@@ -384,14 +384,14 @@ def test_get_path_from_config_reads_nested_path(tmp_path: Path) -> None:
     ).resolve()
 
 
-def test_validate_columns_raises_for_missing_columns() -> None:
-    """validate_columns should fail when required columns are missing."""
+def test_validate_frame_has_columns_raises_for_missing_columns() -> None:
+    """validate_frame_has_columns should fail when required columns are missing."""
     lazy_frame = pl.DataFrame({"item_id": [1, 2]}).lazy()
 
     with pytest.raises(ValueError, match="missing expected columns"):
-        validate_columns(
-            lazy_frame=lazy_frame,
-            expected_columns=["item_id", "sku"],
+        validate_frame_has_columns(
+            lazy_frame,
+            ["item_id", "sku"],
             dataset_name="product_information",
         )
 

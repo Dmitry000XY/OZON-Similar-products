@@ -1,12 +1,33 @@
-baseline:
-  name: co_visitation
-  top_k: 50
-  min_pair_count: 2
+pipeline:
+  session_timeout_minutes: 30
   max_items_per_session: 50
+  top_k: 20
+  lookback_days: 30
 
-event_weights:
-  search: 0.2
-  view: 1.0
-  click: 2.0
-  favorite: 2.5
-  to_cart: 4.0
+events:
+  item_action_types:
+    - view
+    - click
+    - favorite
+    - to_cart
+  search_action_type: search
+
+scoring:
+  method: pair_count
+  action_weights:
+    view: 1.0
+    click: 2.0
+    favorite: 2.5
+    to_cart: 4.0
+
+artifacts:
+  events_clean_dir: data/processed/events_clean
+  sessions_dir: data/processed/sessions
+  item_popularity_dir: data/processed/item_popularity
+  daily_pairs_dir: data/processed/item_pairs
+  pair_aggregates_dir: data/processed/pair_aggregates
+
+outputs:
+  detailed_recommendations_dir: outputs/recommendations/detailed
+  widget_recommendations_dir: outputs/recommendations/widget
+  latest_dir: outputs/recommendations/latest

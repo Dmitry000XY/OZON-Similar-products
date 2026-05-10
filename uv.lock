@@ -385,7 +385,7 @@ dev = [
     { name = "pyrefly", specifier = ">=0.38" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.12" },
+    { name = "ruff", specifier = ">=0.15.12" },
 ]
 
 [[package]]

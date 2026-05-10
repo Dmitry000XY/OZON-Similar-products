@@ -94,7 +94,7 @@ def test_safe_extract_tar_gz_extracts_product_information(tmp_path: Path) -> Non
 
     spec = make_product_spec(tmp_path=tmp_path, archive_path=archive_path)
 
-    target_dir = safe_extract_tar_gz(spec)
+    target_dir = safe_extract_tar_gz(spec, project_root=PROJECT_ROOT)
 
     assert target_dir == tmp_path / "data" / "raw" / "product_information"
     assert (target_dir / "products.parquet").is_file()
@@ -131,7 +131,7 @@ def test_safe_extract_tar_gz_rejects_unsafe_paths(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="Unsafe path"):
-        safe_extract_tar_gz(spec)
+        safe_extract_tar_gz(spec, project_root=PROJECT_ROOT)
 
     assert not (tmp_path / "data" / "evil.txt").exists()
     assert not (tmp_path / "evil.txt").exists()
@@ -154,7 +154,7 @@ def test_safe_extract_tar_gz_rebuilds_incomplete_target(tmp_path: Path) -> None:
     incomplete_target.mkdir(parents=True)
     write_product_parquet(incomplete_target / "stale.parquet", item_ids=[999])
 
-    target_dir = safe_extract_tar_gz(spec)
+    target_dir = safe_extract_tar_gz(spec, project_root=PROJECT_ROOT)
 
     assert target_dir == spec.target_dir
     assert not (target_dir / "stale.parquet").exists()
@@ -181,7 +181,7 @@ def test_safe_extract_tar_gz_skips_prepared_target_without_force(
     write_product_parquet(prepared_target / "existing.parquet", item_ids=[1])
     (prepared_target / ".prepared.json").write_text("{}", encoding="utf-8")
 
-    target_dir = safe_extract_tar_gz(spec)
+    target_dir = safe_extract_tar_gz(spec, project_root=PROJECT_ROOT)
 
     assert target_dir == spec.target_dir
     assert (target_dir / "existing.parquet").is_file()
@@ -207,7 +207,7 @@ def test_safe_extract_tar_gz_rebuilds_prepared_target_with_force(
     write_product_parquet(prepared_target / "existing.parquet", item_ids=[1])
     (prepared_target / ".prepared.json").write_text("{}", encoding="utf-8")
 
-    target_dir = safe_extract_tar_gz(spec, force=True)
+    target_dir = safe_extract_tar_gz(spec, project_root=PROJECT_ROOT, force=True)
 
     assert target_dir == spec.target_dir
     assert not (target_dir / "existing.parquet").exists()

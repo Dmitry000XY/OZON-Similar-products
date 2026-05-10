@@ -37,7 +37,10 @@ source:
     - src/ozon_similar_products/config.py
     - src/ozon_similar_products/paths.py
     - src/ozon_similar_products/data/__init__.py
-    - src/ozon_similar_products/data/loaders.py
+    - src/ozon_similar_products/data/archives.py
+    - src/ozon_similar_products/data/config.py
+    - src/ozon_similar_products/data/partitions.py
+    - src/ozon_similar_products/data/readers.py
     - src/ozon_similar_products/data/schemas.py
     - src/ozon_similar_products/data/validation.py
 
