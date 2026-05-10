@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from ozon_similar_products.data.profiling import (
+from ozon_similar_products.data.eda_profiling import (
     action_profile,
     null_profile,
     parquet_partition_profile,

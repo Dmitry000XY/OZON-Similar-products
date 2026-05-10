@@ -4,7 +4,7 @@ from datetime import datetime
 
 import polars as pl
 
-from ozon_similar_products.preprocessing.session_checks import (
+from ozon_similar_products.preprocessing.eda_session_checks import (
     add_session_markers,
     time_diff_summary,
 )
