@@ -115,7 +115,7 @@ class ItemPairBuilder:
         )
 
     def transform_day(self, sessions: FrameLike) -> pl.DataFrame:
-        """Build directed item-item pairs for one daily sessions partition."""
+        """Build directed item-item pairs for one sessions partition."""
         validate_sessions(sessions)
 
         session_items = self._build_session_items(sessions)
@@ -124,18 +124,18 @@ class ItemPairBuilder:
         pairs = (
             session_items.join(
                 valid_sessions,
-                on=["user_id", "session_id", "event_date"],
+                on=["user_id", "session_id"],
                 how="inner",
             )
             .join(
                 session_items,
-                on=["user_id", "session_id", "event_date"],
+                on=["user_id", "session_id"],
                 how="inner",
                 suffix="_similar",
             )
             .filter(pl.col("item_id") != pl.col("item_id_similar"))
             .select(
-                pl.col("event_date").cast(pl.Date, strict=False).alias("pair_date"),
+                pl.col("session_start_date").cast(pl.Date, strict=False).alias("pair_date"),
                 pl.col("item_id"),
                 pl.col("item_id_similar").alias("similar_item_id"),
                 pl.col("session_id"),
@@ -169,8 +169,9 @@ class ItemPairBuilder:
             .filter(pl.col("item_id").is_not_null())
             .filter(pl.col("action_type").is_in(list(self.item_action_types)))
             .with_columns(_priority_expr(priority))
-            .group_by(["user_id", "session_id", "event_date", "item_id"])
+            .group_by(["user_id", "session_id", "item_id"])
             .agg(
+                pl.col("event_date").min().alias("session_start_date"),
                 pl.col("action_type")
                 .sort_by(pl.col("signal_priority"), descending=True)
                 .first()
@@ -182,10 +183,10 @@ class ItemPairBuilder:
     def _build_valid_sessions(self, session_items: pl.LazyFrame) -> pl.LazyFrame:
         """Keep sessions that can create pairs and are not too long/noisy."""
         return (
-            session_items.group_by(["user_id", "session_id", "event_date"])
+            session_items.group_by(["user_id", "session_id"])
             .agg(pl.len().alias("items_count"))
             .filter(pl.col("items_count").is_between(2, self.max_items_per_session))
-            .select("user_id", "session_id", "event_date")
+            .select("user_id", "session_id")
         )
 
     def _resolved_signal_priority(self) -> Mapping[str, int]:
