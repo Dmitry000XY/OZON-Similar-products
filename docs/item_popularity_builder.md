@@ -89,9 +89,6 @@ builder = ItemPopularityBuilder()
 
 Текущая реализация считает `weighted_events` как сумму уже подготовленной колонки `action_weight` из `events_clean`.
 
-Словарь `action_weights` используется для проверки, что для каждого `item_action_type` задан вес. Если для какого-то
-действия веса нет, builder падает с `ValueError`.
-
 ## Основной результат: item_popularity
 
 Для построения основной таблицы используется:
@@ -147,14 +144,7 @@ validate_item_popularity(item_popularity)
 ```python
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 
-ACTION_WEIGHTS = {
-    "view": 1.0,
-    "click": 2.0,
-    "favorite": 2.5,
-    "to_cart": 4.0,
-}
-
-builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+builder = ItemPopularityBuilder()
 
 item_popularity = builder.build(events_clean)
 ```
@@ -342,7 +332,6 @@ tests/test_item_popularity_builder.py
 - игнорирует `search` и строки без `item_id`;
 - считает `unique_users`, а не просто количество событий;
 - возвращает валидный пустой результат;
-- валидирует наличие action weights;
 - принимает `LazyFrame`;
 - осознанно не реализует `aggregate_window`;
 - строит диагностики `by_date`, `by_action_type`, `by_widget_name`.
