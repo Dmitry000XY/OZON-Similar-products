@@ -7,7 +7,7 @@ from ozon_similar_products.data.validation import validate_clean_events, validat
 
 
 class SessionBuilder:
-    """Build user sessions from clean events.""" # TODO build sessions taking into account the daily pass
+    """Build user sessions from clean events."""  # TODO build sessions taking into account the daily pass
 
     def __init__(
             self,
