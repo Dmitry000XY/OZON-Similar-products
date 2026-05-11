@@ -54,12 +54,12 @@ def _empty_pair_scores() -> pl.DataFrame:
 
 
 def _effective_weight(
-    action_type: str,
-    business_weights: Mapping[str, float],
-    action_shares: Mapping[str, float] | None,
-    beta: float,
-    reference_action_type: str,
-    max_frequency_boost: Mapping[str, float],
+        action_type: str,
+        business_weights: Mapping[str, float],
+        action_shares: Mapping[str, float] | None,
+        beta: float,
+        reference_action_type: str,
+        max_frequency_boost: Mapping[str, float],
 ) -> float:
     """Compute calibrated channel weight with soft inverse-frequency normalization."""
     business_weight = float(business_weights.get(action_type, 0.0))
@@ -150,9 +150,9 @@ class CoVisitationScorer:
         )
 
     def score(
-        self,
-        pair_aggregates: FrameLike,
-        item_popularity: FrameLike | None = None,
+            self,
+            pair_aggregates: FrameLike,
+            item_popularity: FrameLike | None = None,
     ) -> pl.DataFrame:
         """Compute pair scores from pair aggregates."""
         validate_pair_aggregates(pair_aggregates)
@@ -215,9 +215,9 @@ class CoVisitationScorer:
         return score_expr
 
     def _apply_item_popularity_normalization(
-        self,
-        scored: pl.DataFrame,
-        item_popularity: FrameLike,
+            self,
+            scored: pl.DataFrame,
+            item_popularity: FrameLike,
     ) -> pl.DataFrame:
         popularity_frame = _as_frame(item_popularity)
         validate_item_popularity(popularity_frame)
@@ -251,8 +251,8 @@ class CoVisitationScorer:
             raise ValueError("Missing item popularity for some item_id/similar_item_id pairs")
 
         denominator = (
-            (pl.col("source_popularity") + self.popularity_smoothing)
-            * (pl.col("candidate_popularity") + self.popularity_smoothing)
-        ) ** self.popularity_power
+                              (pl.col("source_popularity") + self.popularity_smoothing)
+                              * (pl.col("candidate_popularity") + self.popularity_smoothing)
+                      ) ** self.popularity_power
 
         return normalized.with_columns((pl.col("base_score") / denominator).alias("score"))

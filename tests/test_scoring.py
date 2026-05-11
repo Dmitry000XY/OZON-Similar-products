@@ -44,9 +44,12 @@ def _aggregates() -> pl.DataFrame:
 def _item_popularity() -> pl.DataFrame:
     return pl.DataFrame(
         [
-            {"item_id": 1, "events_count": 200, "unique_users": 20, "views_count": 120, "clicks_count": 40, "favorites_count": 20, "to_cart_count": 20},
-            {"item_id": 10, "events_count": 3000, "unique_users": 1000, "views_count": 2000, "clicks_count": 500, "favorites_count": 300, "to_cart_count": 200},
-            {"item_id": 20, "events_count": 40, "unique_users": 10, "views_count": 20, "clicks_count": 8, "favorites_count": 7, "to_cart_count": 5},
+            {"item_id": 1, "events_count": 200, "unique_users": 20, "views_count": 120, "clicks_count": 40,
+             "favorites_count": 20, "to_cart_count": 20},
+            {"item_id": 10, "events_count": 3000, "unique_users": 1000, "views_count": 2000, "clicks_count": 500,
+             "favorites_count": 300, "to_cart_count": 200},
+            {"item_id": 20, "events_count": 40, "unique_users": 10, "views_count": 20, "clicks_count": 8,
+             "favorites_count": 7, "to_cart_count": 5},
         ]
     )
 
