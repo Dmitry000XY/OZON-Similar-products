@@ -336,14 +336,20 @@ tests/test_item_popularity_builder.py
 - осознанно не реализует `aggregate_window`;
 - строит диагностики `by_date`, `by_action_type`, `by_widget_name`.
 
+Если терминал открыт в папке `docs/`, перейдите в корень проекта относительным путём:
+
+```bash
+cd ..
+```
+
 Запуск тестов:
 
 ```bash
-uv run python -m pytest tests/test_item_popularity_builder.py
+uv run pytest tests/test_item_popularity_builder.py
 ```
 
 Полный запуск тестов проекта:
 
 ```bash
-uv run python -m pytest
+uv run pytest
 ```

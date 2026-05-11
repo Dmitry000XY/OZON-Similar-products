@@ -42,5 +42,5 @@ uv run python scripts/check_project_structure.py
 Запустить тесты:
 
 ```bash
-uv run python -m pytest
+uv run pytest
 ```
