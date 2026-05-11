@@ -202,8 +202,11 @@ def find_payload_dir(
 
 
 def extract_tar_gz(archive_path: Path, staging_dir: Path) -> None:
-    """Extract a `.tar.gz` archive into a temporary directory."""
-    with tarfile.open(archive_path, mode="r:gz") as tar:
+    """Extract a `.tar.gz` or `.tar` archive into a temporary directory."""
+    # Auto-detect compression: use 'r:gz' for .tar.gz, 'r:' for .tar
+    mode = "r:gz" if archive_path.suffix == ".gz" else "r:"
+    
+    with tarfile.open(archive_path, mode=mode) as tar:
         LOGGER.info("[prepare] Reading archive index: %s", archive_path.name)
         members = tar.getmembers()
         LOGGER.info("[prepare] Archive members:      %s", len(members))
@@ -347,7 +350,10 @@ def print_archive_preview(archive_path: Path, *, limit: int = 30) -> None:
         LOGGER.info("[preview] Missing: %s", archive_path)
         return
 
-    with tarfile.open(archive_path, mode="r:gz") as tar:
+    # Auto-detect compression: use 'r:gz' for .tar.gz, 'r:' for .tar
+    mode = "r:gz" if archive_path.suffix == ".gz" else "r:"
+    
+    with tarfile.open(archive_path, mode=mode) as tar:
         for index, member in enumerate(tar):
             if index >= limit:
                 LOGGER.info("[preview] ... first %s items shown", limit)

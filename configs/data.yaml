@@ -1,5 +1,5 @@
 product_information:
-  archive_name: product_information.tar.gz
+  archive_name: product_information.tar
   parquet_glob: "**/*.parquet"
   payload_root_names:
     - product_information
@@ -13,7 +13,7 @@ product_information:
     - category_name
 
 user_actions:
-  archive_name: user_actions.tar.gz
+  archive_name: user_actions.tar
   parquet_glob: "**/*.parquet"
   payload_root_names:
     - user_actions
