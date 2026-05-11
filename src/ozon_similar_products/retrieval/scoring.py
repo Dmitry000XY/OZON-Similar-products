@@ -41,6 +41,44 @@ _COUNT_COLUMNS = {
 _VALID_METHODS = {"pair_count", "calibrated_multichannel"}
 
 
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    """Return a string-key mapping or an empty mapping fallback."""
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _as_str(value: Any, default: str) -> str:
+    """Return string value or fallback to default."""
+    if isinstance(value, str):
+        return value
+    return default
+
+
+def _as_float(value: Any, default: float) -> float:
+    """Return float-convertible scalar or fallback to default."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float, str)):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Return int-convertible scalar or fallback to default."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float, str)):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
 def _as_frame(frame: FrameLike) -> pl.DataFrame:
     """Return an eager DataFrame for scoring."""
     if isinstance(frame, pl.LazyFrame):
@@ -128,25 +166,39 @@ class CoVisitationScorer:
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "CoVisitationScorer":
-        scoring = config.get("scoring", {}) if isinstance(config, Mapping) else {}
-        calibration = scoring.get("calibration", {})
-        popularity_normalization = scoring.get("popularity_normalization", {})
+        scoring = _as_mapping(config.get("scoring", {}))
+        calibration = _as_mapping(scoring.get("calibration", {}))
+        popularity_normalization = _as_mapping(scoring.get("popularity_normalization", {}))
+
+        method = _as_str(scoring.get("method", "pair_count"), "pair_count")
+        beta = _as_float(scoring.get("beta", 0.5), 0.5)
+        reference_action_type = _as_str(scoring.get("reference_action_type", "view"), "view")
+        min_pair_count = _as_int(scoring.get("min_pair_count", 1), 1)
+        min_unique_users = _as_int(scoring.get("min_unique_users", 1), 1)
+        min_unique_sessions = _as_int(scoring.get("min_unique_sessions", 1), 1)
+        popularity_column = _as_str(
+            popularity_normalization.get("popularity_column", "unique_users"),
+            "unique_users",
+        )
+        popularity_smoothing = _as_float(popularity_normalization.get("smoothing", 1.0), 1.0)
+        popularity_power = _as_float(popularity_normalization.get("power", 0.5), 0.5)
+
         return cls(
-            method=scoring.get("method", "pair_count"),
+            method=method,
             business_weights=scoring.get("business_weights", DEFAULT_BUSINESS_WEIGHTS),
             action_shares=calibration.get("action_shares_used_for_calibration"),
-            beta=float(scoring.get("beta", 0.5)),
-            reference_action_type=scoring.get("reference_action_type", "view"),
+            beta=beta,
+            reference_action_type=reference_action_type,
             max_frequency_boost=scoring.get("max_frequency_boost", DEFAULT_MAX_FREQUENCY_BOOST),
-            min_pair_count=int(scoring.get("min_pair_count", 1)),
-            min_unique_users=int(scoring.get("min_unique_users", 1)),
-            min_unique_sessions=int(scoring.get("min_unique_sessions", 1)),
+            min_pair_count=min_pair_count,
+            min_unique_users=min_unique_users,
+            min_unique_sessions=min_unique_sessions,
             normalize_by_item_popularity=bool(
                 scoring.get("normalize_by_item_popularity", False)
             ),
-            popularity_column=popularity_normalization.get("popularity_column", "unique_users"),
-            popularity_smoothing=float(popularity_normalization.get("smoothing", 1.0)),
-            popularity_power=float(popularity_normalization.get("power", 0.5)),
+            popularity_column=popularity_column,
+            popularity_smoothing=popularity_smoothing,
+            popularity_power=popularity_power,
         )
 
     def score(
