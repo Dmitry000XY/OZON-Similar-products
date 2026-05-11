@@ -44,6 +44,11 @@ scoring:
     action_shares_used_for_calibration: null
     calibration_start: null
     calibration_end: null
+  normalize_by_item_popularity: false
+  popularity_normalization:
+    popularity_column: unique_users
+    smoothing: 1.0
+    power: 0.5
 
 artifacts:
   events_clean_dir: data/processed/events_clean
