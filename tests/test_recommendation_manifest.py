@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pytest
@@ -63,8 +64,10 @@ def test_save_manifest_accepts_directory_path(tmp_path: Path) -> None:
 
 def test_save_manifest_rejects_non_mapping_manifest(tmp_path: Path) -> None:
     """Manifest payload must be a JSON object."""
+    invalid_manifest: Any = ["not", "a", "mapping"]
+
     with pytest.raises(TypeError, match="manifest must be a mapping"):
-        RecommendationWriter().save_manifest(["not", "a", "mapping"], tmp_path)
+        RecommendationWriter().save_manifest(invalid_manifest, tmp_path)
 
 
 def test_update_latest_manifest_rebases_paths_for_lookup(tmp_path: Path) -> None:
