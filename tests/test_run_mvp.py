@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
@@ -89,8 +90,9 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
         def from_config(cls, _: dict[str, object]) -> "FakeSessionBuilder":
             return cls()
 
-        def transform_day(self, events_clean: pl.DataFrame) -> pl.DataFrame:
-            return events_clean.select(schemas.SESSIONS_COLUMNS)
+        def transform_window(self, daily_events_clean: list[pl.DataFrame]) -> pl.DataFrame:
+            captured["session_window_input_count"] = len(daily_events_clean)
+            return empty_contract_frame(schemas.SESSIONS_COLUMNS)
 
     class FakeItemPairBuilder:
         @classmethod
@@ -98,7 +100,8 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
             return cls()
 
         def transform_day(self, sessions: pl.DataFrame) -> pl.DataFrame:
-            return sessions.select(schemas.DAILY_ITEM_PAIRS_COLUMNS)
+            captured["pair_builder_sessions_height"] = sessions.height
+            return empty_contract_frame(schemas.DAILY_ITEM_PAIRS_COLUMNS)
 
     class FakePairAggregator:
         def aggregate_window(
@@ -211,6 +214,8 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
 
     run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
 
+    assert captured["session_window_input_count"] == 0
+    assert captured["pair_builder_sessions_height"] == 0
     assert captured["daily_pairs_count"] == 0
     assert captured["window"] == ("2026-05-04", "2026-05-10")
     assert captured["score_action_shares"] == {"view": 0.7, "click": 0.3}
@@ -223,13 +228,12 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
         "min_unique_sessions": 4,
     }
 
-    manifest = captured["manifest"]
-    assert isinstance(manifest, dict)
+    manifest = cast(dict[str, object], captured["manifest"])
     assert manifest["run_id"] == "run_2026-05-10_lb7"
     assert manifest["calibration_used"] is True
-    assert manifest["rows"]["raw_events"] == 0
-    assert manifest["paths"]["detailed_recommendations_path"] == "detailed/recommendations.parquet"
-    assert manifest["paths"]["widget_recommendations_path"] == "widget/similar_items.parquet"
+    assert cast(dict[str, int], manifest["rows"])["raw_events"] == 0
+    assert cast(dict[str, str], manifest["paths"])["detailed_recommendations_path"] == "detailed/recommendations.parquet"
+    assert cast(dict[str, str], manifest["paths"])["widget_recommendations_path"] == "widget/similar_items.parquet"
 
-    assert captured["run_manifest_path"].name == "manifest.json"
-    assert captured["latest_dir"].as_posix().endswith("outputs/recommendations/latest")
+    assert cast(Path, captured["run_manifest_path"]).name == "manifest.json"
+    assert cast(Path, captured["latest_dir"]).as_posix().endswith("outputs/recommendations/latest")
