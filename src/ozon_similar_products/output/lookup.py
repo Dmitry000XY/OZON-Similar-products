@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 
 from ozon_similar_products.data import schemas
 from ozon_similar_products.data.validation import validate_widget_output
+from ozon_similar_products.output.manifest import (
+    COMPACT_RECOMMENDATIONS_PATH_KEYS,
+    find_compact_recommendations_path,
+    load_manifest,
+)
 
 DEFAULT_LOOKUP_FILENAME = "similar_items.parquet"
-
-_LOOKUP_PATH_KEYS = (
-    "widget_recommendations_path",
-    "compact_recommendations_path",
-    "similar_items_path",
-    "widget_path",
-    "recommendations_path",
-)
 
 
 class SimilarItemsLookup:
@@ -75,11 +70,10 @@ def _resolve_recommendations_path(path: Path) -> Path:
 
 def _resolve_from_manifest(manifest_path: Path) -> Path:
     """Read a manifest and resolve a compact recommendations path from it."""
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    candidate = _find_manifest_path(manifest)
+    candidate = find_compact_recommendations_path(load_manifest(manifest_path))
 
     if candidate is None:
-        keys = ", ".join(_LOOKUP_PATH_KEYS)
+        keys = ", ".join(COMPACT_RECOMMENDATIONS_PATH_KEYS)
         raise ValueError(
             "Manifest does not contain a compact recommendations path. "
             f"Expected one of: {keys}"
@@ -90,23 +84,6 @@ def _resolve_from_manifest(manifest_path: Path) -> Path:
         return candidate_path
 
     return (manifest_path.parent / candidate_path).resolve()
-
-
-def _find_manifest_path(manifest: dict[str, Any]) -> str | None:
-    """Find compact recommendations path in flat or nested manifest data."""
-    for key in _LOOKUP_PATH_KEYS:
-        value = manifest.get(key)
-        if isinstance(value, str):
-            return value
-
-    paths = manifest.get("paths")
-    if isinstance(paths, dict):
-        for key in _LOOKUP_PATH_KEYS:
-            value = paths.get(key)
-            if isinstance(value, str):
-                return value
-
-    return None
 
 
 def _build_lookup_mapping(frame: pl.DataFrame) -> dict[int | str, list[int | str]]:
