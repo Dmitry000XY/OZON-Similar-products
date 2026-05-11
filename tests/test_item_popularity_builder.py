@@ -8,13 +8,6 @@ import pytest
 from ozon_similar_products.data.validation import validate_item_popularity
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 
-ACTION_WEIGHTS = {
-    "view": 1.0,
-    "click": 2.0,
-    "favorite": 2.5,
-    "to_cart": 4.0,
-}
-
 
 def _clean_events(rows: list[dict]) -> pl.DataFrame:
     """Build a clean-events DataFrame for item popularity tests."""
@@ -79,7 +72,7 @@ def test_item_popularity_builder_counts_required_metrics() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity = builder.transform_day(events).sort("item_id")
 
     validate_item_popularity(popularity)
@@ -140,7 +133,7 @@ def test_item_popularity_builder_ignores_search_and_null_item_id() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity = builder.transform_day(events)
 
     assert popularity["item_id"].to_list() == [10]
@@ -178,7 +171,7 @@ def test_item_popularity_builder_counts_unique_users_not_events() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity = builder.transform_day(events)
 
     assert popularity["events_count"].to_list() == [6]
@@ -202,7 +195,7 @@ def test_item_popularity_builder_returns_valid_empty_result() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity = builder.transform_day(events)
 
     validate_item_popularity(popularity)
@@ -218,31 +211,6 @@ def test_item_popularity_builder_returns_valid_empty_result() -> None:
         "to_cart_count",
         "weighted_events",
     ]
-
-
-def test_item_popularity_builder_validates_action_weights() -> None:
-    events = _clean_events(
-        [
-            {
-                "user_id": 1,
-                "event_date": date(2024, 3, 1),
-                "timestamp": datetime(2024, 3, 1, 10, 0),
-                "action_type": "view",
-                "item_id": 10,
-                "search_query": None,
-                "widget_name": "catalog",
-                "action_weight": 1.0,
-            }
-        ]
-    )
-
-    builder = ItemPopularityBuilder(
-        action_weights={"view": 1.0},
-        item_action_types=("view", "click"),
-    )
-
-    with pytest.raises(ValueError, match="Missing action weights"):
-        builder.transform_day(events)
 
 
 def test_item_popularity_builder_build_accepts_lazy_frame() -> None:
@@ -261,7 +229,7 @@ def test_item_popularity_builder_build_accepts_lazy_frame() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity = builder.build(events.lazy())
 
     validate_item_popularity(popularity)
@@ -317,7 +285,7 @@ def test_item_popularity_builder_builds_popularity_by_date() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity_by_date = builder.build_by_date(events).sort(["event_date", "item_id"])
 
     assert popularity_by_date["event_date"].to_list() == [
@@ -381,7 +349,7 @@ def test_item_popularity_builder_builds_popularity_by_action_type() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity_by_action_type = builder.build_by_action_type(events).sort(
         ["item_id", "action_type"]
     )
@@ -446,7 +414,7 @@ def test_item_popularity_builder_builds_popularity_by_widget_name() -> None:
         ]
     )
 
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
     popularity_by_widget_name = builder.build_by_widget_name(events).sort(
         ["item_id", "widget_name"]
     )
@@ -467,7 +435,7 @@ def test_item_popularity_builder_builds_popularity_by_widget_name() -> None:
 
 
 def test_item_popularity_builder_aggregate_window_is_not_implemented() -> None:
-    builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+    builder = ItemPopularityBuilder()
 
     with pytest.raises(NotImplementedError, match="unique_users cannot be summed"):
         builder.aggregate_window([])

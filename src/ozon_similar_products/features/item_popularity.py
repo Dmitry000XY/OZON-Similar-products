@@ -1,6 +1,6 @@
 """Production item popularity builder for MVP pipeline."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import polars as pl
@@ -26,7 +26,6 @@ def _as_lazy(frame: FrameLike) -> pl.LazyFrame:
 class ItemPopularityBuilder:
     """Build item popularity features from clean events."""
 
-    action_weights: Mapping[str, float]
     item_action_types: Sequence[str] = DEFAULT_ITEM_ACTION_TYPES
 
     def transform_day(self, events_clean: FrameLike) -> pl.DataFrame:
@@ -37,7 +36,6 @@ class ItemPopularityBuilder:
         counted as item popularity.
         """
         validate_clean_events(events_clean)
-        self._validate_action_weights()
 
         item_popularity = (
             _as_lazy(events_clean)
@@ -74,7 +72,6 @@ class ItemPopularityBuilder:
     def build_by_date(self, events_clean: FrameLike) -> pl.DataFrame:
         """Build item popularity diagnostics by event date."""
         validate_clean_events(events_clean)
-        self._validate_action_weights()
 
         return self._build_grouped_popularity(
             events_clean=events_clean,
@@ -87,7 +84,6 @@ class ItemPopularityBuilder:
     def build_by_action_type(self, events_clean: FrameLike) -> pl.DataFrame:
         """Build item popularity diagnostics by action type."""
         validate_clean_events(events_clean)
-        self._validate_action_weights()
 
         return self._build_grouped_popularity(
             events_clean=events_clean,
@@ -100,7 +96,6 @@ class ItemPopularityBuilder:
     def build_by_widget_name(self, events_clean: FrameLike) -> pl.DataFrame:
         """Build item popularity diagnostics by widget name."""
         validate_clean_events(events_clean)
-        self._validate_action_weights()
 
         return self._build_grouped_popularity(
             events_clean=events_clean,
@@ -162,12 +157,3 @@ class ItemPopularityBuilder:
             .sort(list(sort_columns), descending=list(descending))
             .collect()
         )
-
-    def _validate_action_weights(self) -> None:
-        """Validate that every configured item action has a weight."""
-        missing_weights = set(self.item_action_types) - set(self.action_weights.keys())
-        if missing_weights:
-            raise ValueError(
-                "Missing action weights for item popularity actions: "
-                f"{sorted(missing_weights)}"
-            )

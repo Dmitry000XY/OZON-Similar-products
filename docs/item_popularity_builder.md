@@ -70,15 +70,13 @@ DEFAULT_ITEM_ACTION_TYPES = ("view", "click", "favorite", "to_cart")
 
 ## Action weights
 
-Builder принимает словарь весов действий:
+`ItemPopularityBuilder` не назначает веса действий самостоятельно. Он ожидает, что колонка `action_weight` уже добавлена
+на этапе подготовки `events_clean`.
+
+`weighted_events` считается как сумма `action_weight`:
 
 ```python
-ACTION_WEIGHTS = {
-    "view": 1.0,
-    "click": 2.0,
-    "favorite": 2.5,
-    "to_cart": 4.0,
-}
+pl.col("action_weight").sum().alias("weighted_events")
 ```
 
 Пример создания builder-а:
@@ -86,7 +84,7 @@ ACTION_WEIGHTS = {
 ```python
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 
-builder = ItemPopularityBuilder(action_weights=ACTION_WEIGHTS)
+builder = ItemPopularityBuilder()
 ```
 
 Текущая реализация считает `weighted_events` как сумму уже подготовленной колонки `action_weight` из `events_clean`.
