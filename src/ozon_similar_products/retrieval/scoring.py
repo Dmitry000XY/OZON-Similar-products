@@ -3,12 +3,14 @@
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import polars as pl
 
 from ozon_similar_products.data import schemas
 from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.data.validation import (
+    validate_item_popularity,
     validate_pair_aggregates,
     validate_pair_scores,
 )
@@ -36,6 +38,8 @@ _COUNT_COLUMNS = {
     "to_cart": "to_cart_count",
 }
 
+_VALID_METHODS = {"pair_count", "calibrated_multichannel"}
+
 
 def _as_frame(frame: FrameLike) -> pl.DataFrame:
     """Return an eager DataFrame for scoring."""
@@ -49,33 +53,25 @@ def _empty_pair_scores() -> pl.DataFrame:
     return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
 
 
-def _infer_action_shares(pair_aggregates: pl.DataFrame) -> dict[str, float]:
-    """Infer channel shares from aggregate counts when config shares are absent."""
-    totals: dict[str, float] = {}
-    for action_type, count_column in _COUNT_COLUMNS.items():
-        totals[action_type] = float(pair_aggregates[count_column].sum() or 0.0)
-
-    total_count = sum(totals.values())
-    if total_count <= 0.0:
-        return {action_type: 0.0 for action_type in _COUNT_COLUMNS}
-    return {action_type: count / total_count for action_type, count in totals.items()}
-
-
 def _effective_weight(
     action_type: str,
     business_weights: Mapping[str, float],
-    action_shares: Mapping[str, float],
+    action_shares: Mapping[str, float] | None,
     beta: float,
     reference_action_type: str,
     max_frequency_boost: Mapping[str, float],
 ) -> float:
     """Compute calibrated channel weight with soft inverse-frequency normalization."""
     business_weight = float(business_weights.get(action_type, 0.0))
+    if business_weight <= 0.0:
+        return 0.0
+
+    if action_shares is None:
+        return business_weight
+
     action_share = float(action_shares.get(action_type, 0.0))
     reference_share = float(action_shares.get(reference_action_type, 0.0))
 
-    if business_weight <= 0.0:
-        return 0.0
     if beta <= 0.0 or action_share <= 0.0 or reference_share <= 0.0:
         return business_weight
 
@@ -107,8 +103,14 @@ class CoVisitationScorer:
     min_pair_count: int = 1
     min_unique_users: int = 1
     min_unique_sessions: int = 1
+    normalize_by_item_popularity: bool = False
+    popularity_column: str = "unique_users"
+    popularity_smoothing: float = 1.0
+    popularity_power: float = 0.5
 
     def __post_init__(self) -> None:
+        if self.method not in _VALID_METHODS:
+            raise ValueError("method must be one of: pair_count, calibrated_multichannel")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError("beta must be between 0 and 1")
         if self.min_pair_count < 1:
@@ -117,8 +119,41 @@ class CoVisitationScorer:
             raise ValueError("min_unique_users must be at least 1")
         if self.min_unique_sessions < 1:
             raise ValueError("min_unique_sessions must be at least 1")
+        if not self.popularity_column:
+            raise ValueError("popularity_column must be a non-empty string")
+        if self.popularity_smoothing < 0.0:
+            raise ValueError("popularity_smoothing must be >= 0")
+        if self.popularity_power < 0.0:
+            raise ValueError("popularity_power must be >= 0")
 
-    def score(self, pair_aggregates: FrameLike) -> pl.DataFrame:
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "CoVisitationScorer":
+        scoring = config.get("scoring", {}) if isinstance(config, Mapping) else {}
+        calibration = scoring.get("calibration", {})
+        popularity_normalization = scoring.get("popularity_normalization", {})
+        return cls(
+            method=scoring.get("method", "pair_count"),
+            business_weights=scoring.get("business_weights", DEFAULT_BUSINESS_WEIGHTS),
+            action_shares=calibration.get("action_shares_used_for_calibration"),
+            beta=float(scoring.get("beta", 0.5)),
+            reference_action_type=scoring.get("reference_action_type", "view"),
+            max_frequency_boost=scoring.get("max_frequency_boost", DEFAULT_MAX_FREQUENCY_BOOST),
+            min_pair_count=int(scoring.get("min_pair_count", 1)),
+            min_unique_users=int(scoring.get("min_unique_users", 1)),
+            min_unique_sessions=int(scoring.get("min_unique_sessions", 1)),
+            normalize_by_item_popularity=bool(
+                scoring.get("normalize_by_item_popularity", False)
+            ),
+            popularity_column=popularity_normalization.get("popularity_column", "unique_users"),
+            popularity_smoothing=float(popularity_normalization.get("smoothing", 1.0)),
+            popularity_power=float(popularity_normalization.get("power", 0.5)),
+        )
+
+    def score(
+        self,
+        pair_aggregates: FrameLike,
+        item_popularity: FrameLike | None = None,
+    ) -> pl.DataFrame:
         """Compute pair scores from pair aggregates."""
         validate_pair_aggregates(pair_aggregates)
         aggregates = _as_frame(pair_aggregates)
@@ -139,30 +174,37 @@ class CoVisitationScorer:
             validate_pair_scores(scores)
             return scores
 
-        score_expr = self._score_expression(filtered)
+        scored = filtered.with_columns(
+            self._base_score_expression().cast(pl.Float64).alias("base_score")
+        )
+        if self.normalize_by_item_popularity:
+            if item_popularity is None:
+                raise ValueError(
+                    "item_popularity must be provided when normalize_by_item_popularity=True"
+                )
+            scored = self._apply_item_popularity_normalization(scored, item_popularity)
+        else:
+            scored = scored.with_columns(pl.col("base_score").alias("score"))
+
         scores = (
-            filtered.with_columns(score_expr.cast(pl.Float64).alias("score"))
-            .select(schemas.PAIR_SCORES_COLUMNS)
+            scored.select(schemas.PAIR_SCORES_COLUMNS)
             .sort(["item_id", "score", "similar_item_id"], descending=[False, True, False])
         )
 
         validate_pair_scores(scores)
         return scores
 
-    def _score_expression(self, pair_aggregates: pl.DataFrame) -> pl.Expr:
-        """Build the Polars scoring expression for the selected method."""
+    def _base_score_expression(self) -> pl.Expr:
+        """Build the Polars base-scoring expression for the selected method."""
         if self.method == "pair_count":
             return pl.col("pair_count").cast(pl.Float64)
-        if self.method != "calibrated_multichannel":
-            raise ValueError("method must be one of: pair_count, calibrated_multichannel")
 
-        action_shares = dict(self.action_shares or _infer_action_shares(pair_aggregates))
         score_expr = pl.lit(0.0)
         for action_type, count_column in _COUNT_COLUMNS.items():
             effective_weight = _effective_weight(
                 action_type=action_type,
                 business_weights=self.business_weights,
-                action_shares=action_shares,
+                action_shares=self.action_shares,
                 beta=self.beta,
                 reference_action_type=self.reference_action_type,
                 max_frequency_boost=self.max_frequency_boost,
@@ -171,3 +213,46 @@ class CoVisitationScorer:
                 continue
             score_expr += effective_weight * (pl.col(count_column).cast(pl.Float64) + 1.0).log()
         return score_expr
+
+    def _apply_item_popularity_normalization(
+        self,
+        scored: pl.DataFrame,
+        item_popularity: FrameLike,
+    ) -> pl.DataFrame:
+        popularity_frame = _as_frame(item_popularity)
+        validate_item_popularity(popularity_frame)
+
+        if self.popularity_column not in popularity_frame.columns:
+            raise ValueError(f"popularity_column '{self.popularity_column}' is missing")
+
+        popularity_lookup = popularity_frame.select(
+            ["item_id", pl.col(self.popularity_column).cast(pl.Float64).alias("popularity")]
+        )
+
+        normalized = (
+            scored.join(
+                popularity_lookup.rename({"item_id": "item_id", "popularity": "source_popularity"}),
+                on="item_id",
+                how="left",
+            )
+            .join(
+                popularity_lookup.rename(
+                    {"item_id": "similar_item_id", "popularity": "candidate_popularity"}
+                ),
+                on="similar_item_id",
+                how="left",
+            )
+        )
+
+        missing = normalized.filter(
+            pl.col("source_popularity").is_null() | pl.col("candidate_popularity").is_null()
+        )
+        if not missing.is_empty():
+            raise ValueError("Missing item popularity for some item_id/similar_item_id pairs")
+
+        denominator = (
+            (pl.col("source_popularity") + self.popularity_smoothing)
+            * (pl.col("candidate_popularity") + self.popularity_smoothing)
+        ) ** self.popularity_power
+
+        return normalized.with_columns((pl.col("base_score") / denominator).alias("score"))
