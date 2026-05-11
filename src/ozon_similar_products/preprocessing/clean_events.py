@@ -12,10 +12,8 @@ class EventCleaner:
     def __init__(
             self,
             item_action_types: list[str],
-            action_weights: dict[str, float],
     ) -> None:
         self.item_action_types = item_action_types
-        self.action_weights = action_weights
 
     def transform_day(self, events: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
         """Clean one daily partition of raw events."""

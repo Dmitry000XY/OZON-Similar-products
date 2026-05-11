@@ -71,11 +71,11 @@ def null_profile(frame: FrameLike, columns: Iterable[str] | None = None) -> pl.D
 
 
 def action_profile(
-    frame: FrameLike,
-    action_col: str = "action_type",
-    item_id_col: str = "item_id",
-    search_query_col: str = "search_query",
-    user_id_col: str = "user_id",
+        frame: FrameLike,
+        action_col: str = "action_type",
+        item_id_col: str = "item_id",
+        search_query_col: str = "search_query",
+        user_id_col: str = "user_id",
 ) -> pl.DataFrame:
     """Aggregate action counts and key missing-value shares by action type."""
     schema = _collect_schema(frame)
@@ -142,8 +142,8 @@ def parquet_files(path: str | Path, parquet_glob: str = "**/*.parquet") -> list[
 
 
 def parquet_partition_profile(
-    path: str | Path,
-    parquet_glob: str = "**/*.parquet",
+        path: str | Path,
+        parquet_glob: str = "**/*.parquet",
 ) -> pl.DataFrame:
     """Profile parquet files using metadata and Hive partition names."""
     dataset_path = Path(path)
@@ -188,9 +188,9 @@ def parquet_num_rows(path: str | Path) -> int:
 
 
 def partition_row_counts(
-    path: str | Path,
-    partition_columns: Sequence[str] = ("date", "action_type"),
-    parquet_glob: str = "**/*.parquet",
+        path: str | Path,
+        partition_columns: Sequence[str] = ("date", "action_type"),
+        parquet_glob: str = "**/*.parquet",
 ) -> pl.DataFrame:
     """Aggregate parquet metadata row counts by selected partition columns."""
     profile = parquet_partition_profile(path, parquet_glob)
@@ -215,8 +215,8 @@ def partition_row_counts(
 
 
 def parquet_dataset_overview(
-    path: str | Path,
-    parquet_glob: str = "**/*.parquet",
+        path: str | Path,
+        parquet_glob: str = "**/*.parquet",
 ) -> pl.DataFrame:
     """Return one-row dataset size overview from parquet metadata."""
     profile = parquet_partition_profile(path, parquet_glob)

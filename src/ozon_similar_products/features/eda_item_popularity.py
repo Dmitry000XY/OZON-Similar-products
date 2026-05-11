@@ -38,14 +38,14 @@ def default_item_action_types(event_weights: Mapping[str, float]) -> tuple[str, 
 
 
 def weighted_item_popularity(
-    events: FrameLike,
-    event_weights: Mapping[str, float],
-    allowed_action_types: Sequence[str] | None = None,
-    item_id_col: str = "item_id",
-    action_col: str = "action_type",
-    user_id_col: str = "user_id",
-    timestamp_col: str = "timestamp",
-    top_n: int | None = None,
+        events: FrameLike,
+        event_weights: Mapping[str, float],
+        allowed_action_types: Sequence[str] | None = None,
+        item_id_col: str = "item_id",
+        action_col: str = "action_type",
+        user_id_col: str = "user_id",
+        timestamp_col: str = "timestamp",
+        top_n: int | None = None,
 ) -> pl.DataFrame:
     """Calculate item popularity using weighted direct item interactions."""
     schema = _collect_schema(events)

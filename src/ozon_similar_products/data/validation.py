@@ -67,6 +67,10 @@ def validate_item_popularity(frame: pl.DataFrame | pl.LazyFrame) -> None:
     validate_frame_has_columns(frame, schemas.ITEM_POPULARITY_COLUMNS)
 
 
+def validate_action_type_distribution(frame: pl.DataFrame | pl.LazyFrame) -> None:
+    validate_frame_has_columns(frame, schemas.ACTION_TYPE_DISTRIBUTION_COLUMNS)
+
+
 def validate_daily_item_pairs(frame: pl.DataFrame | pl.LazyFrame) -> None:
     validate_frame_has_columns(frame, schemas.DAILY_ITEM_PAIRS_COLUMNS)
 
