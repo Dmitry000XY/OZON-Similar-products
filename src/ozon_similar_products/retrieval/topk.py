@@ -16,9 +16,38 @@ FrameLike = pl.DataFrame | pl.LazyFrame
 
 _DIAGNOSTIC_COLUMNS = [
     "pair_count",
-    "weight_sum",
+    "view_count",
+    "click_count",
+    "favorite_count",
+    "to_cart_count",
     "unique_users",
     "unique_sessions",
+]
+
+_DEDUPLICATION_SORT_COLUMNS = [
+    "item_id",
+    "similar_item_id",
+    "score",
+    "pair_count",
+    "to_cart_count",
+    "favorite_count",
+    "click_count",
+    "view_count",
+    "unique_users",
+    "unique_sessions",
+]
+
+_DEDUPLICATION_SORT_DESCENDING = [
+    False,
+    False,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
 ]
 
 
@@ -30,6 +59,10 @@ class TopKSelector:
     recommendations table. It does not calculate scores and does not save any
     files. Its responsibility is limited to filtering, stable ordering, ranking,
     and keeping only the best candidates per item.
+
+    The selector treats ``score`` as already prepared by the scorer. Channel
+    counts such as ``view_count`` and ``to_cart_count`` are kept only as
+    diagnostics for manual review and debugging.
     """
 
     top_k: int = 20
@@ -95,16 +128,8 @@ class TopKSelector:
         """Keep one best row for each item_id/similar_item_id pair."""
         return (
             frame.sort(
-                [
-                    "item_id",
-                    "similar_item_id",
-                    "score",
-                    "pair_count",
-                    "weight_sum",
-                    "unique_users",
-                    "unique_sessions",
-                ],
-                descending=[False, False, True, True, True, True, True],
+                _DEDUPLICATION_SORT_COLUMNS,
+                descending=_DEDUPLICATION_SORT_DESCENDING,
             )
             .unique(
                 subset=["item_id", "similar_item_id"],

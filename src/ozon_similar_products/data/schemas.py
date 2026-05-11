@@ -71,7 +71,10 @@ PAIR_SCORES_COLUMNS = [
     "similar_item_id",
     "score",
     "pair_count",
-    "weight_sum",
+    "view_count",
+    "click_count",
+    "favorite_count",
+    "to_cart_count",
     "unique_users",
     "unique_sessions",
 ]
