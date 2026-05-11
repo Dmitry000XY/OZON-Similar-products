@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -23,14 +24,16 @@ from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 from ozon_similar_products.retrieval.topk import TopKSelector
 
 
-def _as_mapping(value: object) -> dict[str, object]:
+def _as_mapping(value: Any) -> dict[str, Any]:
+    """Return a mutable mapping copy or an empty mapping fallback."""
     if isinstance(value, Mapping):
         return dict(value)
     return {}
 
 
-def _as_path(value: object, default: str) -> Path:
-    if isinstance(value, (str, Path)):
+def _as_path(value: Any, default: str) -> Path:
+    """Resolve a project-relative path from config."""
+    if isinstance(value, str | Path):
         path_value = Path(value)
     else:
         path_value = Path(default)
@@ -40,15 +43,55 @@ def _as_path(value: object, default: str) -> Path:
     return (PROJECT_ROOT / path_value).resolve()
 
 
-def _as_optional_int(value: object) -> int | None:
+def _as_optional_int(value: Any) -> int | None:
+    """Parse an optional non-negative integer config value."""
     if value is None:
         return None
     if isinstance(value, bool):
         raise ValueError("Expected integer threshold or null, got bool")
-    return int(value)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = int(value)
+    else:
+        raise TypeError("Expected integer threshold or null")
+
+    if parsed < 0:
+        raise ValueError("Expected non-negative integer threshold or null")
+    return parsed
 
 
-def _item_action_types(config: Mapping[str, object]) -> list[str]:
+def _as_positive_int(value: Any, default: int, parameter_name: str) -> int:
+    """Parse a positive integer config value without silently accepting bools."""
+    if value is None:
+        parsed = default
+    elif isinstance(value, bool):
+        raise ValueError(f"{parameter_name} must be a positive integer")
+    elif isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = int(value)
+    else:
+        raise TypeError(f"{parameter_name} must be a positive integer")
+
+    if parsed <= 0:
+        raise ValueError(f"{parameter_name} must be a positive integer")
+    return parsed
+
+
+def _as_non_empty_str(value: Any, default: str, parameter_name: str) -> str:
+    """Parse a non-empty string config value."""
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TypeError(f"{parameter_name} must be a string")
+    if not value:
+        raise ValueError(f"{parameter_name} must be a non-empty string")
+    return value
+
+
+def _item_action_types(config: Mapping[str, Any]) -> list[str]:
+    """Read item action types from config."""
     events_config = _as_mapping(config.get("events", {}))
     action_types = events_config.get("item_action_types", schemas.ITEM_SIGNAL_TYPES)
 
@@ -59,7 +102,7 @@ def _item_action_types(config: Mapping[str, object]) -> list[str]:
     else:
         raise TypeError("events.item_action_types must be a sequence of action-type strings")
 
-    if not normalized:
+    if not normalized or any(not action_type for action_type in normalized):
         raise ValueError("events.item_action_types must not be empty")
     return normalized
 
@@ -72,39 +115,48 @@ def _parse_iso_date(value: str, parameter_name: str) -> date:
 
 
 def _window_bounds(train_until_date: str, lookback_days: int) -> tuple[str, str]:
-    if isinstance(lookback_days, bool):
-        raise ValueError("lookback_days must be a positive integer")
-    lookback_days = int(lookback_days)
-    if lookback_days <= 0:
-        raise ValueError("lookback_days must be a positive integer")
-
+    lookback_days = _as_positive_int(
+        value=lookback_days,
+        default=30,
+        parameter_name="lookback_days",
+    )
     window_end = _parse_iso_date(train_until_date, "train_until_date")
     window_start = window_end - timedelta(days=lookback_days - 1)
     return window_start.isoformat(), window_end.isoformat()
 
 
-def _partition_raw_events_by_date(raw_events: pl.DataFrame) -> list[tuple[str, pl.DataFrame]]:
-    if raw_events.is_empty():
+def _partition_frame_by_date_column(
+    frame: pl.DataFrame,
+    date_column: str,
+) -> list[tuple[str, pl.DataFrame]]:
+    """Split a frame into sorted partitions by a date-like column."""
+    if frame.is_empty():
         return []
 
-    partitions = raw_events.partition_by("date", as_dict=True, maintain_order=True)
+    partitions = frame.partition_by(date_column, as_dict=True, maintain_order=True)
     daily_frames: list[tuple[str, pl.DataFrame]] = []
 
-    for partition_key, frame in partitions.items():
+    for partition_key, partition_frame in partitions.items():
         if isinstance(partition_key, tuple):
             date_value = partition_key[0]
         else:
             date_value = partition_key
-        daily_frames.append((str(date_value), frame))
+        daily_frames.append((str(date_value), partition_frame))
 
     daily_frames.sort(key=lambda item: item[0])
     return daily_frames
 
 
+def _partition_raw_events_by_date(raw_events: pl.DataFrame) -> list[tuple[str, pl.DataFrame]]:
+    """Split raw events into date partitions."""
+    return _partition_frame_by_date_column(raw_events, "date")
+
+
 def _concat_daily_frames(
     daily_frames: list[tuple[str, pl.DataFrame]],
-    contract_columns: list[str],
+    contract_columns: Sequence[str],
 ) -> pl.DataFrame:
+    """Concatenate daily frames or return an empty contract frame."""
     if not daily_frames:
         return empty_contract_frame(contract_columns)
     return pl.concat([frame for _, frame in daily_frames], how="vertical")
@@ -181,8 +233,8 @@ def run_mvp_pipeline(
     Pipeline stages:
     1. load daily raw events;
     2. clean events by day;
-    3. build sessions by day;
-    4. build daily item pairs;
+    3. build sessions over the whole window;
+    4. build item pairs;
     5. aggregate pairs over window;
     6. score pairs;
     7. select top-K;
@@ -217,18 +269,17 @@ def run_mvp_pipeline(
         (partition_date, cleaner.transform_day(events))
         for partition_date, events in daily_raw_events
     ]
+    events_clean_window = _concat_daily_frames(daily_clean_events, schemas.CLEAN_EVENTS_COLUMNS)
 
     session_builder = SessionBuilder.from_config(config)
-    daily_sessions = [
-        (partition_date, session_builder.transform_day(events_clean))
-        for partition_date, events_clean in daily_clean_events
-    ]
+    sessions_window = session_builder.transform_window(
+        [events_clean for _, events_clean in daily_clean_events]
+    )
+    daily_sessions = _partition_frame_by_date_column(sessions_window, "event_date")
 
     pair_builder = ItemPairBuilder.from_config(config)
-    daily_pairs = [
-        (partition_date, pair_builder.transform_day(sessions))
-        for partition_date, sessions in daily_sessions
-    ]
+    pairs_window = pair_builder.transform_day(sessions_window)
+    daily_pairs = _partition_frame_by_date_column(pairs_window, "pair_date")
 
     pair_aggregates = PairAggregator().aggregate_window(
         daily_pairs=[pairs for _, pairs in daily_pairs],
@@ -236,7 +287,6 @@ def run_mvp_pipeline(
         window_end=window_end,
     )
 
-    events_clean_window = _concat_daily_frames(daily_clean_events, schemas.CLEAN_EVENTS_COLUMNS)
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
     item_popularity = popularity_builder.build_item_popularity(events_clean_window)
     action_distribution = popularity_builder.build_action_type_calibration_stats(
@@ -256,10 +306,18 @@ def run_mvp_pipeline(
     else:
         pair_scores = scorer.score(pair_aggregates)
 
-    top_k = int(topk_config.get("top_k", pipeline_config.get("top_k", 20)))
+    top_k = _as_positive_int(
+        value=topk_config.get("top_k", pipeline_config.get("top_k")),
+        default=20,
+        parameter_name="topk.top_k",
+    )
     selector = TopKSelector(
         top_k=top_k,
-        source=str(topk_config.get("source", "behavioral")),
+        source=_as_non_empty_str(
+            value=topk_config.get("source"),
+            default="behavioral",
+            parameter_name="topk.source",
+        ),
         min_pair_count=_as_optional_int(topk_config.get("min_pair_count")),
         min_unique_users=_as_optional_int(topk_config.get("min_unique_users")),
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
@@ -273,27 +331,27 @@ def run_mvp_pipeline(
     item_popularity_dir = artifacts_config.get("item_popularity_dir")
     action_type_distribution_dir = artifacts_config.get("action_type_distribution_dir")
 
-    if isinstance(events_clean_dir, (str, Path)):
+    if isinstance(events_clean_dir, str | Path):
         _write_daily_partitions(daily_clean_events, _as_path(events_clean_dir, "data/processed/events_clean"))
-    if isinstance(sessions_dir, (str, Path)):
+    if isinstance(sessions_dir, str | Path):
         _write_daily_partitions(daily_sessions, _as_path(sessions_dir, "data/processed/sessions"))
-    if isinstance(daily_pairs_dir, (str, Path)):
+    if isinstance(daily_pairs_dir, str | Path):
         _write_daily_partitions(daily_pairs, _as_path(daily_pairs_dir, "data/processed/item_pairs"))
-    if isinstance(pair_aggregates_dir, (str, Path)):
+    if isinstance(pair_aggregates_dir, str | Path):
         _write_window_artifact(
             frame=pair_aggregates,
             output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
             window_start=window_start,
             window_end=window_end,
         )
-    if isinstance(item_popularity_dir, (str, Path)):
+    if isinstance(item_popularity_dir, str | Path):
         _write_window_artifact(
             frame=item_popularity,
             output_dir=_as_path(item_popularity_dir, "data/processed/item_popularity"),
             window_start=window_start,
             window_end=window_end,
         )
-    if isinstance(action_type_distribution_dir, (str, Path)):
+    if isinstance(action_type_distribution_dir, str | Path):
         _write_window_artifact(
             frame=action_distribution,
             output_dir=_as_path(
@@ -344,6 +402,9 @@ def run_mvp_pipeline(
         },
         "rows": {
             "raw_events": raw_events.height,
+            "clean_events": events_clean_window.height,
+            "sessions": sessions_window.height,
+            "daily_pairs": pairs_window.height,
             "pair_aggregates": pair_aggregates.height,
             "pair_scores": pair_scores.height,
             "recommendations": recommendations.height,
