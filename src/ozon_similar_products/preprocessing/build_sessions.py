@@ -75,10 +75,17 @@ class SessionBuilder:
                 .alias("session_index")
             )
             .with_columns(
+                # Use first event_date in session for session_id to handle cross-day sessions
+                pl.col("event_date")
+                .first()
+                .over(["user_id", "session_index"])
+                .alias("session_start_date")
+            )
+            .with_columns(
                 (
                     pl.col("user_id").cast(pl.String)
                     + "_"
-                    + pl.col("event_date").cast(pl.String)
+                    + pl.col("session_start_date").cast(pl.String)
                     + "_"
                     + pl.col("session_index").cast(pl.String)
                 ).alias("session_id")
@@ -94,16 +101,18 @@ class SessionBuilder:
         return sessions
 
     def transform_window(self, daily_clean_events: list[FrameLike]) -> pl.DataFrame:
-        """Build sessions for multiple daily clean-events partitions."""
+        """Build sessions for multiple daily clean-events partitions.
+        
+        Note: This method concatenates all days before processing to correctly
+        handle sessions that span across day boundaries (e.g., events at 23:55
+        and 00:05 should be in the same session if within timeout).
+        """
         if not daily_clean_events:
             return empty_contract_frame(schemas.SESSIONS_COLUMNS)
 
-        sessions = pl.concat(
-            [self.transform_day(events) for events in daily_clean_events],
-            how="vertical",
-        )
-        validate_sessions(sessions)
-        return sessions
+        # Concatenate all days first to handle cross-day sessions correctly
+        all_events = pl.concat(daily_clean_events, how="vertical")
+        return self.transform_day(all_events)
 
 
 def _as_lazy(frame: FrameLike) -> pl.LazyFrame:

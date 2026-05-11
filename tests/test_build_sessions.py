@@ -149,3 +149,47 @@ def test_session_builder_can_be_created_from_config() -> None:
 def test_session_builder_rejects_invalid_timeout() -> None:
     with pytest.raises(ValueError, match="timeout_minutes"):
         SessionBuilder(timeout_minutes=0)
+
+
+def test_session_builder_continues_session_across_day_boundary() -> None:
+    """Session should continue across midnight if within timeout."""
+    day_one = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 1, 23, 50), 10),
+            _event(1, datetime(2024, 3, 1, 23, 55), 11),
+        ]
+    )
+    day_two = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 2, 0, 5), 12),  # 10 minutes after last event
+        ]
+    )
+
+    sessions = SessionBuilder(timeout_minutes=30).transform_window([day_one, day_two])
+
+    validate_sessions(sessions)
+    # All events should be in the same session
+    assert sessions.height == 3
+    assert sessions["session_id"].n_unique() == 1
+    assert sessions["item_id"].to_list() == [10, 11, 12]
+
+
+def test_session_builder_splits_session_at_day_boundary_if_timeout_exceeded() -> None:
+    """Session should split at midnight if timeout is exceeded."""
+    day_one = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 1, 23, 50), 10),
+        ]
+    )
+    day_two = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 2, 0, 25), 11),  # 35 minutes later (> 30 min timeout)
+        ]
+    )
+
+    sessions = SessionBuilder(timeout_minutes=30).transform_window([day_one, day_two])
+
+    validate_sessions(sessions)
+    # Events should be in different sessions
+    assert sessions.height == 2
+    assert sessions["session_id"].n_unique() == 2
