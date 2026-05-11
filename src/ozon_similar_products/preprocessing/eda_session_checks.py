@@ -53,16 +53,10 @@ def add_session_markers(
         .filter(pl.all_horizontal([pl.col(column).is_not_null() for column in sort_columns]))
         .sort(sort_columns)
         .with_columns(
-            pl.col(timestamp_col)
-            .diff()
-            .over(group_columns)
-            .dt.total_seconds()
-            .alias(time_diff_col)
+            pl.col(timestamp_col).diff().over(group_columns).dt.total_seconds().alias(time_diff_col)
         )
         .with_columns(
-            (
-                pl.col(time_diff_col).is_null() | (pl.col(time_diff_col) > timeout_seconds)
-            )
+            (pl.col(time_diff_col).is_null() | (pl.col(time_diff_col) > timeout_seconds))
             .cast(pl.Int64)
             .alias(new_session_col)
         )

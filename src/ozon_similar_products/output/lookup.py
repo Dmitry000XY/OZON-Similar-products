@@ -10,9 +10,9 @@ class SimilarItemsLookup:
         self.recommendations_path = Path(recommendations_path)
 
     def get_similar_items(
-            self,
-            item_id: int | str,
-            top_k: int = 10,
+        self,
+        item_id: int | str,
+        top_k: int = 10,
     ) -> list[int | str]:
         """Return top-K similar items for item_id."""
         raise NotImplementedError

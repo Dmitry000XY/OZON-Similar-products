@@ -106,8 +106,8 @@ class ItemPopularityBuilder:
         )
 
     def aggregate_window(
-            self,
-            daily_popularity: list[FrameLike],
+        self,
+        daily_popularity: list[FrameLike],
     ) -> pl.DataFrame:
         """Aggregate daily item popularity tables over a rolling window.
 
@@ -124,12 +124,12 @@ class ItemPopularityBuilder:
         )
 
     def _build_grouped_popularity(
-            self,
-            events_clean: FrameLike,
-            group_columns: Sequence[str],
-            sort_columns: Sequence[str],
-            descending: Sequence[bool],
-            include_action_counts: bool,
+        self,
+        events_clean: FrameLike,
+        group_columns: Sequence[str],
+        sort_columns: Sequence[str],
+        descending: Sequence[bool],
+        include_action_counts: bool,
     ) -> pl.DataFrame:
         """Build grouped item popularity diagnostics."""
         aggregations: list[pl.Expr] = [

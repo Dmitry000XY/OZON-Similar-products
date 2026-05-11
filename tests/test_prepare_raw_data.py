@@ -49,11 +49,11 @@ def write_product_parquet(path: Path, item_ids: list[int]) -> None:
 
 
 def create_product_archive(
-        archive_path: Path,
-        source_root: Path,
-        parquet_name: str = "products.parquet",
-        item_ids: list[int] | None = None,
-        include_success_file: bool = False,
+    archive_path: Path,
+    source_root: Path,
+    parquet_name: str = "products.parquet",
+    item_ids: list[int] | None = None,
+    include_success_file: bool = False,
 ) -> None:
     """Create a small product_information tar.gz archive."""
     item_ids = item_ids or [1, 2]
@@ -163,7 +163,7 @@ def test_safe_extract_tar_gz_rebuilds_incomplete_target(tmp_path: Path) -> None:
 
 
 def test_safe_extract_tar_gz_skips_prepared_target_without_force(
-        tmp_path: Path,
+    tmp_path: Path,
 ) -> None:
     """Prepared datasets should be skipped unless force=True is passed."""
     archive_path = tmp_path / "product_information.tar.gz"
@@ -189,7 +189,7 @@ def test_safe_extract_tar_gz_skips_prepared_target_without_force(
 
 
 def test_safe_extract_tar_gz_rebuilds_prepared_target_with_force(
-        tmp_path: Path,
+    tmp_path: Path,
 ) -> None:
     """force=True should remove prepared data and extract the archive again."""
     archive_path = tmp_path / "product_information.tar.gz"

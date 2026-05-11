@@ -22,9 +22,7 @@ def build_specs() -> list[ArchiveSpec]:
 
     raw_dir = project_path(paths_config["data"]["raw_dir"])
     archives_dir = project_path(paths_config["data"]["raw_archives_dir"])
-    product_information_dir = project_path(
-        paths_config["data"]["product_information_dir"]
-    )
+    product_information_dir = project_path(paths_config["data"]["product_information_dir"])
     user_actions_dir = project_path(paths_config["data"]["user_actions_dir"])
 
     product_cfg = data_config["product_information"]
@@ -58,9 +56,7 @@ def parse_args() -> argparse.Namespace:
     Returns:
         Parsed CLI arguments.
     """
-    parser = argparse.ArgumentParser(
-        description="Prepare raw parquet data from .tar.gz archives."
-    )
+    parser = argparse.ArgumentParser(description="Prepare raw parquet data from .tar.gz archives.")
     parser.add_argument(
         "--force",
         action="store_true",

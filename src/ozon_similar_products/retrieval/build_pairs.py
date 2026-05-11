@@ -8,7 +8,9 @@ from ozon_similar_products.data.validation import validate_sessions
 class ItemPairBuilder:
     """Build directed item-item pairs from sessions."""
 
-    def __init__(self, max_items_per_session: int = 50) -> None:  # TODO max_items_per_session use from config
+    def __init__(
+        self, max_items_per_session: int = 50
+    ) -> None:  # TODO max_items_per_session use from config
         self.max_items_per_session = max_items_per_session
 
     def transform_day(self, sessions: pl.DataFrame | pl.LazyFrame) -> pl.DataFrame:
