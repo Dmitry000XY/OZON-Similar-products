@@ -28,14 +28,14 @@ def _normalize_group_cols(group_cols: Sequence[str] | str | None, user_id_col: s
 
 
 def add_session_markers(
-    events: FrameLike,
-    timeout_minutes: int = 30,
-    user_id_col: str = "user_id",
-    timestamp_col: str = "timestamp",
-    group_cols: Sequence[str] | str | None = None,
-    time_diff_col: str = "time_diff_seconds",
-    new_session_col: str = "is_new_session",
-    session_index_col: str = "session_index",
+        events: FrameLike,
+        timeout_minutes: int = 30,
+        user_id_col: str = "user_id",
+        timestamp_col: str = "timestamp",
+        group_cols: Sequence[str] | str | None = None,
+        time_diff_col: str = "time_diff_seconds",
+        new_session_col: str = "is_new_session",
+        session_index_col: str = "session_index",
 ) -> pl.LazyFrame:
     """Sort events and add time-diff and session-start markers."""
     schema = _collect_schema(events)
@@ -61,7 +61,7 @@ def add_session_markers(
         )
         .with_columns(
             (
-                pl.col(time_diff_col).is_null() | (pl.col(time_diff_col) > timeout_seconds)
+                    pl.col(time_diff_col).is_null() | (pl.col(time_diff_col) > timeout_seconds)
             )
             .cast(pl.Int64)
             .alias(new_session_col)
@@ -73,10 +73,10 @@ def add_session_markers(
 
 
 def _summary_exprs(
-    timeout_minutes: int,
-    time_diff_col: str,
-    new_session_col: str,
-    quantiles: Sequence[float],
+        timeout_minutes: int,
+        time_diff_col: str,
+        new_session_col: str,
+        quantiles: Sequence[float],
 ) -> list[pl.Expr]:
     timeout_seconds = timeout_minutes * 60
     expressions: list[pl.Expr] = [
@@ -95,12 +95,12 @@ def _summary_exprs(
 
 
 def time_diff_summary(
-    events: FrameLike,
-    timeout_minutes: int = 30,
-    user_id_col: str = "user_id",
-    timestamp_col: str = "timestamp",
-    group_cols: Sequence[str] | str | None = None,
-    quantiles: Sequence[float] = (0.5, 0.75, 0.9, 0.95, 0.99),
+        events: FrameLike,
+        timeout_minutes: int = 30,
+        user_id_col: str = "user_id",
+        timestamp_col: str = "timestamp",
+        group_cols: Sequence[str] | str | None = None,
+        quantiles: Sequence[float] = (0.5, 0.75, 0.9, 0.95, 0.99),
 ) -> pl.DataFrame:
     """Return global time-gap summary after sorting events within each group."""
     markers = add_session_markers(
@@ -121,13 +121,13 @@ def time_diff_summary(
 
 
 def time_diff_summary_by_partition(
-    events: FrameLike,
-    partition_col: str,
-    timeout_minutes: int = 30,
-    user_id_col: str = "user_id",
-    timestamp_col: str = "timestamp",
-    group_cols: Sequence[str] | str | None = None,
-    quantiles: Sequence[float] = (0.5, 0.75, 0.9, 0.95, 0.99),
+        events: FrameLike,
+        partition_col: str,
+        timeout_minutes: int = 30,
+        user_id_col: str = "user_id",
+        timestamp_col: str = "timestamp",
+        group_cols: Sequence[str] | str | None = None,
+        quantiles: Sequence[float] = (0.5, 0.75, 0.9, 0.95, 0.99),
 ) -> pl.DataFrame:
     """Return time-gap summary grouped by a partition column, usually date."""
     marker_group_cols = (

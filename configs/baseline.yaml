@@ -12,18 +12,44 @@ events:
     - to_cart
   search_action_type: search
 
+# ItemPairBuilder does not apply weights. The priority only decides which
+# action_type is the strongest item-level signal inside one session.
+item_pair_builder:
+  signal_priority:
+    view: 1
+    click: 2
+    favorite: 3
+    to_cart: 4
+
+# Final calibrated recommendation scoring is done only in CoVisitationScorer.
+# Earlier layers preserve action_type and channel counts, but do not assign weights.
 scoring:
-  method: pair_count
-  action_weights:
+  method: calibrated_multichannel
+  business_weights:
     view: 1.0
-    click: 2.0
-    favorite: 2.5
-    to_cart: 4.0
+    click: 3.0
+    favorite: 6.0
+    to_cart: 8.0
+  beta: 0.5
+  reference_action_type: view
+  max_frequency_boost:
+    view: 1.0
+    click: 10.0
+    favorite: 15.0
+    to_cart: 30.0
+  min_pair_count: 1
+  min_unique_users: 1
+  min_unique_sessions: 1
+  calibration:
+    action_shares_used_for_calibration: null
+    calibration_start: null
+    calibration_end: null
 
 artifacts:
   events_clean_dir: data/processed/events_clean
   sessions_dir: data/processed/sessions
   item_popularity_dir: data/processed/item_popularity
+  action_type_distribution_dir: data/processed/action_type_distribution
   daily_pairs_dir: data/processed/item_pairs
   pair_aggregates_dir: data/processed/pair_aggregates
 
