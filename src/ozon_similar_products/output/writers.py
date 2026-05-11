@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-from collections.abc import Mapping, Sequence
-from datetime import date, datetime
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,21 +14,17 @@ from ozon_similar_products.data.validation import (
     validate_recommendations,
     validate_widget_output,
 )
+from ozon_similar_products.output.manifest import (
+    DEFAULT_MANIFEST_FILENAME,
+    json_ready,
+    load_manifest,
+    rebase_manifest_paths,
+)
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
 DEFAULT_DETAILED_FILENAME = "recommendations.parquet"
 DEFAULT_WIDGET_FILENAME = "similar_items.parquet"
-DEFAULT_MANIFEST_FILENAME = "manifest.json"
-
-_MANIFEST_PATH_KEYS = {
-    "detailed_recommendations_path",
-    "widget_recommendations_path",
-    "compact_recommendations_path",
-    "similar_items_path",
-    "widget_path",
-    "recommendations_path",
-}
 
 
 class RecommendationWriter:
@@ -140,7 +134,7 @@ class RecommendationWriter:
             output_path=output_path,
             default_filename=DEFAULT_MANIFEST_FILENAME,
         )
-        json_ready_manifest = _json_ready(dict(manifest))
+        json_ready_manifest = json_ready(dict(manifest))
 
         resolved_path.write_text(
             json.dumps(json_ready_manifest, ensure_ascii=False, indent=2, sort_keys=True),
@@ -167,14 +161,13 @@ class RecommendationWriter:
             Path to ``latest/manifest.json``.
         """
         source_manifest_path = Path(run_manifest_path)
-        manifest = _load_manifest(source_manifest_path)
         latest_path = _resolve_output_path(
             output_path=latest_dir,
             default_filename=DEFAULT_MANIFEST_FILENAME,
         )
 
-        rebased_manifest = _rebase_manifest_paths(
-            manifest=manifest,
+        rebased_manifest = rebase_manifest_paths(
+            manifest=load_manifest(source_manifest_path),
             source_base=source_manifest_path.parent,
             target_base=latest_path.parent,
         )
@@ -213,79 +206,3 @@ def _resolve_output_path(
 
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     return resolved_path
-
-
-def _load_manifest(manifest_path: Path) -> dict[str, Any]:
-    """Load a manifest JSON file as a dictionary."""
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(manifest, dict):
-        raise TypeError("manifest JSON must contain an object")
-    return manifest
-
-
-def _json_ready(value: Any) -> Any:
-    """Convert common Python objects to JSON-compatible values."""
-    if isinstance(value, Path):
-        return value.as_posix()
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _rebase_manifest_paths(
-    manifest: dict[str, Any],
-    source_base: Path,
-    target_base: Path,
-) -> dict[str, Any]:
-    """Rebase known path values from one manifest location to another."""
-    return {
-        key: _rebase_value(value, key=key, source_base=source_base, target_base=target_base)
-        for key, value in manifest.items()
-    }
-
-
-def _rebase_value(
-    value: Any,
-    key: str,
-    source_base: Path,
-    target_base: Path,
-) -> Any:
-    """Recursively rebase known manifest path fields."""
-    if isinstance(value, Mapping):
-        return {
-            str(child_key): _rebase_value(
-                child_value,
-                key=str(child_key),
-                source_base=source_base,
-                target_base=target_base,
-            )
-            for child_key, child_value in value.items()
-        }
-
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return [
-            _rebase_value(
-                item,
-                key=key,
-                source_base=source_base,
-                target_base=target_base,
-            )
-            for item in value
-        ]
-
-    if isinstance(value, str) and key in _MANIFEST_PATH_KEYS:
-        return _rebase_path_string(value, source_base=source_base, target_base=target_base)
-
-    return _json_ready(value)
-
-
-def _rebase_path_string(path_value: str, source_base: Path, target_base: Path) -> str:
-    """Return a path string that is valid relative to the target directory."""
-    source_path = Path(path_value)
-    absolute_path = source_path if source_path.is_absolute() else source_base / source_path
-    relative_path = os.path.relpath(absolute_path.resolve(), start=target_base.resolve())
-    return Path(relative_path).as_posix()
