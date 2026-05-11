@@ -24,7 +24,12 @@ def _clean_events(rows: list[dict]) -> pl.DataFrame:
     )
 
 
-def _event(user_id: int | None, timestamp: datetime | None, item_id: int | None, action_type: str = "view") -> dict:
+def _event(
+    user_id: int | None,
+    timestamp: datetime | None,
+    item_id: int | None,
+    action_type: str = "view",
+) -> dict:
     return {
         "user_id": user_id,
         "event_date": timestamp.date() if timestamp is not None else None,
@@ -37,12 +42,14 @@ def _event(user_id: int | None, timestamp: datetime | None, item_id: int | None,
 
 
 def test_session_builder_splits_user_timeline_by_timeout() -> None:
-    events = _clean_events([
-        _event(1, datetime(2024, 3, 1, 0, 10), 11, "click"),
-        _event(1, datetime(2024, 3, 1, 0, 0), 10, "view"),
-        _event(1, datetime(2024, 3, 1, 0, 45), 12, "to_cart"),
-        _event(2, datetime(2024, 3, 1, 0, 5), 20, "favorite"),
-    ])
+    events = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 1, 0, 10), 11, "click"),
+            _event(1, datetime(2024, 3, 1, 0, 0), 10, "view"),
+            _event(1, datetime(2024, 3, 1, 0, 45), 12, "to_cart"),
+            _event(2, datetime(2024, 3, 1, 0, 5), 20, "favorite"),
+        ]
+    )
 
     sessions = SessionBuilder(timeout_minutes=30).transform_day(events)
 
@@ -55,25 +62,36 @@ def test_session_builder_splits_user_timeline_by_timeout() -> None:
 
 
 def test_session_builder_preserves_action_type_without_action_weight() -> None:
-    events = _clean_events([
-        _event(1, datetime(2024, 3, 1, 0, 0), 10, "view"),
-        _event(1, datetime(2024, 3, 1, 0, 5), 11, "to_cart"),
-    ])
+    events = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 1, 0, 0), 10, "view"),
+            _event(1, datetime(2024, 3, 1, 0, 5), 11, "to_cart"),
+        ]
+    )
 
     sessions = SessionBuilder().transform_day(events)
 
-    assert sessions.columns == ["user_id", "session_id", "event_date", "timestamp", "action_type", "item_id"]
+    assert sessions.columns == [
+        "user_id",
+        "session_id",
+        "event_date",
+        "timestamp",
+        "action_type",
+        "item_id",
+    ]
     assert "action_weight" not in sessions.columns
     assert sessions["action_type"].to_list() == ["view", "to_cart"]
 
 
 def test_session_builder_drops_rows_without_item_or_time_context() -> None:
-    events = _clean_events([
-        _event(1, datetime(2024, 3, 1, 0, 0), 10),
-        _event(1, datetime(2024, 3, 1, 0, 1), None),
-        _event(None, datetime(2024, 3, 1, 0, 2), 12),
-        _event(1, None, 13),
-    ])
+    events = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 1, 0, 0), 10),
+            _event(1, datetime(2024, 3, 1, 0, 1), None),
+            _event(None, datetime(2024, 3, 1, 0, 2), 12),
+            _event(1, None, 13),
+        ]
+    )
 
     sessions = SessionBuilder().transform_day(events)
 
@@ -81,10 +99,12 @@ def test_session_builder_drops_rows_without_item_or_time_context() -> None:
 
 
 def test_session_builder_accepts_lazy_frame() -> None:
-    events = _clean_events([
-        _event(1, datetime(2024, 3, 1, 0, 0), 10),
-        _event(1, datetime(2024, 3, 1, 0, 5), 11),
-    ])
+    events = _clean_events(
+        [
+            _event(1, datetime(2024, 3, 1, 0, 0), 10),
+            _event(1, datetime(2024, 3, 1, 0, 5), 11),
+        ]
+    )
 
     sessions = SessionBuilder().transform_day(events.lazy())
 
@@ -97,7 +117,14 @@ def test_session_builder_handles_empty_input() -> None:
 
     validate_sessions(sessions)
     assert sessions.is_empty()
-    assert sessions.columns == ["user_id", "session_id", "event_date", "timestamp", "action_type", "item_id"]
+    assert sessions.columns == [
+        "user_id",
+        "session_id",
+        "event_date",
+        "timestamp",
+        "action_type",
+        "item_id",
+    ]
 
 
 def test_session_builder_transform_window_concatenates_daily_sessions() -> None:
@@ -108,7 +135,10 @@ def test_session_builder_transform_window_concatenates_daily_sessions() -> None:
 
     validate_sessions(sessions)
     assert sessions.height == 2
-    assert sessions["event_date"].cast(pl.String).to_list() == ["2024-03-01", "2024-03-02"]
+    assert sessions["event_date"].cast(pl.String).to_list() == [
+        "2024-03-01",
+        "2024-03-02",
+    ]
 
 
 def test_session_builder_can_be_created_from_config() -> None:
