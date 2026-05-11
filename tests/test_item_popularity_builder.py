@@ -230,3 +230,157 @@ def test_item_popularity_builder_builds_popularity_by_widget_name() -> None:
     assert popularity_by_widget_name["views_count"].to_list() == [1, 0]
     assert popularity_by_widget_name["clicks_count"].to_list() == [1, 0]
     assert popularity_by_widget_name["favorites_count"].to_list() == [0, 1]
+
+
+def test_item_popularity_builder_builds_popularity_by_action_type() -> None:
+    events = _clean_events(
+        [
+            {
+                "user_id": 1,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "catalog",
+            },
+            {
+                "user_id": 2,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 1),
+                "action_type": "view",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "catalog",
+            },
+            {
+                "user_id": 2,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 2),
+                "action_type": "click",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "catalog",
+            },
+            {
+                "user_id": 3,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 3),
+                "action_type": "search",
+                "item_id": 10,
+                "search_query": "phone",
+                "widget_name": "search_bar",
+            },
+        ]
+    )
+
+    popularity_by_action_type = (
+        ItemPopularityBuilder()
+        .build_item_popularity_by_action_type(events)
+        .sort(["item_id", "action_type"])
+    )
+
+    assert popularity_by_action_type.columns == [
+        "item_id",
+        "action_type",
+        "events_count",
+        "unique_users",
+    ]
+    assert popularity_by_action_type["item_id"].to_list() == [10, 10]
+    assert popularity_by_action_type["action_type"].to_list() == ["click", "view"]
+    assert popularity_by_action_type["events_count"].to_list() == [1, 2]
+    assert popularity_by_action_type["unique_users"].to_list() == [1, 2]
+
+
+def test_item_popularity_builder_builds_popularity_by_date() -> None:
+    events = _clean_events(
+        [
+            {
+                "user_id": 1,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "catalog",
+            },
+            {
+                "user_id": 2,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 1),
+                "action_type": "click",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "catalog",
+            },
+            {
+                "user_id": 1,
+                "event_date": date(2024, 3, 2),
+                "timestamp": datetime(2024, 3, 2, 10, 0),
+                "action_type": "to_cart",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "product_card",
+            },
+            {
+                "user_id": 3,
+                "event_date": date(2024, 3, 2),
+                "timestamp": datetime(2024, 3, 2, 10, 1),
+                "action_type": "view",
+                "item_id": 20,
+                "search_query": None,
+                "widget_name": "catalog",
+            },
+        ]
+    )
+
+    popularity_by_date = ItemPopularityBuilder().build_item_popularity_by_date(events).sort(
+        ["event_date", "item_id"]
+    )
+
+    assert popularity_by_date.columns == [
+        "event_date",
+        "item_id",
+        "events_count",
+        "unique_users",
+        "views_count",
+        "clicks_count",
+        "favorites_count",
+        "to_cart_count",
+    ]
+    assert popularity_by_date["event_date"].to_list() == [
+        date(2024, 3, 1),
+        date(2024, 3, 2),
+        date(2024, 3, 2),
+    ]
+    assert popularity_by_date["item_id"].to_list() == [10, 10, 20]
+    assert popularity_by_date["events_count"].to_list() == [2, 1, 1]
+    assert popularity_by_date["unique_users"].to_list() == [2, 1, 1]
+    assert popularity_by_date["views_count"].to_list() == [1, 0, 1]
+    assert popularity_by_date["clicks_count"].to_list() == [1, 0, 0]
+    assert popularity_by_date["favorites_count"].to_list() == [0, 0, 0]
+    assert popularity_by_date["to_cart_count"].to_list() == [0, 1, 0]
+
+
+def test_item_popularity_builder_accepts_lazy_frame() -> None:
+    events = _clean_events(
+        [
+            {
+                "user_id": 1,
+                "event_date": date(2024, 3, 1),
+                "timestamp": datetime(2024, 3, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+                "search_query": None,
+                "widget_name": "catalog",
+            }
+        ]
+    )
+
+    popularity = ItemPopularityBuilder().build_item_popularity(events.lazy())
+
+    validate_item_popularity(popularity)
+    assert popularity["item_id"].to_list() == [10]
+    assert popularity["events_count"].to_list() == [1]
+    assert popularity["unique_users"].to_list() == [1]
+    assert popularity["views_count"].to_list() == [1]
