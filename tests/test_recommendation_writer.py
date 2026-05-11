@@ -10,7 +10,7 @@ from ozon_similar_products.output.writers import RecommendationWriter
 
 
 def _recommendations() -> pl.DataFrame:
-    """Build a small recommendations table with diagnostic columns."""
+    """Build a small recommendations table with channel diagnostic columns."""
     return pl.DataFrame(
         {
             "item_id": [1, 1, 2],
@@ -19,7 +19,10 @@ def _recommendations() -> pl.DataFrame:
             "rank": [1, 2, 1],
             "source": ["behavioral", "behavioral", "behavioral"],
             "pair_count": [100, 80, 50],
-            "weight_sum": [120.0, 90.0, 60.0],
+            "view_count": [40, 30, 20],
+            "click_count": [30, 25, 15],
+            "favorite_count": [20, 15, 10],
+            "to_cart_count": [10, 10, 5],
             "unique_users": [40, 30, 20],
             "unique_sessions": [50, 35, 25],
         }
@@ -86,8 +89,8 @@ def test_save_detailed_accepts_lazy_frame(tmp_path: Path) -> None:
     assert saved.to_dicts() == recommendations.to_dicts()
 
 
-def test_save_detailed_preserves_diagnostic_columns(tmp_path: Path) -> None:
-    """Extra diagnostic columns should remain in the saved detailed output."""
+def test_save_detailed_preserves_channel_diagnostic_columns(tmp_path: Path) -> None:
+    """Extra channel diagnostic columns should remain in detailed output."""
     recommendations = _recommendations()
     output_path = tmp_path / "recommendations.parquet"
 
@@ -96,9 +99,13 @@ def test_save_detailed_preserves_diagnostic_columns(tmp_path: Path) -> None:
     saved = pl.read_parquet(output_path)
 
     assert "pair_count" in saved.columns
-    assert "weight_sum" in saved.columns
+    assert "view_count" in saved.columns
+    assert "click_count" in saved.columns
+    assert "favorite_count" in saved.columns
+    assert "to_cart_count" in saved.columns
     assert "unique_users" in saved.columns
     assert "unique_sessions" in saved.columns
+    assert "weight_sum" not in saved.columns
 
 
 @pytest.mark.parametrize(
