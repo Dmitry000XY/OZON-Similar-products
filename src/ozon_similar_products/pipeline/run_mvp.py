@@ -311,11 +311,11 @@ def run_mvp_pipeline(
                 f"allow_empty_input={allow_empty_input}. "
                 f"Original error: {error}"
             ) from error
-            raw_events = empty_contract_frame(schemas.RAW_EVENTS_COLUMNS)
-            logger.warning(
-                "[run_mvp_pipeline] missing raw events; continuing with empty input allow_empty_input=%s",
-                allow_empty_input,
-            )
+        raw_events = empty_contract_frame(schemas.RAW_EVENTS_COLUMNS)
+        logger.warning(
+            "[run_mvp_pipeline] missing raw events; continuing with empty input allow_empty_input=%s",
+            allow_empty_input,
+        )
     if raw_events.is_empty():
         logger.warning(
             "[run_mvp_pipeline] raw events empty for window=%s..%s",
