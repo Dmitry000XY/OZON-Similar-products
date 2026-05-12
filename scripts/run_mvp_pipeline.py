@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 from ozon_similar_products.pipeline.run_mvp import run_mvp_pipeline
@@ -31,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main() -> int:
     """Run the MVP pipeline from CLI arguments."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -44,14 +45,24 @@ def main() -> None:
         args.config_path,
     )
 
-    run_mvp_pipeline(
-        train_until_date=args.train_until_date,
-        lookback_days=args.lookback_days,
-        config_path=args.config_path,
-    )
+    try:
+        run_mvp_pipeline(
+            train_until_date=args.train_until_date,
+            lookback_days=args.lookback_days,
+            config_path=args.config_path,
+        )
+    except Exception:
+        logger.exception(
+            "[run_mvp_pipeline] failed train_until_date=%s lookback_days=%s config=%s",
+            args.train_until_date,
+            args.lookback_days,
+            args.config_path,
+        )
+        return 1
 
     logger.info("[run_mvp_pipeline] done")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -79,6 +79,31 @@ def _as_int(value: Any, default: int) -> int:
     return default
 
 
+def _as_strict_bool(value: Any, default: bool, allow_int: bool = True) -> bool:
+    """Return strict bool from bool/string (and optional int), or raise ValueError."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        raise ValueError(
+            f"Expected boolean value for normalize_by_item_popularity, got {value!r}"
+        )
+    if allow_int and isinstance(value, int):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    raise ValueError(
+        f"Expected boolean value for normalize_by_item_popularity, got {value!r}"
+    )
+
+
 def _as_frame(frame: FrameLike) -> pl.DataFrame:
     """Return an eager DataFrame for scoring."""
     if isinstance(frame, pl.LazyFrame):
@@ -193,8 +218,9 @@ class CoVisitationScorer:
             min_pair_count=min_pair_count,
             min_unique_users=min_unique_users,
             min_unique_sessions=min_unique_sessions,
-            normalize_by_item_popularity=bool(
-                scoring.get("normalize_by_item_popularity", False)
+            normalize_by_item_popularity=_as_strict_bool(
+                scoring.get("normalize_by_item_popularity", False),
+                default=False,
             ),
             popularity_column=popularity_column,
             popularity_smoothing=popularity_smoothing,
