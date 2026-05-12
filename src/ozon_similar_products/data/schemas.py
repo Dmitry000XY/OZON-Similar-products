@@ -1,5 +1,7 @@
 """DataFrame schemas and column contracts for MVP pipeline."""
 
+import polars as pl
+
 from ozon_similar_products.config import load_data_config
 
 EXTERNAL_SKU_COLUMN = "sku"
@@ -110,3 +112,34 @@ WIDGET_OUTPUT_COLUMNS = [
     "item_id",
     "similar_items_sku_list",
 ]
+
+SESSIONS_SCHEMA = {
+    "user_id": {"dtypes": (pl.Int64,), "nullable": False},
+    "session_id": {"dtypes": (pl.String,), "nullable": False},
+    "event_date": {"dtypes": (pl.Date, pl.String), "nullable": False},
+    "timestamp": {"dtypes": (pl.Datetime,), "nullable": False},
+    "action_type": {"dtypes": (pl.String,), "nullable": False},
+    "item_id": {"dtypes": (pl.Int64,), "nullable": False},
+}
+
+PAIR_AGGREGATES_SCHEMA = {
+    "item_id": {"dtypes": (pl.Int64,), "nullable": False},
+    "similar_item_id": {"dtypes": (pl.Int64,), "nullable": False},
+    "pair_count": {"dtypes": (pl.Int64,), "nullable": False},
+    "view_count": {"dtypes": (pl.UInt32, pl.Int64), "nullable": False},
+    "click_count": {"dtypes": (pl.UInt32, pl.Int64), "nullable": False},
+    "favorite_count": {"dtypes": (pl.UInt32, pl.Int64), "nullable": False},
+    "to_cart_count": {"dtypes": (pl.UInt32, pl.Int64), "nullable": False},
+    "unique_users": {"dtypes": (pl.UInt32, pl.Int64), "nullable": False},
+    "unique_sessions": {"dtypes": (pl.UInt32, pl.Int64), "nullable": False},
+    "window_start": {"dtypes": (pl.String, pl.Date), "nullable": False},
+    "window_end": {"dtypes": (pl.String, pl.Date), "nullable": False},
+}
+
+RECOMMENDATIONS_SCHEMA = {
+    "item_id": {"dtypes": (pl.Int64,), "nullable": False},
+    "similar_item_id": {"dtypes": (pl.Int64,), "nullable": False},
+    "score": {"dtypes": (pl.Float64, pl.Float32), "nullable": False},
+    "rank": {"dtypes": (pl.Int64,), "nullable": False},
+    "source": {"dtypes": (pl.String,), "nullable": False},
+}
