@@ -98,12 +98,21 @@ def _item_action_types(config: Mapping[str, Any]) -> list[str]:
     if isinstance(action_types, str):
         normalized = [action_types]
     elif isinstance(action_types, Sequence):
-        normalized = [str(action_type) for action_type in action_types]
+        normalized = list(action_types)
     else:
-        raise TypeError("events.item_action_types must be a sequence of action-type strings")
+        raise TypeError("events.item_action_types must be a string or sequence of action-type strings")
 
-    if not normalized or any(not action_type for action_type in normalized):
+    if not normalized:
         raise ValueError("events.item_action_types must not be empty")
+
+    for action_type in normalized:
+        if not isinstance(action_type, str) or not action_type:
+            raise ValueError(
+                "events.item_action_types values must be non-empty strings"
+            )
+        if action_type not in schemas.ITEM_SIGNAL_TYPES:
+            raise ValueError(f"Unknown action type: {action_type}")
+
     return normalized
 
 
