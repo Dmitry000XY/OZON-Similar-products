@@ -90,6 +90,15 @@ def _as_non_empty_str(value: Any, default: str, parameter_name: str) -> str:
     return value
 
 
+def _as_bool(value: Any, default: bool, parameter_name: str) -> bool:
+    """Parse a strict boolean config value."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise TypeError(f"{parameter_name} must be a boolean")
+
+
 def _item_action_types(config: Mapping[str, Any]) -> list[str]:
     """Read item action types from config."""
     events_config = _as_mapping(config.get("events", {}))
@@ -98,12 +107,21 @@ def _item_action_types(config: Mapping[str, Any]) -> list[str]:
     if isinstance(action_types, str):
         normalized = [action_types]
     elif isinstance(action_types, Sequence):
-        normalized = [str(action_type) for action_type in action_types]
+        normalized = list(action_types)
     else:
-        raise TypeError("events.item_action_types must be a sequence of action-type strings")
+        raise TypeError("events.item_action_types must be a string or sequence of action-type strings")
 
-    if not normalized or any(not action_type for action_type in normalized):
+    if not normalized:
         raise ValueError("events.item_action_types must not be empty")
+
+    for action_type in normalized:
+        if not isinstance(action_type, str) or not action_type:
+            raise ValueError(
+                "events.item_action_types values must be non-empty strings"
+            )
+        if action_type not in schemas.ITEM_SIGNAL_TYPES:
+            raise ValueError(f"Unknown action type: {action_type}")
+
     return normalized
 
 
@@ -250,6 +268,16 @@ def run_mvp_pipeline(
 
     window_start, window_end = _window_bounds(train_until_date, lookback_days)
     action_types = _item_action_types(config)
+    allow_empty_input = _as_bool(
+        pipeline_config.get("allow_empty_input"),
+        default=False,
+        parameter_name="pipeline.allow_empty_input",
+    )
+    allow_empty_latest_update = _as_bool(
+        pipeline_config.get("allow_empty_latest_update"),
+        default=False,
+        parameter_name="pipeline.allow_empty_latest_update",
+    )
 
     data_config = load_configs(project_root=PROJECT_ROOT)
     try:
@@ -260,7 +288,15 @@ def run_mvp_pipeline(
             end_date=window_end,
             action_types=action_types,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as error:
+        if not allow_empty_input:
+            raise FileNotFoundError(
+                "Input events were not found for run_mvp_pipeline: "
+                f"date_window=[{window_start}..{window_end}], "
+                f"action_types={action_types}, "
+                f"allow_empty_input={allow_empty_input}. "
+                f"Original error: {error}"
+            ) from error
         raw_events = empty_contract_frame(schemas.RAW_EVENTS_COLUMNS)
     daily_raw_events = _partition_raw_events_by_date(raw_events)
 
@@ -411,4 +447,5 @@ def run_mvp_pipeline(
         },
     }
     run_manifest_path = writer.save_manifest(manifest, run_dir)
-    writer.update_latest_manifest(run_manifest_path, latest_dir)
+    if recommendations.height > 0 or allow_empty_latest_update:
+        writer.update_latest_manifest(run_manifest_path, latest_dir)

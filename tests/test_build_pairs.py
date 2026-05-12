@@ -170,23 +170,6 @@ def test_build_pairs_rejects_invalid_max_items_per_session() -> None:
         ItemPairBuilder(max_items_per_session=1)
 
 
-
-
-def test_build_pairs_from_config_accepts_single_action_type_string() -> None:
-    builder = ItemPairBuilder.from_config({"events": {"item_action_types": "view"}})
-
-    assert tuple(builder.item_action_types) == ("view",)
-
-
-def test_build_pairs_from_config_rejects_invalid_action_types() -> None:
-    with pytest.raises(TypeError, match="events.item_action_types"):
-        ItemPairBuilder.from_config({"events": {"item_action_types": 123}})
-
-    with pytest.raises(ValueError, match="non-empty strings"):
-        ItemPairBuilder.from_config({"events": {"item_action_types": ["view", ""]}})
-
-    with pytest.raises(ValueError, match="non-empty strings"):
-        ItemPairBuilder.from_config({"events": {"item_action_types": ["view", None]}})
 def test_build_pairs_can_be_created_from_config() -> None:
     builder = ItemPairBuilder.from_config(
         {
@@ -206,3 +189,27 @@ def test_build_pairs_can_be_created_from_config() -> None:
     assert builder.max_items_per_session == 7
     assert tuple(builder.item_action_types) == ("view", "click", "favorite", "to_cart")
     assert builder.signal_priority == {"view": 1, "click": 2, "favorite": 3, "to_cart": 4}
+
+
+
+def test_build_pairs_from_config_treats_string_action_type_as_single_value() -> None:
+    builder = ItemPairBuilder.from_config(
+        {
+            "events": {"item_action_types": "to_cart"},
+        }
+    )
+
+    assert tuple(builder.item_action_types) == ("to_cart",)
+
+
+@pytest.mark.parametrize(
+    "action_types",
+    [123, True, {"view": 1}, ["view", ""], ["view", 1], ()],
+)
+def test_build_pairs_from_config_rejects_invalid_action_types(action_types: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="item_action_types"):
+        ItemPairBuilder.from_config(
+            {
+                "events": {"item_action_types": action_types},
+            }
+        )

@@ -28,6 +28,33 @@ def test_window_bounds_rejects_invalid_lookback_days(lookback_days: int) -> None
         run_mvp._window_bounds("2026-05-10", lookback_days)
 
 
+
+
+def test_item_action_types_accepts_string_value() -> None:
+    """Single string action type should be normalized into one-item list."""
+    config = {"events": {"item_action_types": "view"}}
+
+    assert run_mvp._item_action_types(config) == ["view"]
+
+
+def test_item_action_types_accepts_list_value() -> None:
+    """List of action types should pass through unchanged."""
+    config = {"events": {"item_action_types": ["view", "click"]}}
+
+    assert run_mvp._item_action_types(config) == ["view", "click"]
+
+
+def test_item_action_types_rejects_unknown_or_invalid_values() -> None:
+    """Action types must be non-empty known strings."""
+    with pytest.raises(ValueError, match="Unknown action type"):
+        run_mvp._item_action_types({"events": {"item_action_types": ["view", "unknown"]}})
+
+    with pytest.raises(ValueError, match="non-empty strings"):
+        run_mvp._item_action_types({"events": {"item_action_types": ["view", ""]}})
+
+    with pytest.raises(ValueError, match="non-empty strings"):
+        run_mvp._item_action_types({"events": {"item_action_types": ["view", 1]}})
+
 def test_partition_raw_events_by_date_returns_sorted_partitions() -> None:
     """Raw events should be split into date partitions in ascending date order."""
     raw_events = pl.DataFrame(
@@ -52,7 +79,29 @@ def test_partition_raw_events_by_date_returns_sorted_partitions() -> None:
     assert partitions[1][1].height == 2
 
 
-def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares(
+def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pipeline should fail loudly when input files are missing and empty input is disallowed."""
+    config = {
+        "pipeline": {"top_k": 20},
+        "events": {"item_action_types": ["view", "click", "favorite", "to_cart"]},
+    }
+
+    def fake_load_events(**_: object) -> pl.DataFrame:
+        raise FileNotFoundError("No files for selected date range")
+
+    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+
+    with pytest.raises(FileNotFoundError, match=r"date_window=\[2026-05-04\.\.2026-05-10\]"):
+        run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+
+
+def test_run_mvp_pipeline_allows_missing_raw_events_when_configured_and_uses_calibration_shares(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -60,7 +109,7 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
     captured: dict[str, object] = {}
 
     config = {
-        "pipeline": {"top_k": 20},
+        "pipeline": {"top_k": 20, "allow_empty_input": True},
         "events": {"item_action_types": ["view", "click", "favorite", "to_cart"]},
         "topk": {
             "top_k": 7,
@@ -237,6 +286,87 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
     assert cast(dict[str, str], manifest["paths"])["widget_recommendations_path"] == "widget/similar_items.parquet"
 
     assert cast(Path, captured["run_manifest_path"]).name == "manifest.json"
+    assert "latest_dir" not in captured
+
+
+def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Latest should update for empty recommendations only with explicit opt-in flag."""
+    captured: dict[str, object] = {}
+    config = {
+        "pipeline": {"allow_empty_input": True, "allow_empty_latest_update": True},
+        "events": {"item_action_types": ["view"]},
+    }
+
+    def fake_load_events(**_: object) -> pl.DataFrame:
+        raise FileNotFoundError("No files for selected date range")
+
+    class EmptyTransform:
+        @classmethod
+        def from_config(cls, _: dict[str, object]) -> "EmptyTransform":
+            return cls()
+
+        def transform_window(self, _: list[pl.DataFrame]) -> pl.DataFrame:
+            return empty_contract_frame(schemas.SESSIONS_COLUMNS)
+
+        def transform_day(self, _: pl.DataFrame) -> pl.DataFrame:
+            return empty_contract_frame(schemas.DAILY_ITEM_PAIRS_COLUMNS)
+
+    class FakeEventCleaner:
+        def __init__(self, item_action_types: list[str]) -> None:
+            self.item_action_types = item_action_types
+
+        def transform_day(self, events: pl.DataFrame) -> pl.DataFrame:
+            return events.select(schemas.CLEAN_EVENTS_COLUMNS)
+
+    class FakeScorer:
+        action_shares: dict[str, float] | None = None
+        normalize_by_item_popularity = False
+        method = "pair_count"
+
+        @staticmethod
+        def from_config(_: dict[str, object]) -> "FakeScorer":
+            return FakeScorer()
+
+        def score(self, _: pl.DataFrame, item_popularity: pl.DataFrame | None = None) -> pl.DataFrame:
+            return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
+
+    class FakeWriter:
+        def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "recommendations.parquet"
+
+        def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "similar_items.parquet"
+
+        def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
+            captured["manifest_rows"] = cast(dict[str, int], manifest["rows"])
+            return Path(output_path) / "manifest.json"
+
+        def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
+            captured["latest_dir"] = Path(latest_dir)
+            return Path(latest_dir) / "manifest.json"
+
+    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+    monkeypatch.setattr(run_mvp, "EventCleaner", FakeEventCleaner)
+    monkeypatch.setattr(run_mvp, "SessionBuilder", EmptyTransform)
+    monkeypatch.setattr(run_mvp, "ItemPairBuilder", EmptyTransform)
+    monkeypatch.setattr(run_mvp, "PairAggregator", lambda: type("A", (), {"aggregate_window": lambda *_a, **_k: empty_contract_frame(schemas.PAIR_AGGREGATES_COLUMNS)})())
+    monkeypatch.setattr(run_mvp, "ItemPopularityBuilder", lambda item_action_types: type("P", (), {
+        "build_item_popularity": lambda *_a, **_k: empty_contract_frame(schemas.ITEM_POPULARITY_COLUMNS),
+        "build_action_type_calibration_stats": lambda *_a, **_k: empty_contract_frame(schemas.ACTION_TYPE_DISTRIBUTION_COLUMNS),
+    })())
+    monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(run_mvp, "TopKSelector", lambda **_: type("S", (), {"select": lambda *_a, **_k: empty_contract_frame(schemas.RECOMMENDATIONS_COLUMNS)})())
+    monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeWriter)
+
+    run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+
+    assert cast(dict[str, int], captured["manifest_rows"])["recommendations"] == 0
     assert cast(Path, captured["latest_dir"]).as_posix().endswith("outputs/recommendations/latest")
 
 

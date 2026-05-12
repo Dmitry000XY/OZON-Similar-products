@@ -100,22 +100,19 @@ class ItemPairBuilder:
 
         raw_action_types = events_config.get("item_action_types", schemas.ITEM_SIGNAL_TYPES)
         if isinstance(raw_action_types, str):
-            normalized_action_types = [raw_action_types]
+            item_action_types = (raw_action_types,)
         elif isinstance(raw_action_types, Sequence):
-            normalized_action_types = list(raw_action_types)
+            item_action_types = tuple(raw_action_types)
         else:
-            raise TypeError(
-                "events.item_action_types must be a string or a sequence of non-empty strings"
-            )
+            raise TypeError("events.item_action_types must be a string or a sequence of strings")
 
-        if not normalized_action_types:
-            raise ValueError("events.item_action_types must not be empty")
-        if any((not isinstance(action_type, str)) or (not action_type) for action_type in normalized_action_types):
+        if not item_action_types or any(
+            not isinstance(action_type, str) or not action_type.strip()
+            for action_type in item_action_types
+        ):
             raise ValueError(
-                "events.item_action_types must contain only non-empty strings"
+                "events.item_action_types must contain non-empty string values"
             )
-
-        item_action_types = tuple(normalized_action_types)
         signal_priority = pair_builder_config.get("signal_priority")
         if signal_priority is not None:
             signal_priority = {
