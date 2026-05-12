@@ -47,7 +47,7 @@ uv sync
 
 ## Подготовка данных
 
-Положи исходные архивы в ожидаемую директорию:
+Положи исходные архивы в директорию:
 
 ```text
 data/raw/archives/
@@ -79,13 +79,13 @@ uv run python scripts/check_project_structure.py
 Запуск полного MVP pipeline:
 
 ```bash
-uv run python scripts/run_mvp_pipeline.py 2026-05-10 --lookback-days 30
+uv run python scripts/run_mvp_pipeline.py 2026-04-30 --lookback-days 1
 ```
 
 Где:
 
 ```text
-2026-05-10      # последняя дата train window
+2026-04-30      # последняя дата train window
 --lookback-days # размер rolling window в днях
 ```
 
@@ -98,29 +98,48 @@ configs/baseline.yaml
 Можно передать другой config:
 
 ```bash
-uv run python scripts/run_mvp_pipeline.py 2026-05-10 --lookback-days 30 --config-path configs/baseline.yaml
+uv run python scripts/run_mvp_pipeline.py 2024-04-30 --lookback-days 1 --config-path configs/baseline.yaml
 ```
 
 ---
 
-## Проверка результата
+## Посмотреть результат
 
-После запуска проверь, что появился latest manifest:
+После запуска проверь latest manifest и таблицы рекомендаций:
+
+```bash
+uv run python scripts/preview_latest_recommendations.py
+```
+
+Скрипт выводит:
 
 ```text
-outputs/recommendations/latest/manifest.json
+RUN / WINDOW / SCORE / TOP_K
+ROWS по этапам pipeline
+preview detailed recommendations
+preview compact lookup output
+пример SimilarItemsLookup
 ```
 
-Пример lookup:
+Вернуть больше похожих товаров:
 
-```python
-from ozon_similar_products.output.lookup import SimilarItemsLookup
-
-lookup = SimilarItemsLookup("outputs/recommendations/latest/manifest.json")
-lookup.get_similar_items(item_id=123, top_k=10)
+```bash
+uv run python scripts/preview_latest_recommendations.py --top-k 20
 ```
 
-Если товар найден в рекомендациях, вернётся список похожих `item_id`.
+Посмотреть lookup для конкретного товара:
+
+```bash
+uv run python scripts/preview_latest_recommendations.py --item-id 113
+```
+
+Использовать другой manifest:
+
+```bash
+uv run python scripts/preview_latest_recommendations.py --manifest-path outputs/recommendations/latest/manifest.json
+```
+
+Успешный запуск должен показать, что в manifest `recommendations > 0`, а lookup возвращает список `similar_items`.
 
 ---
 
@@ -163,6 +182,7 @@ uv run pyrefly check
 ```text
 configs/baseline.yaml                         # параметры baseline
 scripts/run_mvp_pipeline.py                   # запуск полного pipeline
+scripts/preview_latest_recommendations.py     # просмотр результата и lookup
 src/ozon_similar_products/pipeline/run_mvp.py # orchestration runner
 src/ozon_similar_products/retrieval/          # pairs, scoring, top-K
 src/ozon_similar_products/output/             # writers, manifest, lookup
