@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -260,6 +262,10 @@ def run_mvp_pipeline(
     9. save widget output;
     10. update latest snapshot.
     """
+    logger = logging.getLogger(__name__)
+    run_started = time.perf_counter()
+
+    logger.info("[run_mvp_pipeline] load config=%s", config_path)
     config = load_yaml_config(config_path)
     pipeline_config = _as_mapping(config.get("pipeline", {}))
     artifacts_config = _as_mapping(config.get("artifacts", {}))
@@ -268,6 +274,13 @@ def run_mvp_pipeline(
 
     window_start, window_end = _window_bounds(train_until_date, lookback_days)
     action_types = _item_action_types(config)
+    logger.info(
+        "[run_mvp_pipeline] window=%s..%s lookback_days=%s action_types=%s",
+        window_start,
+        window_end,
+        lookback_days,
+        action_types,
+    )
     allow_empty_input = _as_bool(
         pipeline_config.get("allow_empty_input"),
         default=False,
@@ -281,6 +294,7 @@ def run_mvp_pipeline(
 
     data_config = load_configs(project_root=PROJECT_ROOT)
     try:
+        logger.info("[run_mvp_pipeline] load raw events")
         raw_events = load_events(
             config=data_config,
             use_sample=False,
@@ -297,32 +311,75 @@ def run_mvp_pipeline(
                 f"allow_empty_input={allow_empty_input}. "
                 f"Original error: {error}"
             ) from error
-        raw_events = empty_contract_frame(schemas.RAW_EVENTS_COLUMNS)
+            raw_events = empty_contract_frame(schemas.RAW_EVENTS_COLUMNS)
+            logger.warning(
+                "[run_mvp_pipeline] missing raw events; continuing with empty input allow_empty_input=%s",
+                allow_empty_input,
+            )
+    if raw_events.is_empty():
+        logger.warning(
+            "[run_mvp_pipeline] raw events empty for window=%s..%s",
+            window_start,
+            window_end,
+        )
     daily_raw_events = _partition_raw_events_by_date(raw_events)
+    logger.info(
+        "[run_mvp_pipeline] raw events loaded rows=%s days=%s",
+        raw_events.height,
+        len(daily_raw_events),
+    )
 
+    logger.info("[run_mvp_pipeline] clean events")
     cleaner = EventCleaner(item_action_types=action_types)
     daily_clean_events = [
         (partition_date, cleaner.transform_day(events))
         for partition_date, events in daily_raw_events
     ]
     events_clean_window = _concat_daily_frames(daily_clean_events, schemas.CLEAN_EVENTS_COLUMNS)
+    logger.info(
+        "[run_mvp_pipeline] clean events rows=%s days=%s",
+        events_clean_window.height,
+        len(daily_clean_events),
+    )
 
+    logger.info("[run_mvp_pipeline] build sessions")
     session_builder = SessionBuilder.from_config(config)
+    logger.info("[run_mvp_pipeline] session builder config=%s", session_builder)
     sessions_window = session_builder.transform_window(
         [events_clean for _, events_clean in daily_clean_events]
     )
+    logger.info("[run_mvp_pipeline] sessions window rows=%s", sessions_window.height)
     daily_sessions = _partition_frame_by_date_column(sessions_window, "event_date")
+    logger.info(
+        "[run_mvp_pipeline] sessions rows=%s days=%s",
+        sessions_window.height,
+        len(daily_sessions),
+    )
 
+    logger.info("[run_mvp_pipeline] build item pairs")
     pair_builder = ItemPairBuilder.from_config(config)
+    logger.info("[run_mvp_pipeline] pair builder config=%s", pair_builder)
     pairs_window = pair_builder.transform_day(sessions_window)
+    logger.info("[run_mvp_pipeline] pairs window rows=%s", pairs_window.height)
     daily_pairs = _partition_frame_by_date_column(pairs_window, "pair_date")
+    logger.info(
+        "[run_mvp_pipeline] daily item pairs rows=%s days=%s",
+        pairs_window.height,
+        len(daily_pairs),
+    )
 
+    logger.info("[run_mvp_pipeline] aggregate pairs")
     pair_aggregates = PairAggregator().aggregate_window(
         daily_pairs=[pairs for _, pairs in daily_pairs],
         window_start=window_start,
         window_end=window_end,
     )
+    logger.info(
+        "[run_mvp_pipeline] pair aggregates rows=%s",
+        pair_aggregates.height,
+    )
 
+    logger.info("[run_mvp_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
     item_popularity = popularity_builder.build_item_popularity(events_clean_window)
     action_distribution = popularity_builder.build_action_type_calibration_stats(
@@ -330,7 +387,13 @@ def run_mvp_pipeline(
         calibration_start=window_start,
         calibration_end=window_end,
     )
+    logger.info(
+        "[run_mvp_pipeline] item popularity rows=%s action_distribution rows=%s",
+        item_popularity.height,
+        action_distribution.height,
+    )
 
+    logger.info("[run_mvp_pipeline] score pairs")
     scorer = CoVisitationScorer.from_config(config)
     if scorer.action_shares is None:
         derived_action_shares = _action_shares_from_distribution(action_distribution)
@@ -341,12 +404,18 @@ def run_mvp_pipeline(
         pair_scores = scorer.score(pair_aggregates, item_popularity=item_popularity)
     else:
         pair_scores = scorer.score(pair_aggregates)
+    logger.info(
+        "[run_mvp_pipeline] pair scores rows=%s calibration_used=%s",
+        pair_scores.height,
+        scorer.action_shares is not None,
+    )
 
     top_k = _as_positive_int(
         value=topk_config.get("top_k", pipeline_config.get("top_k")),
         default=20,
         parameter_name="topk.top_k",
     )
+    logger.info("[run_mvp_pipeline] select top_k=%s", top_k)
     selector = TopKSelector(
         top_k=top_k,
         source=_as_non_empty_str(
@@ -359,6 +428,12 @@ def run_mvp_pipeline(
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
     )
     recommendations = selector.select(pair_scores)
+    if recommendations.is_empty():
+        logger.warning("[run_mvp_pipeline] recommendations empty")
+    logger.info(
+        "[run_mvp_pipeline] recommendations rows=%s",
+        recommendations.height,
+    )
 
     events_clean_dir = artifacts_config.get("events_clean_dir")
     sessions_dir = artifacts_config.get("sessions_dir")
@@ -367,6 +442,7 @@ def run_mvp_pipeline(
     item_popularity_dir = artifacts_config.get("item_popularity_dir")
     action_type_distribution_dir = artifacts_config.get("action_type_distribution_dir")
 
+    logger.info("[run_mvp_pipeline] write artifacts")
     if isinstance(events_clean_dir, str | Path):
         _write_daily_partitions(daily_clean_events, _as_path(events_clean_dir, "data/processed/events_clean"))
     if isinstance(sessions_dir, str | Path):
@@ -415,6 +491,7 @@ def run_mvp_pipeline(
     run_dir = outputs_root / "runs" / run_id
     writer = RecommendationWriter()
 
+    logger.info("[run_mvp_pipeline] write outputs run_id=%s", run_id)
     detailed_path = writer.save_detailed(recommendations, run_dir / detailed_subdir)
     widget_path = writer.save_widget_format(recommendations, run_dir / widget_subdir)
 
@@ -449,3 +526,11 @@ def run_mvp_pipeline(
     run_manifest_path = writer.save_manifest(manifest, run_dir)
     if recommendations.height > 0 or allow_empty_latest_update:
         writer.update_latest_manifest(run_manifest_path, latest_dir)
+    elif recommendations.is_empty():
+        logger.warning(
+            "[run_mvp_pipeline] latest manifest not updated (empty recommendations, allow_empty_latest_update=%s)",
+            allow_empty_latest_update,
+        )
+
+    elapsed_seconds = time.perf_counter() - run_started
+    logger.info("[run_mvp_pipeline] finished in %.2fs", elapsed_seconds)

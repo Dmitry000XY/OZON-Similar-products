@@ -1,5 +1,6 @@
 """Tests for MVP pipeline orchestration."""
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -368,6 +369,126 @@ def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_al
 
     assert cast(dict[str, int], captured["manifest_rows"])["recommendations"] == 0
     assert cast(Path, captured["latest_dir"]).as_posix().endswith("outputs/recommendations/latest")
+
+
+def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pipeline should warn when input/output windows are empty."""
+    config = {
+        "pipeline": {"allow_empty_input": True},
+        "events": {"item_action_types": ["view"]},
+    }
+
+    def fake_load_events(**_: object) -> pl.DataFrame:
+        raise FileNotFoundError("No files for selected date range")
+
+    class FakeEventCleaner:
+        def __init__(self, item_action_types: list[str]) -> None:
+            self.item_action_types = item_action_types
+
+        def transform_day(self, events: pl.DataFrame) -> pl.DataFrame:
+            return empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
+
+    class FakeSessionBuilder:
+        @classmethod
+        def from_config(cls, _: dict[str, object]) -> "FakeSessionBuilder":
+            return cls()
+
+        def transform_window(self, _: list[pl.DataFrame]) -> pl.DataFrame:
+            return empty_contract_frame(schemas.SESSIONS_COLUMNS)
+
+    class FakeItemPairBuilder:
+        @classmethod
+        def from_config(cls, _: dict[str, object]) -> "FakeItemPairBuilder":
+            return cls()
+
+        def transform_day(self, _: pl.DataFrame) -> pl.DataFrame:
+            return empty_contract_frame(schemas.DAILY_ITEM_PAIRS_COLUMNS)
+
+    class FakePairAggregator:
+        def aggregate_window(
+            self,
+            daily_pairs: list[pl.DataFrame],
+            window_start: str,
+            window_end: str,
+        ) -> pl.DataFrame:
+            return empty_contract_frame(schemas.PAIR_AGGREGATES_COLUMNS)
+
+    class FakePopularityBuilder:
+        def __init__(self, item_action_types: list[str]) -> None:
+            self.item_action_types = item_action_types
+
+        def build_item_popularity(self, _: pl.DataFrame) -> pl.DataFrame:
+            return empty_contract_frame(schemas.ITEM_POPULARITY_COLUMNS)
+
+        def build_action_type_calibration_stats(
+            self,
+            _: pl.DataFrame,
+            calibration_start: str,
+            calibration_end: str,
+        ) -> pl.DataFrame:
+            return empty_contract_frame(schemas.ACTION_TYPE_DISTRIBUTION_COLUMNS)
+
+    class FakeScorer:
+        action_shares: dict[str, float] | None = None
+        normalize_by_item_popularity: bool = False
+        method: str = "pair_count"
+
+        @staticmethod
+        def from_config(_: dict[str, object]) -> "FakeScorer":
+            return FakeScorer()
+
+        def score(
+            self,
+            pair_aggregates: pl.DataFrame,
+            item_popularity: pl.DataFrame | None = None,
+        ) -> pl.DataFrame:
+            return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
+
+    class FakeTopKSelector:
+        def __init__(self, **_: object) -> None:
+            return None
+
+        def select(self, pair_scores: pl.DataFrame) -> pl.DataFrame:
+            return empty_contract_frame(schemas.RECOMMENDATIONS_COLUMNS)
+
+    class FakeWriter:
+        def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "recommendations.parquet"
+
+        def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "similar_items.parquet"
+
+        def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
+            return Path(output_path) / "manifest.json"
+
+        def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
+            raise AssertionError("Latest manifest should not update for empty recommendations")
+
+    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+    monkeypatch.setattr(run_mvp, "EventCleaner", FakeEventCleaner)
+    monkeypatch.setattr(run_mvp, "SessionBuilder", FakeSessionBuilder)
+    monkeypatch.setattr(run_mvp, "ItemPairBuilder", FakeItemPairBuilder)
+    monkeypatch.setattr(run_mvp, "PairAggregator", FakePairAggregator)
+    monkeypatch.setattr(run_mvp, "ItemPopularityBuilder", FakePopularityBuilder)
+    monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(run_mvp, "TopKSelector", FakeTopKSelector)
+    monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeWriter)
+
+    caplog.set_level(logging.WARNING, logger="ozon_similar_products.pipeline.run_mvp")
+
+    run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+
+    assert "missing raw events" in caplog.text
+    assert "raw events empty" in caplog.text
+    assert "recommendations empty" in caplog.text
+    assert "latest manifest not updated" in caplog.text
 
 
 def _write_text(path: Path, content: str) -> None:
