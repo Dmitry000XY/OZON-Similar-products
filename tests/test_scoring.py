@@ -167,3 +167,25 @@ def test_output_contract_after_normalization() -> None:
 
     validate_pair_scores(scores)
     assert scores.columns == schemas.PAIR_SCORES_COLUMNS
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [("false", False), ("true", True), (0, False), (1, True)],
+)
+def test_from_config_parses_normalize_by_item_popularity_strictly(
+    raw_value: str | int,
+    expected: bool,
+) -> None:
+    scorer = CoVisitationScorer.from_config(
+        {"scoring": {"normalize_by_item_popularity": raw_value}}
+    )
+
+    assert scorer.normalize_by_item_popularity is expected
+
+
+def test_from_config_rejects_invalid_normalize_by_item_popularity() -> None:
+    with pytest.raises(ValueError, match="normalize_by_item_popularity"):
+        CoVisitationScorer.from_config(
+            {"scoring": {"normalize_by_item_popularity": "definitely-not-bool"}}
+        )
