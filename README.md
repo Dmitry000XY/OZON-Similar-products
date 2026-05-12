@@ -79,7 +79,7 @@ uv run python scripts/check_project_structure.py
 Запуск полного MVP pipeline:
 
 ```bash
-uv run python scripts/run_mvp_pipeline.py 2026-04-30 --lookback-days 1
+uv run python scripts/run_mvp_pipeline.py 2024-04-30 --lookback-days 1
 ```
 
 Где:
@@ -172,7 +172,7 @@ uv run ruff check src scripts tests
 Type checking:
 
 ```bash
-uv run pyrefly check
+uv run pyrefly check src scripts tests
 ```
 
 ---

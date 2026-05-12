@@ -1,5 +1,5 @@
 pipeline:
-  session_timeout_minutes: 30
+  session_timeout_minutes: 15
   max_items_per_session: 50
   top_k: 20
   lookback_days: 30
