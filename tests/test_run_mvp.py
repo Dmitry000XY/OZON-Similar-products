@@ -28,6 +28,33 @@ def test_window_bounds_rejects_invalid_lookback_days(lookback_days: int) -> None
         run_mvp._window_bounds("2026-05-10", lookback_days)
 
 
+
+
+def test_item_action_types_accepts_string_value() -> None:
+    """Single string action type should be normalized into one-item list."""
+    config = {"events": {"item_action_types": "view"}}
+
+    assert run_mvp._item_action_types(config) == ["view"]
+
+
+def test_item_action_types_accepts_list_value() -> None:
+    """List of action types should pass through unchanged."""
+    config = {"events": {"item_action_types": ["view", "click"]}}
+
+    assert run_mvp._item_action_types(config) == ["view", "click"]
+
+
+def test_item_action_types_rejects_unknown_or_invalid_values() -> None:
+    """Action types must be non-empty known strings."""
+    with pytest.raises(ValueError, match="Unknown action type"):
+        run_mvp._item_action_types({"events": {"item_action_types": ["view", "unknown"]}})
+
+    with pytest.raises(ValueError, match="non-empty strings"):
+        run_mvp._item_action_types({"events": {"item_action_types": ["view", ""]}})
+
+    with pytest.raises(ValueError, match="non-empty strings"):
+        run_mvp._item_action_types({"events": {"item_action_types": ["view", 1]}})
+
 def test_partition_raw_events_by_date_returns_sorted_partitions() -> None:
     """Raw events should be split into date partitions in ascending date order."""
     raw_events = pl.DataFrame(
