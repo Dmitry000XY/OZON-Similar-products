@@ -10,6 +10,7 @@ import pytest
 import ozon_similar_products.pipeline.run_mvp as run_mvp
 from ozon_similar_products.data import schemas
 from ozon_similar_products.data.frames import empty_contract_frame
+from ozon_similar_products.output.lookup import SimilarItemsLookup
 
 
 def test_window_bounds_returns_inclusive_range() -> None:
@@ -237,3 +238,299 @@ def test_run_mvp_pipeline_handles_missing_raw_events_and_uses_calibration_shares
 
     assert cast(Path, captured["run_manifest_path"]).name == "manifest.json"
     assert cast(Path, captured["latest_dir"]).as_posix().endswith("outputs/recommendations/latest")
+
+
+def _write_text(path: Path, content: str) -> None:
+    """Write a UTF-8 text file and create its parent directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _write_synthetic_action_partition(
+    events_root: Path,
+    partition_date: str,
+    action_type: str,
+    rows: list[dict[str, object]],
+) -> None:
+    """Write one Hive-style raw-events action partition for the smoke test."""
+    partition_dir = events_root / f"date={partition_date}" / f"action_type={action_type}"
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows).write_parquet(partition_dir / "part-0.parquet")
+
+
+def _write_smoke_project_configs(project_root: Path) -> Path:
+    """Create minimal configs needed by run_mvp_pipeline inside tmp_path."""
+    _write_text(
+        project_root / "configs" / "paths.yaml",
+        """project:
+  package_name: ozon_similar_products
+
+configs:
+  root_dir: configs
+  paths: configs/paths.yaml
+  data: configs/data.yaml
+  baseline: configs/baseline.yaml
+
+data:
+  raw_dir: data/raw
+  raw_archives_dir: data/raw/archives
+  product_information_dir: data/raw/product_information
+  user_actions_dir: data/raw/user_actions
+  interim_dir: data/interim
+  processed_dir: data/processed
+  samples_dir: data/samples
+
+outputs:
+  root_dir: outputs
+  recommendations_dir: outputs/recommendations
+  reports_dir: outputs/reports
+  figures_dir: outputs/figures
+
+source:
+  package_dir: src/ozon_similar_products
+  future_layer_dirs: []
+  required_modules: []
+
+project_dirs:
+  - configs
+  - data/raw/product_information
+  - data/raw/user_actions
+  - data/processed
+  - outputs/recommendations
+""",
+    )
+    _write_text(
+        project_root / "configs" / "data.yaml",
+        """product_information:
+  archive_name: product_information.tar.gz
+  parquet_glob: "**/*.parquet"
+  payload_root_names:
+    - product_information
+  id_column: item_id
+  expected_columns:
+    - item_id
+    - name
+    - brand
+    - type
+    - category_id
+    - category_name
+
+user_actions:
+  archive_name: user_actions.tar.gz
+  parquet_glob: "**/*.parquet"
+  payload_root_names:
+    - user_actions
+  expected_columns:
+    - user_id
+    - date
+    - timestamp
+    - action_type
+    - widget_name
+    - search_query
+    - item_id
+  known_action_types:
+    - search
+    - view
+    - click
+    - to_cart
+    - favorite
+
+raw_data:
+  success_marker_name: _SUCCESS
+""",
+    )
+    baseline_path = project_root / "configs" / "baseline.yaml"
+    _write_text(
+        baseline_path,
+        """pipeline:
+  session_timeout_minutes: 30
+  max_items_per_session: 50
+  top_k: 5
+  lookback_days: 1
+
+events:
+  item_action_types:
+    - view
+    - click
+    - favorite
+    - to_cart
+
+item_pair_builder:
+  signal_priority:
+    view: 1
+    click: 2
+    favorite: 3
+    to_cart: 4
+
+scoring:
+  method: calibrated_multichannel
+  business_weights:
+    view: 1.0
+    click: 3.0
+    favorite: 6.0
+    to_cart: 8.0
+  beta: 0.5
+  reference_action_type: view
+  max_frequency_boost:
+    view: 1.0
+    click: 10.0
+    favorite: 15.0
+    to_cart: 30.0
+  min_pair_count: 1
+  min_unique_users: 1
+  min_unique_sessions: 1
+  calibration:
+    action_shares_used_for_calibration: null
+    calibration_start: null
+    calibration_end: null
+  normalize_by_item_popularity: false
+  popularity_normalization:
+    popularity_column: unique_users
+    smoothing: 1.0
+    power: 0.5
+
+artifacts:
+  events_clean_dir: data/processed/events_clean
+  sessions_dir: data/processed/sessions
+  item_popularity_dir: data/processed/item_popularity
+  action_type_distribution_dir: data/processed/action_type_distribution
+  daily_pairs_dir: data/processed/item_pairs
+  pair_aggregates_dir: data/processed/pair_aggregates
+
+outputs:
+  detailed_recommendations_dir: outputs/recommendations/detailed
+  widget_recommendations_dir: outputs/recommendations/widget
+  latest_dir: outputs/recommendations/latest
+""",
+    )
+    return baseline_path
+
+
+def _write_smoke_raw_events(project_root: Path) -> None:
+    """Create a tiny raw-events parquet dataset that can produce recommendations."""
+    events_root = project_root / "data" / "raw" / "user_actions" / "user_actions"
+    partition_date = "2026-05-10"
+
+    _write_synthetic_action_partition(
+        events_root,
+        partition_date,
+        "view",
+        [
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 1,
+            },
+            {
+                "user_id": 2,
+                "timestamp": "2026-05-10 11:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 1,
+            },
+            {
+                "user_id": 3,
+                "timestamp": "2026-05-10 12:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 2,
+            },
+        ],
+    )
+    _write_synthetic_action_partition(
+        events_root,
+        partition_date,
+        "click",
+        [
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:05:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 10,
+            },
+            {
+                "user_id": 3,
+                "timestamp": "2026-05-10 12:05:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 20,
+            },
+        ],
+    )
+    _write_synthetic_action_partition(
+        events_root,
+        partition_date,
+        "favorite",
+        [
+            {
+                "user_id": 2,
+                "timestamp": "2026-05-10 11:05:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 10,
+            },
+        ],
+    )
+    _write_synthetic_action_partition(
+        events_root,
+        partition_date,
+        "to_cart",
+        [
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:10:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 11,
+            },
+        ],
+    )
+
+
+def test_run_mvp_pipeline_smoke_with_synthetic_parquet_data(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Run the real MVP pipeline on a tiny synthetic parquet dataset."""
+    baseline_path = _write_smoke_project_configs(tmp_path)
+    _write_smoke_raw_events(tmp_path)
+    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
+
+    run_mvp.run_mvp_pipeline(
+        train_until_date="2026-05-10",
+        lookback_days=1,
+        config_path=baseline_path,
+    )
+
+    latest_manifest_path = tmp_path / "outputs" / "recommendations" / "latest" / "manifest.json"
+    assert latest_manifest_path.exists()
+
+    detailed_outputs = list((tmp_path / "outputs" / "recommendations" / "runs").rglob("recommendations.parquet"))
+    widget_outputs = list((tmp_path / "outputs" / "recommendations" / "runs").rglob("similar_items.parquet"))
+    assert detailed_outputs
+    assert widget_outputs
+
+    detailed = pl.read_parquet(detailed_outputs[0])
+    widget = pl.read_parquet(widget_outputs[0])
+    assert detailed.height > 0
+    assert widget.height > 0
+    assert "weight_sum" not in detailed.columns
+    assert "to_cart_count" in detailed.columns
+
+    lookup = SimilarItemsLookup(latest_manifest_path)
+    similar_items = lookup.get_similar_items(1, top_k=5)
+    assert similar_items
+    assert 10 in similar_items
+
+    for artifact_dir in [
+        "events_clean",
+        "sessions",
+        "item_pairs",
+        "pair_aggregates",
+        "item_popularity",
+        "action_type_distribution",
+    ]:
+        assert list((tmp_path / "data" / "processed" / artifact_dir).rglob("*.parquet"))
