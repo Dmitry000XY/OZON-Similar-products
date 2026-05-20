@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import cast
 from datetime import date
+from dataclasses import dataclass
 
 import polars as pl
 import pytest
@@ -20,6 +21,30 @@ def test_window_bounds_returns_inclusive_range() -> None:
 
     assert window_start == "2026-05-08"
     assert window_end == "2026-05-10"
+
+
+def test_date_range_strings_returns_inclusive_dates() -> None:
+    assert run_mvp._date_range_strings("2026-05-08", "2026-05-10") == [
+        "2026-05-08",
+        "2026-05-09",
+        "2026-05-10",
+    ]
+
+
+def test_date_range_strings_rejects_reversed_window() -> None:
+    with pytest.raises(ValueError, match="less than or equal"):
+        run_mvp._date_range_strings("2026-05-10", "2026-05-08")
+
+
+def test_scan_parquet_paths_or_empty_frame_returns_empty_contract_for_no_paths() -> None:
+    frame = run_mvp._scan_parquet_paths_or_empty_frame(
+        [],
+        schemas.CLEAN_EVENTS_COLUMNS,
+    )
+
+    assert isinstance(frame, pl.DataFrame)
+    assert frame.is_empty()
+    assert frame.columns == schemas.CLEAN_EVENTS_COLUMNS
 
 
 @pytest.mark.parametrize("lookback_days", [0, -1, True])
@@ -41,6 +66,7 @@ def test_item_action_types_accepts_list_value() -> None:
     config = {"events": {"item_action_types": ["view", "click"]}}
 
     assert run_mvp._item_action_types(config) == ["view", "click"]
+
 
 def test_partition_sessions_by_session_start_date_keeps_cross_midnight_session_together() -> None:
     sessions = pl.DataFrame(
@@ -821,3 +847,199 @@ def test_run_mvp_pipeline_smoke_with_synthetic_parquet_data(
         "action_type_distribution",
     ]:
         assert list((tmp_path / "data" / "processed" / artifact_dir).rglob("*.parquet"))
+
+
+def test_run_mvp_pipeline_loads_raw_events_day_by_day(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    """Pipeline should load raw events one day at a time instead of full window."""
+    requested_dates: list[str] = []
+
+    config = {
+        "pipeline": {"allow_empty_latest_update": True},
+        "events": {"item_action_types": ["view"]},
+    }
+
+    def fake_load_events(**kwargs: object) -> pl.DataFrame:
+        dates = kwargs.get("dates")
+        assert isinstance(dates, list)
+        assert len(dates) == 1
+        requested_dates.append(str(dates[0]))
+
+        return pl.DataFrame(
+            {
+                "user_id": [1, 1],
+                "date": [dates[0], dates[0]],
+                "timestamp": [
+                    f"{dates[0]} 10:00:00",
+                    f"{dates[0]} 10:05:00",
+                ],
+                "action_type": ["view", "view"],
+                "widget_name": ["catalog", "catalog"],
+                "search_query": [None, None],
+                "item_id": [10, 20],
+            }
+        ).with_columns(
+            pl.col("date").str.to_date(),
+            pl.col("timestamp").str.to_datetime(),
+        )
+
+    @dataclass(frozen=True)
+    class FakeScorer:
+        action_shares: dict[str, float] | None = None
+        normalize_by_item_popularity = False
+        method = "pair_count"
+
+        @staticmethod
+        def from_config(_: dict[str, object]) -> "FakeScorer":
+            return FakeScorer()
+
+        def score(
+                self,
+                pair_aggregates: pl.DataFrame,
+                item_popularity: pl.DataFrame | None = None,
+        ) -> pl.DataFrame:
+            return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
+
+    class FakeWriter:
+        def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "recommendations.parquet"
+
+        def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "similar_items.parquet"
+
+        def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
+            rows = cast(dict[str, int], manifest["rows"])
+            assert rows["raw_events"] == 4
+            assert rows["clean_events"] == 4
+            return Path(output_path) / "manifest.json"
+
+        def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
+            return Path(latest_dir) / "manifest.json"
+
+    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+    monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(
+        run_mvp,
+        "TopKSelector",
+        lambda **_: type(
+            "S",
+            (),
+            {
+                "select": (
+                    lambda *_a, **_k: empty_contract_frame(
+                        schemas.RECOMMENDATIONS_COLUMNS
+                    )
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeWriter)
+
+    run_mvp.run_mvp_pipeline(
+        train_until_date="2026-05-10",
+        lookback_days=2,
+    )
+
+    assert requested_dates == ["2026-05-09", "2026-05-10"]
+
+    clean_files = sorted((tmp_path / "data" / "processed" / "events_clean").glob("*.parquet"))
+    pair_files = sorted((tmp_path / "data" / "processed" / "item_pairs").glob("*.parquet"))
+
+    assert [path.name for path in clean_files] == [
+        "date=2026-05-09.parquet",
+        "date=2026-05-10.parquet",
+    ]
+    assert pair_files
+
+
+def test_scan_parquet_paths_or_empty_frame_scans_existing_paths(tmp_path: Path) -> None:
+    events_clean = pl.DataFrame(
+        {
+            "user_id": [1],
+            "event_date": [date(2026, 5, 10)],
+            "timestamp": ["2026-05-10 10:00:00"],
+            "action_type": ["view"],
+            "item_id": [10],
+            "search_query": [None],
+            "widget_name": ["catalog"],
+        }
+    ).with_columns(
+        pl.col("timestamp").str.to_datetime(),
+    ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+    path = tmp_path / "date=2026-05-10.parquet"
+    events_clean.write_parquet(path)
+
+    frame = run_mvp._scan_parquet_paths_or_empty_frame(
+        [path],
+        schemas.CLEAN_EVENTS_COLUMNS,
+    )
+
+    assert isinstance(frame, pl.LazyFrame)
+    collected = frame.collect()
+    assert collected.columns == schemas.CLEAN_EVENTS_COLUMNS
+    assert collected.height == 1
+
+
+def test_load_clean_and_write_daily_events_skips_missing_dates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requested_dates: list[str] = []
+
+    def fake_load_events(**kwargs: object) -> pl.DataFrame:
+        dates = kwargs.get("dates")
+        assert isinstance(dates, list)
+        assert len(dates) == 1
+
+        partition_date = str(dates[0])
+        requested_dates.append(partition_date)
+
+        if partition_date == "2026-05-09":
+            raise FileNotFoundError("No files for selected date")
+
+        return pl.DataFrame(
+            {
+                "user_id": [1],
+                "date": [partition_date],
+                "timestamp": [f"{partition_date} 10:00:00"],
+                "action_type": ["view"],
+                "widget_name": ["catalog"],
+                "search_query": [None],
+                "item_id": [10],
+            }
+        ).with_columns(
+            pl.col("date").str.to_date(),
+            pl.col("timestamp").str.to_datetime(),
+        )
+
+    class FakeCleaner:
+        def transform_day(self, events: pl.DataFrame) -> pl.DataFrame:
+            return (
+                events.rename({"date": "event_date"})
+                .select(schemas.CLEAN_EVENTS_COLUMNS)
+            )
+
+    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+
+    paths, raw_rows, clean_rows = run_mvp._load_clean_and_write_daily_events(
+        data_config={},
+        cleaner=FakeCleaner(),
+        action_types=["view"],
+        window_start="2026-05-09",
+        window_end="2026-05-10",
+        output_dir=tmp_path / "events_clean",
+        allow_empty_input=False,
+        logger=logging.getLogger("test"),
+    )
+
+    assert requested_dates == ["2026-05-09", "2026-05-10"]
+    assert raw_rows == 1
+    assert clean_rows == 1
+    assert [path.name for path in paths] == ["date=2026-05-10.parquet"]
+    assert paths[0].exists()
