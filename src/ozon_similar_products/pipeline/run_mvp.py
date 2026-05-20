@@ -180,21 +180,6 @@ def _partition_frame_by_date_column(
     return daily_frames
 
 
-def _partition_raw_events_by_date(raw_events: pl.DataFrame) -> list[tuple[str, pl.DataFrame]]:
-    """Split raw events into date partitions."""
-    return _partition_frame_by_date_column(raw_events, "date")
-
-
-def _concat_daily_frames(
-        daily_frames: list[tuple[str, pl.DataFrame]],
-        contract_columns: Sequence[str],
-) -> pl.DataFrame:
-    """Concatenate daily frames or return an empty contract frame."""
-    if not daily_frames:
-        return empty_contract_frame(contract_columns)
-    return pl.concat([frame for _, frame in daily_frames], how="vertical")
-
-
 def _write_daily_partitions(
         daily_frames: list[tuple[str, pl.DataFrame]],
         output_dir: Path,

@@ -105,30 +105,6 @@ def test_item_action_types_rejects_unknown_or_invalid_values() -> None:
         run_mvp._item_action_types({"events": {"item_action_types": ["view", 1]}})
 
 
-def test_partition_raw_events_by_date_returns_sorted_partitions() -> None:
-    """Raw events should be split into date partitions in ascending date order."""
-    raw_events = pl.DataFrame(
-        {
-            "user_id": [1, 2, 3],
-            "date": ["2026-05-03", "2026-05-01", "2026-05-03"],
-            "timestamp": ["2026-05-03 10:00:00", "2026-05-01 10:00:00", "2026-05-03 11:00:00"],
-            "action_type": ["view", "click", "favorite"],
-            "widget_name": ["catalog", "catalog", "catalog"],
-            "search_query": [None, None, None],
-            "item_id": [10, 20, 30],
-        }
-    ).with_columns(
-        pl.col("date").str.to_date(),
-        pl.col("timestamp").str.to_datetime(),
-    )
-
-    partitions = run_mvp._partition_raw_events_by_date(raw_events)
-
-    assert [partition_date for partition_date, _ in partitions] == ["2026-05-01", "2026-05-03"]
-    assert partitions[0][1].height == 1
-    assert partitions[1][1].height == 2
-
-
 def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -987,8 +963,8 @@ def test_scan_parquet_paths_or_empty_frame_scans_existing_paths(tmp_path: Path) 
 
 
 def test_load_clean_and_write_daily_events_skips_missing_dates(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
 ) -> None:
     requested_dates: list[str] = []
 
