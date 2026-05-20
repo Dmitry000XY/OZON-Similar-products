@@ -129,3 +129,142 @@ def test_aggregate_window_rejects_invalid_window() -> None:
 
     with pytest.raises(ValueError, match="less than or equal"):
         PairAggregator().aggregate_window([], "2026-05-03", "2026-05-02")
+
+
+def test_aggregate_window_from_paths_scans_pair_parquet_files(tmp_path) -> None:
+    day1 = _pairs(
+        [
+            {
+                "pair_date": date(2026, 5, 1),
+                "item_id": 10,
+                "similar_item_id": 20,
+                "session_id": "s1",
+                "user_id": 1,
+                "source_action_type": "view",
+                "target_action_type": "view",
+                "signal_type": "view",
+            },
+            {
+                "pair_date": date(2026, 5, 1),
+                "item_id": 10,
+                "similar_item_id": 20,
+                "session_id": "s2",
+                "user_id": 2,
+                "source_action_type": "view",
+                "target_action_type": "to_cart",
+                "signal_type": "to_cart",
+            },
+        ]
+    )
+    day2 = _pairs(
+        [
+            {
+                "pair_date": date(2026, 5, 2),
+                "item_id": 10,
+                "similar_item_id": 20,
+                "session_id": "s3",
+                "user_id": 3,
+                "source_action_type": "view",
+                "target_action_type": "click",
+                "signal_type": "click",
+            },
+            {
+                "pair_date": date(2026, 5, 2),
+                "item_id": 20,
+                "similar_item_id": 10,
+                "session_id": "s3",
+                "user_id": 3,
+                "source_action_type": "click",
+                "target_action_type": "view",
+                "signal_type": "view",
+            },
+        ]
+    )
+
+    day1_path = tmp_path / "date=2026-05-01.parquet"
+    day2_path = tmp_path / "date=2026-05-02.parquet"
+    day1.write_parquet(day1_path)
+    day2.write_parquet(day2_path)
+
+    result = PairAggregator().aggregate_window_from_paths(
+        [day1_path, day2_path],
+        window_start="2026-05-01",
+        window_end="2026-05-02",
+    )
+
+    row = result.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+    ).row(0, named=True)
+
+    assert row["pair_count"] == 3
+    assert row["view_count"] == 1
+    assert row["click_count"] == 1
+    assert row["favorite_count"] == 0
+    assert row["to_cart_count"] == 1
+    assert row["unique_users"] == 3
+    assert row["unique_sessions"] == 3
+
+
+def test_aggregate_window_from_paths_returns_empty_for_no_paths() -> None:
+    result = PairAggregator().aggregate_window_from_paths(
+        [],
+        window_start="2026-05-01",
+        window_end="2026-05-02",
+    )
+
+    assert result.is_empty()
+    assert result.columns == [
+        "item_id",
+        "similar_item_id",
+        "pair_count",
+        "view_count",
+        "click_count",
+        "favorite_count",
+        "to_cart_count",
+        "unique_users",
+        "unique_sessions",
+        "window_start",
+        "window_end",
+    ]
+
+
+def test_aggregate_window_from_paths_returns_empty_when_no_pairs_in_window(tmp_path) -> None:
+    pairs = _pairs(
+        [
+            {
+                "pair_date": date(2026, 5, 1),
+                "item_id": 10,
+                "similar_item_id": 20,
+                "session_id": "s1",
+                "user_id": 1,
+                "source_action_type": "view",
+                "target_action_type": "view",
+                "signal_type": "view",
+            }
+        ]
+    )
+
+    pairs_path = tmp_path / "date=2026-05-01.parquet"
+    pairs.write_parquet(pairs_path)
+
+    result = PairAggregator().aggregate_window_from_paths(
+        [pairs_path],
+        window_start="2026-05-02",
+        window_end="2026-05-02",
+    )
+
+    assert result.is_empty()
+    assert result.columns == [
+        "item_id",
+        "similar_item_id",
+        "pair_count",
+        "view_count",
+        "click_count",
+        "favorite_count",
+        "to_cart_count",
+        "unique_users",
+        "unique_sessions",
+        "window_start",
+        "window_end",
+    ]
