@@ -463,13 +463,22 @@ def run_mvp_pipeline(
     sessions_window = session_builder.transform_window(
         [events_clean_input] if clean_event_paths else []
     )
-    logger.info("[run_mvp_pipeline] sessions window rows=%s", sessions_window.height)
+
+    sessions_rows = sessions_window.height
+    logger.info("[run_mvp_pipeline] sessions window rows=%s", sessions_rows)
     daily_sessions = _partition_frame_by_date_column(sessions_window, "event_date")
     logger.info(
         "[run_mvp_pipeline] sessions rows=%s days=%s",
-        sessions_window.height,
+        sessions_rows,
         len(daily_sessions),
     )
+
+    sessions_dir = artifacts_config.get("sessions_dir")
+    if isinstance(sessions_dir, str | Path):
+        _write_daily_partitions(
+            daily_sessions,
+            _as_path(sessions_dir, "data/processed/sessions"),
+        )
 
     logger.info("[run_mvp_pipeline] build item pairs")
     pair_builder = ItemPairBuilder.from_config(config)
@@ -493,16 +502,30 @@ def run_mvp_pipeline(
         daily_pairs_output_dir,
     )
 
+    del daily_sessions
+    del daily_sessions_for_pairs
+    del sessions_window
+
     logger.info("[run_mvp_pipeline] aggregate pairs")
     pair_aggregates = PairAggregator().aggregate_window_from_paths(
         daily_pair_paths=daily_pair_paths,
         window_start=window_start,
         window_end=window_end,
     )
+    pair_aggregates_rows = pair_aggregates.height
     logger.info(
         "[run_mvp_pipeline] pair aggregates rows=%s",
-        pair_aggregates.height,
+        pair_aggregates_rows,
     )
+
+    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
+    if isinstance(pair_aggregates_dir, str | Path):
+        _write_window_artifact(
+            frame=pair_aggregates,
+            output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
+            window_start=window_start,
+            window_end=window_end,
+        )
 
     logger.info("[run_mvp_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
@@ -512,11 +535,34 @@ def run_mvp_pipeline(
         calibration_start=window_start,
         calibration_end=window_end,
     )
+    item_popularity_rows = item_popularity.height
+    action_distribution_rows = action_distribution.height
     logger.info(
         "[run_mvp_pipeline] item popularity rows=%s action_distribution rows=%s",
-        item_popularity.height,
-        action_distribution.height,
+        item_popularity_rows,
+        action_distribution_rows,
     )
+
+    item_popularity_dir = artifacts_config.get("item_popularity_dir")
+    if isinstance(item_popularity_dir, str | Path):
+        _write_window_artifact(
+            frame=item_popularity,
+            output_dir=_as_path(item_popularity_dir, "data/processed/item_popularity"),
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+    action_type_distribution_dir = artifacts_config.get("action_type_distribution_dir")
+    if isinstance(action_type_distribution_dir, str | Path):
+        _write_window_artifact(
+            frame=action_distribution,
+            output_dir=_as_path(
+                action_type_distribution_dir,
+                "data/processed/action_type_distribution",
+            ),
+            window_start=window_start,
+            window_end=window_end,
+        )
 
     logger.info("[run_mvp_pipeline] score pairs")
     scorer = CoVisitationScorer.from_config(config)
@@ -525,13 +571,20 @@ def run_mvp_pipeline(
         if derived_action_shares is not None:
             scorer = replace(scorer, action_shares=derived_action_shares)
 
+    del action_distribution
+
     if scorer.normalize_by_item_popularity:
         pair_scores = scorer.score(pair_aggregates, item_popularity=item_popularity)
     else:
         pair_scores = scorer.score(pair_aggregates)
+
+    pair_scores_rows = pair_scores.height
+    del pair_aggregates
+    del item_popularity
+
     logger.info(
         "[run_mvp_pipeline] pair scores rows=%s calibration_used=%s",
-        pair_scores.height,
+        pair_scores_rows,
         scorer.action_shares is not None,
     )
 
@@ -553,45 +606,15 @@ def run_mvp_pipeline(
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
     )
     recommendations = selector.select(pair_scores)
-    if recommendations.is_empty():
+    del pair_scores
+
+    recommendations_rows = recommendations.height
+    if recommendations_rows == 0:
         logger.warning("[run_mvp_pipeline] recommendations empty")
     logger.info(
         "[run_mvp_pipeline] recommendations rows=%s",
-        recommendations.height,
+        recommendations_rows,
     )
-
-    sessions_dir = artifacts_config.get("sessions_dir")
-    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
-    item_popularity_dir = artifacts_config.get("item_popularity_dir")
-    action_type_distribution_dir = artifacts_config.get("action_type_distribution_dir")
-
-    logger.info("[run_mvp_pipeline] write artifacts")
-    if isinstance(sessions_dir, str | Path):
-        _write_daily_partitions(daily_sessions, _as_path(sessions_dir, "data/processed/sessions"))
-    if isinstance(pair_aggregates_dir, str | Path):
-        _write_window_artifact(
-            frame=pair_aggregates,
-            output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
-            window_start=window_start,
-            window_end=window_end,
-        )
-    if isinstance(item_popularity_dir, str | Path):
-        _write_window_artifact(
-            frame=item_popularity,
-            output_dir=_as_path(item_popularity_dir, "data/processed/item_popularity"),
-            window_start=window_start,
-            window_end=window_end,
-        )
-    if isinstance(action_type_distribution_dir, str | Path):
-        _write_window_artifact(
-            frame=action_distribution,
-            output_dir=_as_path(
-                action_type_distribution_dir,
-                "data/processed/action_type_distribution",
-            ),
-            window_start=window_start,
-            window_end=window_end,
-        )
 
     detailed_dir = outputs_config.get("detailed_recommendations_dir", "outputs/recommendations/detailed")
     widget_dir = outputs_config.get("widget_recommendations_dir", "outputs/recommendations/widget")
@@ -614,6 +637,8 @@ def run_mvp_pipeline(
     detailed_path = writer.save_detailed(recommendations, run_dir / detailed_subdir)
     widget_path = writer.save_widget_format(recommendations, run_dir / widget_subdir)
 
+    del recommendations
+
     detailed_relative_path = detailed_path.relative_to(run_dir).as_posix()
     widget_relative_path = widget_path.relative_to(run_dir).as_posix()
     manifest = {
@@ -635,17 +660,17 @@ def run_mvp_pipeline(
         "rows": {
             "raw_events": raw_events_rows,
             "clean_events": clean_events_rows,
-            "sessions": sessions_window.height,
+            "sessions": sessions_rows,
             "daily_pairs": daily_pairs_rows,
-            "pair_aggregates": pair_aggregates.height,
-            "pair_scores": pair_scores.height,
-            "recommendations": recommendations.height,
+            "pair_aggregates": pair_aggregates_rows,
+            "pair_scores": pair_scores_rows,
+            "recommendations": recommendations_rows,
         },
     }
     run_manifest_path = writer.save_manifest(manifest, run_dir)
-    if recommendations.height > 0 or allow_empty_latest_update:
+    if recommendations_rows > 0 or allow_empty_latest_update:
         writer.update_latest_manifest(run_manifest_path, latest_dir)
-    elif recommendations.is_empty():
+    elif recommendations_rows == 0:
         logger.warning(
             "[run_mvp_pipeline] latest manifest not updated (empty recommendations, allow_empty_latest_update=%s)",
             allow_empty_latest_update,
