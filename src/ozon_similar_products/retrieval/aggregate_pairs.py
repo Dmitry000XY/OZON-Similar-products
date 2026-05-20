@@ -1,5 +1,6 @@
 """Aggregate daily multichannel item pairs over a rolling window."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -121,7 +122,7 @@ class PairAggregator:
 
     @staticmethod
     def aggregate_window_from_paths(
-            daily_pair_paths: list[str | Path],
+            daily_pair_paths: Sequence[str | Path],
             window_start: str,
             window_end: str,
     ) -> pl.DataFrame:

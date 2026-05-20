@@ -213,7 +213,7 @@ def _scan_parquet_paths_or_empty_frame(
 
 def _load_clean_and_write_daily_events(
         *,
-        data_config: Mapping[str, Any],
+        data_config: dict[str, Any],
         cleaner: EventCleaner,
         action_types: Sequence[str],
         window_start: str,

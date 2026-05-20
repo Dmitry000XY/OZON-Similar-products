@@ -1005,7 +1005,7 @@ def test_load_clean_and_write_daily_events_skips_missing_dates(
 
     paths, raw_rows, clean_rows = run_mvp._load_clean_and_write_daily_events(
         data_config={},
-        cleaner=FakeCleaner(),
+        cleaner=cast(run_mvp.EventCleaner, FakeCleaner()),
         action_types=["view"],
         window_start="2026-05-09",
         window_end="2026-05-10",
