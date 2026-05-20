@@ -1,10 +1,10 @@
 """Tests for MVP pipeline orchestration."""
 
 import logging
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import cast
-from datetime import date
-from dataclasses import dataclass
 
 import polars as pl
 import pytest
