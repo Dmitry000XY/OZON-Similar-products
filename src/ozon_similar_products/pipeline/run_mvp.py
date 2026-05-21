@@ -145,9 +145,22 @@ def _window_bounds(train_until_date: str, lookback_days: int) -> tuple[str, str]
     return window_start.isoformat(), window_end.isoformat()
 
 
+def _date_range_strings(window_start: str, window_end: str) -> list[str]:
+    """Return inclusive ISO date strings between two window boundaries."""
+    start = _parse_iso_date(window_start, "window_start")
+    end = _parse_iso_date(window_end, "window_end")
+    if start > end:
+        raise ValueError("window_start must be less than or equal to window_end")
+
+    return [
+        (start + timedelta(days=offset)).isoformat()
+        for offset in range((end - start).days + 1)
+    ]
+
+
 def _partition_frame_by_date_column(
-    frame: pl.DataFrame,
-    date_column: str,
+        frame: pl.DataFrame,
+        date_column: str,
 ) -> list[tuple[str, pl.DataFrame]]:
     """Split a frame into sorted partitions by a date-like column."""
     if frame.is_empty():
@@ -167,24 +180,9 @@ def _partition_frame_by_date_column(
     return daily_frames
 
 
-def _partition_raw_events_by_date(raw_events: pl.DataFrame) -> list[tuple[str, pl.DataFrame]]:
-    """Split raw events into date partitions."""
-    return _partition_frame_by_date_column(raw_events, "date")
-
-
-def _concat_daily_frames(
-    daily_frames: list[tuple[str, pl.DataFrame]],
-    contract_columns: Sequence[str],
-) -> pl.DataFrame:
-    """Concatenate daily frames or return an empty contract frame."""
-    if not daily_frames:
-        return empty_contract_frame(contract_columns)
-    return pl.concat([frame for _, frame in daily_frames], how="vertical")
-
-
 def _write_daily_partitions(
-    daily_frames: list[tuple[str, pl.DataFrame]],
-    output_dir: Path,
+        daily_frames: list[tuple[str, pl.DataFrame]],
+        output_dir: Path,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     for partition_date, frame in daily_frames:
@@ -192,10 +190,10 @@ def _write_daily_partitions(
 
 
 def _write_window_artifact(
-    frame: pl.DataFrame,
-    output_dir: Path,
-    window_start: str,
-    window_end: str,
+        frame: pl.DataFrame,
+        output_dir: Path,
+        window_start: str,
+        window_end: str,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"window_start={window_start}_window_end={window_end}.parquet"
@@ -203,8 +201,136 @@ def _write_window_artifact(
     return output_path
 
 
+def _scan_parquet_paths_or_empty_frame(
+        paths: Sequence[Path],
+        contract_columns: Sequence[str],
+) -> pl.DataFrame | pl.LazyFrame:
+    """Scan parquet paths lazily or return an empty eager contract frame."""
+    if not paths:
+        return empty_contract_frame(contract_columns)
+    return pl.scan_parquet([path.as_posix() for path in paths])
+
+
+def _load_clean_and_write_daily_events(
+        *,
+        data_config: dict[str, Any],
+        cleaner: EventCleaner,
+        action_types: Sequence[str],
+        window_start: str,
+        window_end: str,
+        output_dir: Path,
+        allow_empty_input: bool,
+        logger: logging.Logger,
+) -> tuple[list[Path], int, int]:
+    """Load raw events day by day, clean each day and write clean-event artifacts.
+
+    This avoids materializing the whole raw-events window in memory. Missing
+    dates are skipped, but if the whole window is missing and empty input is not
+    allowed, the function fails with a clear error.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    clean_event_paths: list[Path] = []
+    raw_events_rows = 0
+    clean_events_rows = 0
+    last_missing_error: FileNotFoundError | None = None
+    missing_dates: list[str] = []
+
+    for partition_date in _date_range_strings(window_start, window_end):
+        try:
+            raw_day = load_events(
+                config=data_config,
+                use_sample=False,
+                dates=[partition_date],
+                action_types=action_types,
+            )
+        except FileNotFoundError as error:
+            last_missing_error = error
+            missing_dates.append(partition_date)
+            continue
+
+        raw_events_rows += raw_day.height
+
+        clean_day = cleaner.transform_day(raw_day)
+        clean_events_rows += clean_day.height
+
+        output_path = output_dir / f"date={partition_date}.parquet"
+        clean_day.write_parquet(output_path)
+        clean_event_paths.append(output_path)
+
+    if not clean_event_paths:
+        if not allow_empty_input:
+            raise FileNotFoundError(
+                "Input events were not found for run_mvp_pipeline: "
+                f"date_window=[{window_start}..{window_end}], "
+                f"action_types={list(action_types)}, "
+                f"allow_empty_input={allow_empty_input}. "
+                f"Missing dates: {missing_dates}"
+            ) from last_missing_error
+
+        logger.warning(
+            "[run_mvp_pipeline] missing raw events; continuing with empty input "
+            "allow_empty_input=%s",
+            allow_empty_input,
+        )
+
+    return clean_event_paths, raw_events_rows, clean_events_rows
+
+
+def _partition_sessions_by_session_start_date(
+        sessions: pl.DataFrame,
+) -> list[tuple[str, pl.DataFrame]]:
+    """Split sessions into partitions by each session's start date.
+
+    This keeps cross-midnight sessions together. A session that starts before
+    midnight and continues after midnight should be assigned to the day on which
+    the session started.
+    """
+    if sessions.is_empty():
+        return []
+
+    sessions_with_start_date = sessions.with_columns(
+        pl.col("event_date")
+        .min()
+        .over(["user_id", "session_id"])
+        .alias("_session_start_date")
+    )
+
+    partitions = _partition_frame_by_date_column(
+        sessions_with_start_date,
+        "_session_start_date",
+    )
+
+    return [
+        (partition_date, partition_frame.select(schemas.SESSIONS_COLUMNS))
+        for partition_date, partition_frame in partitions
+    ]
+
+
+def _build_and_write_daily_pairs(
+        pair_builder: ItemPairBuilder,
+        daily_sessions: list[tuple[str, pl.DataFrame]],
+        output_dir: Path,
+) -> tuple[list[Path], int]:
+    """Build daily item-pair artifacts and write each partition immediately."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    daily_pair_paths: list[Path] = []
+    total_rows = 0
+
+    for partition_date, sessions in daily_sessions:
+        pairs = pair_builder.transform_day(sessions)
+        total_rows += pairs.height
+
+        output_path = output_dir / f"date={partition_date}.parquet"
+        pairs.write_parquet(output_path)
+        daily_pair_paths.append(output_path)
+
+    return daily_pair_paths, total_rows
+
+
 def _action_shares_from_distribution(
-    distribution: pl.DataFrame,
+        distribution: pl.DataFrame,
 ) -> dict[str, float] | None:
     if distribution.is_empty():
         return None
@@ -244,9 +370,9 @@ def _relative_or_name(path: Path, root: Path) -> Path:
 
 
 def run_mvp_pipeline(
-    train_until_date: str,
-    lookback_days: int,
-    config_path: str | Path = "configs/baseline.yaml",
+        train_until_date: str,
+        lookback_days: int,
+        config_path: str | Path = "configs/baseline.yaml",
 ) -> None:
     """Run full MVP pipeline over a rolling window.
 
@@ -293,105 +419,150 @@ def run_mvp_pipeline(
     )
 
     data_config = load_configs(project_root=PROJECT_ROOT)
-    try:
-        logger.info("[run_mvp_pipeline] load raw events")
-        raw_events = load_events(
-            config=data_config,
-            use_sample=False,
-            start_date=window_start,
-            end_date=window_end,
-            action_types=action_types,
-        )
-    except FileNotFoundError as error:
-        if not allow_empty_input:
-            raise FileNotFoundError(
-                "Input events were not found for run_mvp_pipeline: "
-                f"date_window=[{window_start}..{window_end}], "
-                f"action_types={action_types}, "
-                f"allow_empty_input={allow_empty_input}. "
-                f"Original error: {error}"
-            ) from error
-        raw_events = empty_contract_frame(schemas.RAW_EVENTS_COLUMNS)
-        logger.warning(
-            "[run_mvp_pipeline] missing raw events; continuing with empty input allow_empty_input=%s",
-            allow_empty_input,
-        )
-    if raw_events.is_empty():
+    cleaner = EventCleaner(item_action_types=action_types)
+    events_clean_output_dir = _as_path(
+        artifacts_config.get("events_clean_dir"),
+        "data/processed/events_clean",
+    )
+
+    logger.info("[run_mvp_pipeline] load and clean raw events by day")
+    clean_event_paths, raw_events_rows, clean_events_rows = _load_clean_and_write_daily_events(
+        data_config=data_config,
+        cleaner=cleaner,
+        action_types=action_types,
+        window_start=window_start,
+        window_end=window_end,
+        output_dir=events_clean_output_dir,
+        allow_empty_input=allow_empty_input,
+        logger=logger,
+    )
+
+    if raw_events_rows == 0:
         logger.warning(
             "[run_mvp_pipeline] raw events empty for window=%s..%s",
             window_start,
             window_end,
         )
-    daily_raw_events = _partition_raw_events_by_date(raw_events)
+
     logger.info(
-        "[run_mvp_pipeline] raw events loaded rows=%s days=%s",
-        raw_events.height,
-        len(daily_raw_events),
+        "[run_mvp_pipeline] raw events loaded rows=%s clean events rows=%s days=%s output_dir=%s",
+        raw_events_rows,
+        clean_events_rows,
+        len(clean_event_paths),
+        events_clean_output_dir,
     )
 
-    logger.info("[run_mvp_pipeline] clean events")
-    cleaner = EventCleaner(item_action_types=action_types)
-    daily_clean_events = [
-        (partition_date, cleaner.transform_day(events))
-        for partition_date, events in daily_raw_events
-    ]
-    events_clean_window = _concat_daily_frames(daily_clean_events, schemas.CLEAN_EVENTS_COLUMNS)
-    logger.info(
-        "[run_mvp_pipeline] clean events rows=%s days=%s",
-        events_clean_window.height,
-        len(daily_clean_events),
+    events_clean_input = _scan_parquet_paths_or_empty_frame(
+        clean_event_paths,
+        schemas.CLEAN_EVENTS_COLUMNS,
     )
 
     logger.info("[run_mvp_pipeline] build sessions")
     session_builder = SessionBuilder.from_config(config)
     logger.info("[run_mvp_pipeline] session builder config=%s", session_builder)
     sessions_window = session_builder.transform_window(
-        [events_clean for _, events_clean in daily_clean_events]
+        [events_clean_input] if clean_event_paths else []
     )
-    logger.info("[run_mvp_pipeline] sessions window rows=%s", sessions_window.height)
+
+    sessions_rows = sessions_window.height
+    logger.info("[run_mvp_pipeline] sessions window rows=%s", sessions_rows)
     daily_sessions = _partition_frame_by_date_column(sessions_window, "event_date")
     logger.info(
         "[run_mvp_pipeline] sessions rows=%s days=%s",
-        sessions_window.height,
+        sessions_rows,
         len(daily_sessions),
     )
+
+    sessions_dir = artifacts_config.get("sessions_dir")
+    if isinstance(sessions_dir, str | Path):
+        _write_daily_partitions(
+            daily_sessions,
+            _as_path(sessions_dir, "data/processed/sessions"),
+        )
 
     logger.info("[run_mvp_pipeline] build item pairs")
     pair_builder = ItemPairBuilder.from_config(config)
     logger.info("[run_mvp_pipeline] pair builder config=%s", pair_builder)
-    pairs_window = pair_builder.transform_day(sessions_window)
-    logger.info("[run_mvp_pipeline] pairs window rows=%s", pairs_window.height)
-    daily_pairs = _partition_frame_by_date_column(pairs_window, "pair_date")
-    logger.info(
-        "[run_mvp_pipeline] daily item pairs rows=%s days=%s",
-        pairs_window.height,
-        len(daily_pairs),
+
+    daily_sessions_for_pairs = _partition_sessions_by_session_start_date(sessions_window)
+    daily_pairs_output_dir = _as_path(
+        artifacts_config.get("daily_pairs_dir"),
+        "data/processed/item_pairs",
+    )
+    daily_pair_paths, daily_pairs_rows = _build_and_write_daily_pairs(
+        pair_builder=pair_builder,
+        daily_sessions=daily_sessions_for_pairs,
+        output_dir=daily_pairs_output_dir,
     )
 
+    logger.info(
+        "[run_mvp_pipeline] daily item pairs rows=%s days=%s output_dir=%s",
+        daily_pairs_rows,
+        len(daily_pair_paths),
+        daily_pairs_output_dir,
+    )
+
+    del daily_sessions
+    del daily_sessions_for_pairs
+    del sessions_window
+
     logger.info("[run_mvp_pipeline] aggregate pairs")
-    pair_aggregates = PairAggregator().aggregate_window(
-        daily_pairs=[pairs for _, pairs in daily_pairs],
+    pair_aggregates = PairAggregator().aggregate_window_from_paths(
+        daily_pair_paths=daily_pair_paths,
         window_start=window_start,
         window_end=window_end,
     )
+    pair_aggregates_rows = pair_aggregates.height
     logger.info(
         "[run_mvp_pipeline] pair aggregates rows=%s",
-        pair_aggregates.height,
+        pair_aggregates_rows,
     )
+
+    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
+    if isinstance(pair_aggregates_dir, str | Path):
+        _write_window_artifact(
+            frame=pair_aggregates,
+            output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
+            window_start=window_start,
+            window_end=window_end,
+        )
 
     logger.info("[run_mvp_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
-    item_popularity = popularity_builder.build_item_popularity(events_clean_window)
+    item_popularity = popularity_builder.build_item_popularity(events_clean_input)
     action_distribution = popularity_builder.build_action_type_calibration_stats(
-        events_clean_window,
+        events_clean_input,
         calibration_start=window_start,
         calibration_end=window_end,
     )
+    item_popularity_rows = item_popularity.height
+    action_distribution_rows = action_distribution.height
     logger.info(
         "[run_mvp_pipeline] item popularity rows=%s action_distribution rows=%s",
-        item_popularity.height,
-        action_distribution.height,
+        item_popularity_rows,
+        action_distribution_rows,
     )
+
+    item_popularity_dir = artifacts_config.get("item_popularity_dir")
+    if isinstance(item_popularity_dir, str | Path):
+        _write_window_artifact(
+            frame=item_popularity,
+            output_dir=_as_path(item_popularity_dir, "data/processed/item_popularity"),
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+    action_type_distribution_dir = artifacts_config.get("action_type_distribution_dir")
+    if isinstance(action_type_distribution_dir, str | Path):
+        _write_window_artifact(
+            frame=action_distribution,
+            output_dir=_as_path(
+                action_type_distribution_dir,
+                "data/processed/action_type_distribution",
+            ),
+            window_start=window_start,
+            window_end=window_end,
+        )
 
     logger.info("[run_mvp_pipeline] score pairs")
     scorer = CoVisitationScorer.from_config(config)
@@ -400,13 +571,20 @@ def run_mvp_pipeline(
         if derived_action_shares is not None:
             scorer = replace(scorer, action_shares=derived_action_shares)
 
+    del action_distribution
+
     if scorer.normalize_by_item_popularity:
         pair_scores = scorer.score(pair_aggregates, item_popularity=item_popularity)
     else:
         pair_scores = scorer.score(pair_aggregates)
+
+    pair_scores_rows = pair_scores.height
+    del pair_aggregates
+    del item_popularity
+
     logger.info(
         "[run_mvp_pipeline] pair scores rows=%s calibration_used=%s",
-        pair_scores.height,
+        pair_scores_rows,
         scorer.action_shares is not None,
     )
 
@@ -428,51 +606,15 @@ def run_mvp_pipeline(
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
     )
     recommendations = selector.select(pair_scores)
-    if recommendations.is_empty():
+    del pair_scores
+
+    recommendations_rows = recommendations.height
+    if recommendations_rows == 0:
         logger.warning("[run_mvp_pipeline] recommendations empty")
     logger.info(
         "[run_mvp_pipeline] recommendations rows=%s",
-        recommendations.height,
+        recommendations_rows,
     )
-
-    events_clean_dir = artifacts_config.get("events_clean_dir")
-    sessions_dir = artifacts_config.get("sessions_dir")
-    daily_pairs_dir = artifacts_config.get("daily_pairs_dir")
-    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
-    item_popularity_dir = artifacts_config.get("item_popularity_dir")
-    action_type_distribution_dir = artifacts_config.get("action_type_distribution_dir")
-
-    logger.info("[run_mvp_pipeline] write artifacts")
-    if isinstance(events_clean_dir, str | Path):
-        _write_daily_partitions(daily_clean_events, _as_path(events_clean_dir, "data/processed/events_clean"))
-    if isinstance(sessions_dir, str | Path):
-        _write_daily_partitions(daily_sessions, _as_path(sessions_dir, "data/processed/sessions"))
-    if isinstance(daily_pairs_dir, str | Path):
-        _write_daily_partitions(daily_pairs, _as_path(daily_pairs_dir, "data/processed/item_pairs"))
-    if isinstance(pair_aggregates_dir, str | Path):
-        _write_window_artifact(
-            frame=pair_aggregates,
-            output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
-            window_start=window_start,
-            window_end=window_end,
-        )
-    if isinstance(item_popularity_dir, str | Path):
-        _write_window_artifact(
-            frame=item_popularity,
-            output_dir=_as_path(item_popularity_dir, "data/processed/item_popularity"),
-            window_start=window_start,
-            window_end=window_end,
-        )
-    if isinstance(action_type_distribution_dir, str | Path):
-        _write_window_artifact(
-            frame=action_distribution,
-            output_dir=_as_path(
-                action_type_distribution_dir,
-                "data/processed/action_type_distribution",
-            ),
-            window_start=window_start,
-            window_end=window_end,
-        )
 
     detailed_dir = outputs_config.get("detailed_recommendations_dir", "outputs/recommendations/detailed")
     widget_dir = outputs_config.get("widget_recommendations_dir", "outputs/recommendations/widget")
@@ -495,6 +637,8 @@ def run_mvp_pipeline(
     detailed_path = writer.save_detailed(recommendations, run_dir / detailed_subdir)
     widget_path = writer.save_widget_format(recommendations, run_dir / widget_subdir)
 
+    del recommendations
+
     detailed_relative_path = detailed_path.relative_to(run_dir).as_posix()
     widget_relative_path = widget_path.relative_to(run_dir).as_posix()
     manifest = {
@@ -514,19 +658,19 @@ def run_mvp_pipeline(
             "widget_recommendations_path": widget_relative_path,
         },
         "rows": {
-            "raw_events": raw_events.height,
-            "clean_events": events_clean_window.height,
-            "sessions": sessions_window.height,
-            "daily_pairs": pairs_window.height,
-            "pair_aggregates": pair_aggregates.height,
-            "pair_scores": pair_scores.height,
-            "recommendations": recommendations.height,
+            "raw_events": raw_events_rows,
+            "clean_events": clean_events_rows,
+            "sessions": sessions_rows,
+            "daily_pairs": daily_pairs_rows,
+            "pair_aggregates": pair_aggregates_rows,
+            "pair_scores": pair_scores_rows,
+            "recommendations": recommendations_rows,
         },
     }
     run_manifest_path = writer.save_manifest(manifest, run_dir)
-    if recommendations.height > 0 or allow_empty_latest_update:
+    if recommendations_rows > 0 or allow_empty_latest_update:
         writer.update_latest_manifest(run_manifest_path, latest_dir)
-    elif recommendations.is_empty():
+    elif recommendations_rows == 0:
         logger.warning(
             "[run_mvp_pipeline] latest manifest not updated (empty recommendations, allow_empty_latest_update=%s)",
             allow_empty_latest_update,

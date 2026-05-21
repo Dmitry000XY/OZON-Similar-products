@@ -107,8 +107,8 @@ class ItemPairBuilder:
             raise TypeError("events.item_action_types must be a string or a sequence of strings")
 
         if not item_action_types or any(
-            not isinstance(action_type, str) or not action_type.strip()
-            for action_type in item_action_types
+                not isinstance(action_type, str) or not action_type.strip()
+                for action_type in item_action_types
         ):
             raise ValueError(
                 "events.item_action_types must contain non-empty string values"
@@ -133,14 +133,16 @@ class ItemPairBuilder:
         session_items = self._build_session_items(sessions)
         valid_sessions = self._build_valid_sessions(session_items)
 
+        valid_session_items = session_items.join(
+            valid_sessions,
+            on=["user_id", "session_id"],
+            how="inner",
+        )
+
         pairs = (
-            session_items.join(
-                valid_sessions,
-                on=["user_id", "session_id"],
-                how="inner",
-            )
+            valid_session_items
             .join(
-                session_items,
+                valid_session_items,
                 on=["user_id", "session_id"],
                 how="inner",
                 suffix="_similar",
