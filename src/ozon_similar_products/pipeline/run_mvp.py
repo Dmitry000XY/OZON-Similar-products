@@ -310,6 +310,45 @@ class DailyPairStatsPaths:
     raw_pair_rows: int
 
 
+def _merge_daily_pair_counts(
+        existing: pl.DataFrame,
+        new: pl.DataFrame,
+) -> pl.DataFrame:
+    merged = pl.concat([existing, new], how="vertical")
+    if merged.is_empty():
+        return empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+
+    return (
+        merged.group_by(["pair_date", "item_id", "similar_item_id"])
+        .agg(
+            pl.col("pair_count").sum().alias("pair_count"),
+            pl.col("view_count").sum().alias("view_count"),
+            pl.col("click_count").sum().alias("click_count"),
+            pl.col("favorite_count").sum().alias("favorite_count"),
+            pl.col("to_cart_count").sum().alias("to_cart_count"),
+        )
+        .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+        .sort(["pair_date", "item_id", "similar_item_id"])
+    )
+
+
+def _merge_daily_pair_keys(
+        existing: pl.DataFrame,
+        new: pl.DataFrame,
+        columns: Sequence[str],
+        sort_columns: Sequence[str],
+) -> pl.DataFrame:
+    merged = pl.concat([existing, new], how="vertical")
+    if merged.is_empty():
+        return empty_contract_frame(columns)
+
+    return (
+        merged.select(columns)
+        .unique()
+        .sort(sort_columns)
+    )
+
+
 def _write_daily_pair_stats(
         *,
         stats: DailyPairStats,
@@ -329,10 +368,33 @@ def _write_daily_pair_stats(
     user_key_path = user_keys_dir / f"date={partition_date}.parquet"
     session_key_path = session_keys_dir / f"date={partition_date}.parquet"
 
-    stats.counts.write_parquet(count_path)
-    stats.user_keys.write_parquet(user_key_path)
-    stats.session_keys.write_parquet(session_key_path)
+    counts = stats.counts
+    user_keys = stats.user_keys
+    session_keys = stats.session_keys
 
+    if count_path.exists():
+        counts = _merge_daily_pair_counts(
+            pl.read_parquet(count_path),
+            counts,
+        )
+    if user_key_path.exists():
+        user_keys = _merge_daily_pair_keys(
+            pl.read_parquet(user_key_path),
+            user_keys,
+            schemas.DAILY_PAIR_USER_KEYS_COLUMNS,
+            ["pair_date", "item_id", "similar_item_id", "user_id"],
+        )
+    if session_key_path.exists():
+        session_keys = _merge_daily_pair_keys(
+            pl.read_parquet(session_key_path),
+            session_keys,
+            schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS,
+            ["pair_date", "item_id", "similar_item_id", "user_id", "session_index"],
+        )
+
+    counts.write_parquet(count_path)
+    user_keys.write_parquet(user_key_path)
+    session_keys.write_parquet(session_key_path)
     return count_path, user_key_path, session_key_path
 
 
@@ -368,6 +430,303 @@ def _build_and_write_daily_pair_stats(
         count_paths=count_paths,
         user_key_paths=user_key_paths,
         session_key_paths=session_key_paths,
+        raw_pair_rows=raw_pair_rows,
+    )
+
+
+def _empty_session_index_state() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "user_id": pl.Series([], dtype=pl.Int64),
+            "max_session_index": pl.Series([], dtype=pl.Int64),
+        }
+    )
+
+
+def _empty_active_session_offsets() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "user_id": pl.Series([], dtype=pl.Int64),
+            "active_session_index": pl.Series([], dtype=pl.Int64),
+        }
+    )
+
+
+def _sessions_to_clean_events(sessions: pl.DataFrame) -> pl.DataFrame:
+    """Convert active session rows back to clean-event shape for carry-over."""
+    if sessions.is_empty():
+        return empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
+
+    return (
+        sessions.select(
+            "user_id",
+            "event_date",
+            "timestamp",
+            "action_type",
+            "item_id",
+        )
+        .with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("search_query"),
+            pl.lit(None, dtype=pl.Utf8).alias("widget_name"),
+        )
+        .select(schemas.CLEAN_EVENTS_COLUMNS)
+    )
+
+
+def _session_index_offsets(
+        max_session_indices: pl.DataFrame,
+        active_session_indices: pl.DataFrame,
+) -> pl.DataFrame:
+    """Build per-user offsets for relative session indices in the next chunk."""
+    offset_frames: list[pl.DataFrame] = []
+
+    if not max_session_indices.is_empty():
+        offset_frames.append(
+            max_session_indices.select(
+                "user_id",
+                pl.col("max_session_index").alias("session_index_offset"),
+            )
+        )
+
+    if not active_session_indices.is_empty():
+        offset_frames.append(
+            active_session_indices.select(
+                "user_id",
+                (pl.col("active_session_index") - 1).alias("session_index_offset"),
+            )
+        )
+
+    if not offset_frames:
+        return pl.DataFrame(
+            {
+                "user_id": pl.Series([], dtype=pl.Int64),
+                "session_index_offset": pl.Series([], dtype=pl.Int64),
+            }
+        )
+
+    return (
+        pl.concat(offset_frames, how="vertical")
+        .unique(subset=["user_id"], keep="last", maintain_order=True)
+    )
+
+
+def _apply_session_index_offsets(
+        sessions: pl.DataFrame,
+        offsets: pl.DataFrame,
+) -> pl.DataFrame:
+    if sessions.is_empty() or offsets.is_empty():
+        return sessions.select(schemas.SESSIONS_COLUMNS)
+
+    return (
+        sessions.join(offsets, on="user_id", how="left")
+        .with_columns(
+            (
+                    pl.col("session_index")
+                    + pl.col("session_index_offset").fill_null(0)
+            )
+            .cast(pl.Int64)
+            .alias("session_index")
+        )
+        .drop("session_index_offset")
+        .select(schemas.SESSIONS_COLUMNS)
+    )
+
+
+def _update_max_session_indices(
+        current: pl.DataFrame,
+        sessions: pl.DataFrame,
+) -> pl.DataFrame:
+    if sessions.is_empty():
+        return current
+
+    updates = sessions.group_by("user_id").agg(
+        pl.col("session_index").max().alias("max_session_index")
+    )
+
+    if current.is_empty():
+        return updates.sort("user_id")
+
+    return (
+        pl.concat([current, updates], how="vertical")
+        .group_by("user_id")
+        .agg(pl.col("max_session_index").max().alias("max_session_index"))
+        .sort("user_id")
+    )
+
+
+def _split_completed_and_active_sessions(
+        sessions: pl.DataFrame,
+        partition_date: str,
+        timeout_minutes: int,
+        is_final_partition: bool,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Split sessions into flushable completed rows and active carry-over rows."""
+    if sessions.is_empty():
+        empty = empty_contract_frame(schemas.SESSIONS_COLUMNS)
+        return empty, empty
+
+    if is_final_partition:
+        return sessions.select(schemas.SESSIONS_COLUMNS), empty_contract_frame(
+            schemas.SESSIONS_COLUMNS
+        )
+
+    day_end = datetime.fromisoformat(partition_date) + timedelta(days=1)
+    cutoff = day_end - timedelta(minutes=timeout_minutes)
+
+    session_last_seen = sessions.group_by(["user_id", "session_index"]).agg(
+        pl.col("timestamp").max().alias("__session_last_timestamp")
+    )
+
+    sessions_with_last_seen = sessions.join(
+        session_last_seen,
+        on=["user_id", "session_index"],
+        how="left",
+    )
+
+    completed = (
+        sessions_with_last_seen
+        .filter(pl.col("__session_last_timestamp") <= cutoff)
+        .drop("__session_last_timestamp")
+        .select(schemas.SESSIONS_COLUMNS)
+    )
+    active = (
+        sessions_with_last_seen
+        .filter(pl.col("__session_last_timestamp") > cutoff)
+        .drop("__session_last_timestamp")
+        .select(schemas.SESSIONS_COLUMNS)
+    )
+
+    return completed, active
+
+
+def _append_daily_session_partitions(
+        sessions: pl.DataFrame,
+        output_dir: Path,
+) -> None:
+    """Append completed sessions into event-date partitions."""
+    if sessions.is_empty():
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for partition_date, frame in _partition_frame_by_date_column(sessions, "event_date"):
+        output_path = output_dir / f"date={partition_date}.parquet"
+        frame_to_write = frame.select(schemas.SESSIONS_COLUMNS)
+
+        if output_path.exists():
+            frame_to_write = (
+                pl.concat([pl.read_parquet(output_path), frame_to_write], how="vertical")
+                .unique(maintain_order=True)
+                .sort(["user_id", "timestamp", "item_id", "action_type"])
+                .select(schemas.SESSIONS_COLUMNS)
+            )
+
+        frame_to_write.write_parquet(output_path)
+
+def _unique_paths(paths: Sequence[Path]) -> list[Path]:
+    return list(dict.fromkeys(paths))
+
+
+def _build_streaming_sessions_and_pair_stats(
+        *,
+        clean_event_paths: Sequence[Path],
+        session_builder: SessionBuilder,
+        pair_builder: ItemPairBuilder,
+        daily_pairs_output_dir: Path,
+        sessions_output_dir: Path | None,
+) -> tuple[int, DailyPairStatsPaths]:
+    """Stream clean-event partitions into sessions and compact pair stats.
+
+    The helper carries only unfinished active session tails between daily
+    partitions. Completed sessions are flushed to artifacts and immediately used
+    to build compact daily pair stats.
+    """
+    if not clean_event_paths:
+        return 0, DailyPairStatsPaths(
+            count_paths=[],
+            user_key_paths=[],
+            session_key_paths=[],
+            raw_pair_rows=0,
+        )
+
+    count_paths: list[Path] = []
+    user_key_paths: list[Path] = []
+    session_key_paths: list[Path] = []
+    raw_pair_rows = 0
+    sessions_rows = 0
+
+    active_clean_events = empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
+    active_sessions = empty_contract_frame(schemas.SESSIONS_COLUMNS)
+    max_session_indices = _empty_session_index_state()
+
+    sorted_clean_event_paths = sorted(clean_event_paths)
+
+    for index, clean_event_path in enumerate(sorted_clean_event_paths):
+        partition_date = clean_event_path.stem.removeprefix("date=")
+        is_final_partition = index == len(sorted_clean_event_paths) - 1
+
+        clean_day = pl.read_parquet(clean_event_path).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+        if active_clean_events.is_empty():
+            session_input = clean_day
+        else:
+            session_input = pl.concat(
+                [active_clean_events, clean_day],
+                how="vertical",
+            ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+        relative_sessions = session_builder.transform_day(session_input)
+        active_session_indices = (
+            active_sessions.group_by("user_id").agg(
+                pl.col("session_index").max().alias("active_session_index")
+            )
+            if not active_sessions.is_empty()
+            else _empty_active_session_offsets()
+        )
+        offsets = _session_index_offsets(
+            max_session_indices=max_session_indices,
+            active_session_indices=active_session_indices,
+        )
+        sessions = _apply_session_index_offsets(relative_sessions, offsets)
+
+        completed_sessions, active_sessions = _split_completed_and_active_sessions(
+            sessions=sessions,
+            partition_date=partition_date,
+            timeout_minutes=session_builder.timeout_minutes,
+            is_final_partition=is_final_partition,
+        )
+
+        if sessions_output_dir is not None:
+            _append_daily_session_partitions(
+                completed_sessions,
+                sessions_output_dir,
+            )
+
+        daily_sessions_for_pairs = _partition_sessions_by_session_start_date(
+            completed_sessions
+        )
+        daily_pair_stats_paths = _build_and_write_daily_pair_stats(
+            daily_sessions=daily_sessions_for_pairs,
+            pair_builder=pair_builder,
+            output_dir=daily_pairs_output_dir,
+        )
+
+        count_paths.extend(daily_pair_stats_paths.count_paths)
+        user_key_paths.extend(daily_pair_stats_paths.user_key_paths)
+        session_key_paths.extend(daily_pair_stats_paths.session_key_paths)
+        raw_pair_rows += daily_pair_stats_paths.raw_pair_rows
+        sessions_rows += completed_sessions.height
+
+        max_session_indices = _update_max_session_indices(
+            max_session_indices,
+            sessions,
+        )
+        active_clean_events = _sessions_to_clean_events(active_sessions)
+
+    return sessions_rows, DailyPairStatsPaths(
+        count_paths=_unique_paths(count_paths),
+        user_key_paths=_unique_paths(user_key_paths),
+        session_key_paths=_unique_paths(session_key_paths),
         raw_pair_rows=raw_pair_rows,
     )
 
@@ -422,7 +781,7 @@ def run_mvp_pipeline(
     Pipeline stages:
     1. load daily raw events;
     2. clean events by day;
-    3. build sessions over the whole window;
+    3. stream sessions over daily clean partitions;
     4. build compact daily item-pair stats;
     5. aggregate pairs over window;
     6. score pairs;
@@ -500,52 +859,39 @@ def run_mvp_pipeline(
         schemas.CLEAN_EVENTS_COLUMNS,
     )
 
-    logger.info("[run_mvp_pipeline] build sessions")
+    logger.info("[run_mvp_pipeline] stream sessions and compact daily item-pair stats")
     session_builder = SessionBuilder.from_config(config)
-    logger.info("[run_mvp_pipeline] session builder config=%s", session_builder)
-    sessions_window = session_builder.transform_window(
-        [events_clean_input] if clean_event_paths else []
-    )
-
-    sessions_rows = sessions_window.height
-    logger.info("[run_mvp_pipeline] sessions window rows=%s", sessions_rows)
-    daily_sessions = _partition_frame_by_date_column(sessions_window, "event_date")
-    logger.info(
-        "[run_mvp_pipeline] sessions rows=%s days=%s",
-        sessions_rows,
-        len(daily_sessions),
-    )
-
-    sessions_dir = artifacts_config.get("sessions_dir")
-    if isinstance(sessions_dir, str | Path):
-        _write_daily_partitions(
-            daily_sessions,
-            _as_path(sessions_dir, "data/processed/sessions"),
-        )
-
-    logger.info("[run_mvp_pipeline] build compact daily item-pair stats")
     pair_builder = ItemPairBuilder.from_config(config)
-    daily_sessions_for_pairs = _partition_sessions_by_session_start_date(sessions_window)
+    logger.info("[run_mvp_pipeline] session builder config=%s", session_builder)
+
     daily_pairs_output_dir = _as_path(
         artifacts_config.get("daily_pairs_dir"),
         "data/processed/item_pairs",
     )
-    daily_pair_stats_paths = _build_and_write_daily_pair_stats(
-        daily_sessions=daily_sessions_for_pairs,
+
+    sessions_dir = artifacts_config.get("sessions_dir")
+    sessions_output_dir = (
+        _as_path(sessions_dir, "data/processed/sessions")
+        if isinstance(sessions_dir, str | Path)
+        else None
+    )
+
+    sessions_rows, daily_pair_stats_paths = _build_streaming_sessions_and_pair_stats(
+        clean_event_paths=clean_event_paths,
+        session_builder=session_builder,
         pair_builder=pair_builder,
-        output_dir=daily_pairs_output_dir,
+        daily_pairs_output_dir=daily_pairs_output_dir,
+        sessions_output_dir=sessions_output_dir,
     )
     daily_pairs_rows = daily_pair_stats_paths.raw_pair_rows
+
     logger.info(
-        "[run_mvp_pipeline] daily item pairs rows=%s days=%s output_dir=%s",
+        "[run_mvp_pipeline] sessions rows=%s daily item pairs rows=%s days=%s output_dir=%s",
+        sessions_rows,
         daily_pairs_rows,
         len(daily_pair_stats_paths.count_paths),
         daily_pairs_output_dir,
     )
-
-    del daily_sessions
-    del daily_sessions_for_pairs
-    del sessions_window
 
     logger.info("[run_mvp_pipeline] aggregate pairs from compact daily stats")
     pair_aggregates = PairAggregator().aggregate_window_from_daily_stats_paths(

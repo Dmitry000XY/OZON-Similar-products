@@ -339,6 +339,9 @@ def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_al
         def transform_window(self, _: list[pl.DataFrame]) -> pl.DataFrame:
             return empty_contract_frame(schemas.SESSIONS_COLUMNS)
 
+        def transform_day(self, _: pl.DataFrame) -> pl.DataFrame:
+            return empty_contract_frame(schemas.SESSIONS_COLUMNS)
+
         def build_daily_pair_stats(self, _: pl.DataFrame) -> run_mvp.DailyPairStats:
             return run_mvp.DailyPairStats(
                 counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
@@ -455,6 +458,9 @@ def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
             return cls()
 
         def transform_window(self, _: list[pl.DataFrame]) -> pl.DataFrame:
+            return empty_contract_frame(schemas.SESSIONS_COLUMNS)
+
+        def transform_day(self, _: pl.DataFrame) -> pl.DataFrame:
             return empty_contract_frame(schemas.SESSIONS_COLUMNS)
 
     class FakeItemPairBuilder:
@@ -1112,3 +1118,125 @@ def test_build_and_write_daily_pair_stats_writes_compact_artifacts(tmp_path: Pat
     assert counts.columns == schemas.DAILY_PAIR_COUNTS_COLUMNS
     assert user_keys.columns == schemas.DAILY_PAIR_USER_KEYS_COLUMNS
     assert session_keys.columns == schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS
+
+
+def test_build_streaming_sessions_and_pair_stats_keeps_cross_midnight_session(
+        tmp_path: Path,
+) -> None:
+    day1 = pl.DataFrame(
+        {
+            "user_id": [1],
+            "event_date": [date(2026, 5, 10)],
+            "timestamp": ["2026-05-10 23:55:00"],
+            "action_type": ["view"],
+            "item_id": [10],
+            "search_query": [None],
+            "widget_name": ["catalog"],
+        }
+    ).with_columns(
+        pl.col("timestamp").str.to_datetime(),
+    ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+    day2 = pl.DataFrame(
+        {
+            "user_id": [1],
+            "event_date": [date(2026, 5, 11)],
+            "timestamp": ["2026-05-11 00:05:00"],
+            "action_type": ["click"],
+            "item_id": [20],
+            "search_query": [None],
+            "widget_name": ["catalog"],
+        }
+    ).with_columns(
+        pl.col("timestamp").str.to_datetime(),
+    ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+    clean_dir = tmp_path / "events_clean"
+    clean_dir.mkdir()
+    day1_path = clean_dir / "date=2026-05-10.parquet"
+    day2_path = clean_dir / "date=2026-05-11.parquet"
+    day1.write_parquet(day1_path)
+    day2.write_parquet(day2_path)
+
+    sessions_rows, stats_paths = run_mvp._build_streaming_sessions_and_pair_stats(
+        clean_event_paths=[day1_path, day2_path],
+        session_builder=run_mvp.SessionBuilder(timeout_minutes=30),
+        pair_builder=run_mvp.ItemPairBuilder(),
+        daily_pairs_output_dir=tmp_path / "item_pairs",
+        sessions_output_dir=tmp_path / "sessions",
+    )
+
+    assert sessions_rows == 2
+    assert stats_paths.raw_pair_rows == 2
+    assert [path.name for path in stats_paths.count_paths] == [
+        "date=2026-05-10.parquet"
+    ]
+
+    sessions_day1 = pl.read_parquet(tmp_path / "sessions" / "date=2026-05-10.parquet")
+    sessions_day2 = pl.read_parquet(tmp_path / "sessions" / "date=2026-05-11.parquet")
+
+    assert sessions_day1["session_start_date"].cast(pl.String).to_list() == [
+        "2026-05-10"
+    ]
+    assert sessions_day2["session_start_date"].cast(pl.String).to_list() == [
+        "2026-05-10"
+    ]
+
+    counts = pl.read_parquet(stats_paths.count_paths[0])
+    assert counts["pair_count"].sum() == 2
+
+
+def test_build_streaming_sessions_and_pair_stats_splits_after_timeout(
+        tmp_path: Path,
+) -> None:
+    day1 = pl.DataFrame(
+        {
+            "user_id": [1],
+            "event_date": [date(2026, 5, 10)],
+            "timestamp": ["2026-05-10 23:00:00"],
+            "action_type": ["view"],
+            "item_id": [10],
+            "search_query": [None],
+            "widget_name": ["catalog"],
+        }
+    ).with_columns(
+        pl.col("timestamp").str.to_datetime(),
+    ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+    day2 = pl.DataFrame(
+        {
+            "user_id": [1],
+            "event_date": [date(2026, 5, 11)],
+            "timestamp": ["2026-05-11 00:00:00"],
+            "action_type": ["click"],
+            "item_id": [20],
+            "search_query": [None],
+            "widget_name": ["catalog"],
+        }
+    ).with_columns(
+        pl.col("timestamp").str.to_datetime(),
+    ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+    clean_dir = tmp_path / "events_clean"
+    clean_dir.mkdir()
+    day1_path = clean_dir / "date=2026-05-10.parquet"
+    day2_path = clean_dir / "date=2026-05-11.parquet"
+    day1.write_parquet(day1_path)
+    day2.write_parquet(day2_path)
+
+    sessions_rows, stats_paths = run_mvp._build_streaming_sessions_and_pair_stats(
+        clean_event_paths=[day1_path, day2_path],
+        session_builder=run_mvp.SessionBuilder(timeout_minutes=30),
+        pair_builder=run_mvp.ItemPairBuilder(),
+        daily_pairs_output_dir=tmp_path / "item_pairs",
+        sessions_output_dir=tmp_path / "sessions",
+    )
+
+    assert sessions_rows == 2
+    assert stats_paths.raw_pair_rows == 0
+
+    sessions_day1 = pl.read_parquet(tmp_path / "sessions" / "date=2026-05-10.parquet")
+    sessions_day2 = pl.read_parquet(tmp_path / "sessions" / "date=2026-05-11.parquet")
+
+    assert sessions_day1["session_index"].to_list() == [1]
+    assert sessions_day2["session_index"].to_list() == [2]
