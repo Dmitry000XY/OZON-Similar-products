@@ -1,4 +1,4 @@
-from ozon_similar_products.data.config import load_configs
+from ozon_similar_products.config import load_configs
 from ozon_similar_products.data.readers import (
     load_events,
     load_products,

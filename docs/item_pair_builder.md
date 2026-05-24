@@ -319,6 +319,13 @@ ItemPairBuilder.transform_day(sessions)
 
 Запуск:
 
+Если терминал открыт в папке `docs/`, перейдите в корень проекта
+относительным путём:
+
+```bash
+cd ..
+```
+
 ```bash
 uv run pytest tests/test_build_pairs.py
 ```

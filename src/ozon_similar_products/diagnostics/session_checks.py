@@ -1,4 +1,4 @@
-"""Session feasibility checks used by EDA."""
+"""Session feasibility checks for diagnostics and EDA."""
 
 from collections.abc import Sequence
 

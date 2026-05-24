@@ -2,7 +2,8 @@
 
 Offline-пайплайн для кейса **Ozon Fresh**: построение виджета **«Похожие товары по интересам пользователей»**.
 
-Проект строит item-to-item рекомендации на основе поведения пользователей: для каждого товара (`item_id`) формируется список похожих товаров, который затем можно использовать в виджете или проверять через lookup.
+Проект строит item-to-item рекомендации на основе поведения пользователей: для каждого товара (`item_id`) формируется
+список похожих товаров, который затем можно использовать в виджете или проверять через lookup.
 
 В постановке кейса используется название `sku`; в локальных данных проекта ему соответствует колонка `item_id`.
 
@@ -82,10 +83,16 @@ uv run python scripts/check_project_structure.py
 uv run python scripts/run_mvp_pipeline.py 2024-04-30 --lookback-days 1
 ```
 
+или через package CLI
+
+```bash
+uv run ozon-run-mvp 2024-04-30 --lookback-days 1
+```
+
 Где:
 
 ```text
-2026-04-30      # последняя дата train window
+2024-04-30      # последняя дата train window
 --lookback-days # размер rolling window в днях
 ```
 
@@ -109,6 +116,8 @@ uv run python scripts/run_mvp_pipeline.py 2024-04-30 --lookback-days 1 --config-
 
 ```bash
 uv run python scripts/preview_latest_recommendations.py
+# или через package CLI
+uv run ozon-preview-recommendations
 ```
 
 Скрипт выводит:
@@ -185,7 +194,11 @@ scripts/run_mvp_pipeline.py                   # запуск полного pipe
 scripts/preview_latest_recommendations.py     # просмотр результата и lookup
 src/ozon_similar_products/pipeline/run_mvp.py # orchestration runner
 src/ozon_similar_products/retrieval/          # pairs, scoring, top-K
+src/ozon_similar_products/diagnostics/        # reusable EDA/profiling/session diagnostics
+src/ozon_similar_products/business/           # fallback and business rules
+src/ozon_similar_products/evaluation/         # offline metrics and scorecards
 src/ozon_similar_products/output/             # writers, manifest, lookup
+docs/archive/                                 # archived EDA code and historical notes
 tests/                                        # unit и integration tests
 ```
 

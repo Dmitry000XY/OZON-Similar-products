@@ -25,13 +25,22 @@ outputs:
 
 source:
   package_dir: src/ozon_similar_products
-  future_layer_dirs:
+  required_layer_dirs:
+    - src/ozon_similar_products/data
+    - src/ozon_similar_products/preprocessing
+    - src/ozon_similar_products/features
+    - src/ozon_similar_products/retrieval
+    - src/ozon_similar_products/diagnostics
     - src/ozon_similar_products/business
     - src/ozon_similar_products/evaluation
-    - src/ozon_similar_products/features
     - src/ozon_similar_products/output
-    - src/ozon_similar_products/preprocessing
-    - src/ozon_similar_products/retrieval
+    - src/ozon_similar_products/serving
+    - src/ozon_similar_products/cli
+    - src/ozon_similar_products/pipeline
+  optional_future_layer_dirs:
+    - src/ozon_similar_products/graph
+    - src/ozon_similar_products/scoring
+    - src/ozon_similar_products/ranking
   required_modules:
     - src/ozon_similar_products/__init__.py
     - src/ozon_similar_products/config.py
@@ -43,6 +52,21 @@ source:
     - src/ozon_similar_products/data/readers.py
     - src/ozon_similar_products/data/schemas.py
     - src/ozon_similar_products/data/validation.py
+    - src/ozon_similar_products/diagnostics/__init__.py
+    - src/ozon_similar_products/diagnostics/profiling.py
+    - src/ozon_similar_products/diagnostics/session_checks.py
+    - src/ozon_similar_products/business/__init__.py
+    - src/ozon_similar_products/business/fallback.py
+    - src/ozon_similar_products/evaluation/__init__.py
+    - src/ozon_similar_products/evaluation/split.py
+    - src/ozon_similar_products/evaluation/metrics.py
+    - src/ozon_similar_products/evaluation/scorecard.py
+    - src/ozon_similar_products/serving/__init__.py
+    - src/ozon_similar_products/serving/lookup.py
+    - src/ozon_similar_products/output/lookup.py
+    - src/ozon_similar_products/cli/__init__.py
+    - src/ozon_similar_products/cli/run_mvp.py
+    - src/ozon_similar_products/cli/preview_recommendations.py
 
 project_dirs:
   - configs
