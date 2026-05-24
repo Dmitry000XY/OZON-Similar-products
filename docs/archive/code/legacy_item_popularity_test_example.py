@@ -1,4 +1,7 @@
-"""Tests for item popularity features."""
+"""Legacy example for historical weighted-item-popularity checks.
+
+This file is archived and must not be collected by pytest.
+"""
 
 from datetime import datetime
 

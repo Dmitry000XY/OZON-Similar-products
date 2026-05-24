@@ -1,4 +1,11 @@
-"""Item popularity features for EDA and baseline diagnostics."""
+"""Archived EDA helper.
+
+This module is kept for historical context only.
+Do not use it in the production pipeline.
+
+The current architecture keeps item popularity factual and applies
+business weights only in CoVisitationScorer.
+"""
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path

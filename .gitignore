@@ -224,13 +224,13 @@ __marimo__/
 /data/samples/**
 /outputs/**
 
-# Keep documentation and placeholders in ignored folders
+# Keep placeholders in ignored folders
 !/data/**/
-!/data/**/README.md
 !/data/**/.gitkeep
+!/data/.gitkeep
 !/outputs/**/
-!/outputs/**/README.md
 !/outputs/**/.gitkeep
+!/outputs/.gitkeep
 
 # Local temporary folders
 /_tmp*/

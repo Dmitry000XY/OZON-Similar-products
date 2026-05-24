@@ -9,3 +9,8 @@
 7. Формирование `sku | similar_items_sku_list`.
 8. Offline evaluation.
 9. Улучшения: query signals, Item2Vec, personalization, reranker.
+
+## Future refactor backlog (post-cleanup)
+
+- решить политику версии Python (`>=3.14` vs более широкий диапазон);
+- возможный split retrieval на graph/scoring/ranking.

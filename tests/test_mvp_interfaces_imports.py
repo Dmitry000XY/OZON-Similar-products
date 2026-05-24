@@ -1,3 +1,5 @@
+from ozon_similar_products.business.fallback import FallbackLayer
+from ozon_similar_products.evaluation.metrics import OfflineMetrics
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 from ozon_similar_products.output.lookup import SimilarItemsLookup
 from ozon_similar_products.output.writers import RecommendationWriter
@@ -9,12 +11,15 @@ from ozon_similar_products.retrieval.build_pairs import ItemPairBuilder
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 from ozon_similar_products.retrieval.topk import TopKSelector
 from ozon_similar_products.retrieval.update_strategy import FullRetrainStrategy
+from ozon_similar_products.serving.lookup import SimilarItemsLookup as ServingSimilarItemsLookup
 
 
 def test_mvp_interfaces_importable() -> None:
     assert EventCleaner is not None
+    assert FallbackLayer is not None
     assert SessionBuilder is not None
     assert ItemPopularityBuilder is not None
+    assert OfflineMetrics is not None
     assert ItemPairBuilder is not None
     assert PairAggregator is not None
     assert FullRetrainStrategy is not None
@@ -22,4 +27,5 @@ def test_mvp_interfaces_importable() -> None:
     assert TopKSelector is not None
     assert RecommendationWriter is not None
     assert SimilarItemsLookup is not None
+    assert ServingSimilarItemsLookup is not None
     assert run_mvp_pipeline is not None

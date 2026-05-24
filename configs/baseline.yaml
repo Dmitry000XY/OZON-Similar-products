@@ -62,3 +62,12 @@ outputs:
   detailed_recommendations_dir: outputs/recommendations/detailed
   widget_recommendations_dir: outputs/recommendations/widget
   latest_dir: outputs/recommendations/latest
+
+business:
+  fallback:
+    enabled: false
+    top_k: 20
+    source_label: fallback
+    candidate_pool_size: 200
+    include_cold_start_items: true
+    min_item_events: 1
