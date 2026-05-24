@@ -11,6 +11,9 @@ from ozon_similar_products.data import schemas
 from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.data.validation import (
     validate_daily_item_pairs,
+    validate_daily_pair_counts,
+    validate_daily_pair_session_keys,
+    validate_daily_pair_user_keys,
     validate_pair_aggregates,
 )
 
@@ -22,6 +25,11 @@ def _as_lazy(frame: FrameLike) -> pl.LazyFrame:
     if isinstance(frame, pl.LazyFrame):
         return frame
     return frame.lazy()
+
+
+def _scan_parquet_paths(paths: Sequence[str | Path]) -> pl.LazyFrame:
+    """Scan parquet paths with normalized POSIX path strings."""
+    return pl.scan_parquet([Path(path).as_posix() for path in paths])
 
 
 def _empty_pair_aggregates() -> pl.DataFrame:
@@ -72,6 +80,75 @@ def _aggregate_pairs_lazy(
             pl.struct(["user_id", "session_index"]).n_unique().alias("unique_sessions"),
         )
         .with_columns(
+            pl.lit(window_start).alias("window_start"),
+            pl.lit(window_end).alias("window_end"),
+        )
+        .select(schemas.PAIR_AGGREGATES_COLUMNS)
+        .sort(["item_id", "similar_item_id"])
+        .collect()
+    )
+
+    if aggregates.is_empty():
+        aggregates = _empty_pair_aggregates()
+
+    validate_pair_aggregates(aggregates)
+    return aggregates
+
+
+def _aggregate_daily_stats_lazy(
+        counts_scan: pl.LazyFrame,
+        user_keys_scan: pl.LazyFrame,
+        session_keys_scan: pl.LazyFrame,
+        window_start: str,
+        window_end: str,
+) -> pl.DataFrame:
+    """Aggregate compact daily pair stats into pair aggregates."""
+    start_date, end_date = _validate_window_bounds(window_start, window_end)
+
+    filtered_counts = (
+        counts_scan
+        .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
+        .filter(pl.col("pair_date").is_between(start_date, end_date))
+    )
+    filtered_user_keys = (
+        user_keys_scan
+        .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
+        .filter(pl.col("pair_date").is_between(start_date, end_date))
+    )
+    filtered_session_keys = (
+        session_keys_scan
+        .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
+        .filter(pl.col("pair_date").is_between(start_date, end_date))
+    )
+
+    counts = (
+        filtered_counts.group_by(["item_id", "similar_item_id"])
+        .agg(
+            pl.col("pair_count").sum().alias("pair_count"),
+            pl.col("view_count").sum().alias("view_count"),
+            pl.col("click_count").sum().alias("click_count"),
+            pl.col("favorite_count").sum().alias("favorite_count"),
+            pl.col("to_cart_count").sum().alias("to_cart_count"),
+        )
+    )
+
+    user_uniques = (
+        filtered_user_keys.group_by(["item_id", "similar_item_id"])
+        .agg(pl.col("user_id").n_unique().alias("unique_users"))
+    )
+
+    session_uniques = (
+        filtered_session_keys.group_by(["item_id", "similar_item_id"])
+        .agg(pl.struct(["user_id", "session_index"]).n_unique().alias("unique_sessions"))
+    )
+
+    aggregates = (
+        counts
+        .join(user_uniques, on=["item_id", "similar_item_id"], how="left")
+        .join(session_uniques, on=["item_id", "similar_item_id"], how="left")
+        .with_columns(
+            pl.col("unique_users").fill_null(0),
+            pl.col("unique_sessions").fill_null(0),
             pl.lit(window_start).alias("window_start"),
             pl.lit(window_end).alias("window_end"),
         )
@@ -139,13 +216,55 @@ class PairAggregator:
             validate_pair_aggregates(empty)
             return empty
 
-        paths = [Path(path).as_posix() for path in daily_pair_paths]
-        pairs_scan = pl.scan_parquet(paths)
+        pairs_scan = _scan_parquet_paths(daily_pair_paths)
 
         validate_daily_item_pairs(pairs_scan)
 
         return _aggregate_pairs_lazy(
             pairs_window=pairs_scan,
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+    @staticmethod
+    def aggregate_window_from_daily_stats_paths(
+            count_paths: Sequence[str | Path],
+            user_key_paths: Sequence[str | Path],
+            session_key_paths: Sequence[str | Path],
+            window_start: str,
+            window_end: str,
+    ) -> pl.DataFrame:
+        """Aggregate compact daily pair-stat parquet files into pair aggregates.
+
+        This path avoids scanning raw daily pair rows during window aggregation.
+        Counts are summed, while user/session uniqueness is computed from
+        deduplicated key artifacts.
+        """
+        _validate_window_bounds(window_start, window_end)
+
+        if not count_paths and not user_key_paths and not session_key_paths:
+            empty = _empty_pair_aggregates()
+            validate_pair_aggregates(empty)
+            return empty
+
+        if not count_paths or not user_key_paths or not session_key_paths:
+            raise ValueError(
+                "count_paths, user_key_paths and session_key_paths must all be "
+                "empty or all be provided"
+            )
+
+        counts_scan = _scan_parquet_paths(count_paths)
+        user_keys_scan = _scan_parquet_paths(user_key_paths)
+        session_keys_scan = _scan_parquet_paths(session_key_paths)
+
+        validate_daily_pair_counts(counts_scan)
+        validate_daily_pair_user_keys(user_keys_scan)
+        validate_daily_pair_session_keys(session_keys_scan)
+
+        return _aggregate_daily_stats_lazy(
+            counts_scan=counts_scan,
+            user_keys_scan=user_keys_scan,
+            session_keys_scan=session_keys_scan,
             window_start=window_start,
             window_end=window_end,
         )
