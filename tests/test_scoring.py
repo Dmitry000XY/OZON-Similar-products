@@ -189,3 +189,117 @@ def test_from_config_rejects_invalid_normalize_by_item_popularity() -> None:
         CoVisitationScorer.from_config(
             {"scoring": {"normalize_by_item_popularity": "definitely-not-bool"}}
         )
+
+def test_score_lazy_matches_score() -> None:
+    pair_aggregates = pl.DataFrame(
+        {
+            "item_id": [10, 10, 20],
+            "similar_item_id": [20, 30, 10],
+            "pair_count": [3, 1, 2],
+            "view_count": [1, 1, 0],
+            "click_count": [1, 0, 2],
+            "favorite_count": [0, 0, 0],
+            "to_cart_count": [1, 0, 0],
+            "unique_users": [2, 1, 2],
+            "unique_sessions": [3, 1, 2],
+            "window_start": ["2026-05-01", "2026-05-01", "2026-05-01"],
+            "window_end": ["2026-05-02", "2026-05-02", "2026-05-02"],
+        }
+    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+
+    scorer = CoVisitationScorer(
+        method="calibrated_multichannel",
+        action_shares={
+            "view": 0.7,
+            "click": 0.2,
+            "favorite": 0.05,
+            "to_cart": 0.05,
+        },
+    )
+
+    eager = scorer.score(pair_aggregates)
+    lazy = scorer.score_lazy(pair_aggregates.lazy()).collect()
+
+    assert lazy.equals(eager)
+
+def test_score_lazy_with_popularity_normalization_matches_score() -> None:
+    pair_aggregates = pl.DataFrame(
+        {
+            "item_id": [10, 10],
+            "similar_item_id": [20, 30],
+            "pair_count": [3, 2],
+            "view_count": [1, 1],
+            "click_count": [1, 1],
+            "favorite_count": [0, 0],
+            "to_cart_count": [1, 0],
+            "unique_users": [2, 2],
+            "unique_sessions": [3, 2],
+            "window_start": ["2026-05-01", "2026-05-01"],
+            "window_end": ["2026-05-02", "2026-05-02"],
+        }
+    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+
+    item_popularity = pl.DataFrame(
+        {
+            "item_id": [10, 20, 30],
+            "events_count": [10, 5, 2],
+            "unique_users": [4, 3, 2],
+            "views_count": [5, 3, 1],
+            "clicks_count": [2, 1, 1],
+            "favorites_count": [1, 0, 0],
+            "to_cart_count": [2, 1, 0],
+        }
+    ).select(schemas.ITEM_POPULARITY_COLUMNS)
+
+    scorer = CoVisitationScorer(
+        method="calibrated_multichannel",
+        normalize_by_item_popularity=True,
+        popularity_column="unique_users",
+        popularity_smoothing=1.0,
+        popularity_power=0.5,
+    )
+
+    eager = scorer.score(pair_aggregates, item_popularity=item_popularity)
+    lazy = scorer.score_lazy(
+        pair_aggregates.lazy(),
+        item_popularity=item_popularity.lazy(),
+    ).collect()
+
+    assert lazy.equals(eager)
+
+def test_score_lazy_rejects_missing_popularity_column() -> None:
+    pair_aggregates = pl.DataFrame(
+        {
+            "item_id": [10],
+            "similar_item_id": [20],
+            "pair_count": [1],
+            "view_count": [1],
+            "click_count": [0],
+            "favorite_count": [0],
+            "to_cart_count": [0],
+            "unique_users": [1],
+            "unique_sessions": [1],
+            "window_start": ["2026-05-01"],
+            "window_end": ["2026-05-01"],
+        }
+    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+
+    item_popularity = pl.DataFrame(
+        {
+            "item_id": [10, 20],
+            "events_count": [1, 1],
+            "unique_users": [1, 1],
+            "views_count": [1, 1],
+            "clicks_count": [0, 0],
+            "favorites_count": [0, 0],
+            "to_cart_count": [0, 0],
+        }
+    ).select(schemas.ITEM_POPULARITY_COLUMNS)
+
+    scorer = CoVisitationScorer(
+        normalize_by_item_popularity=True,
+        popularity_column="missing_column",
+    )
+
+    with pytest.raises(ValueError, match="popularity_column 'missing_column' is missing"):
+        scorer.score_lazy(pair_aggregates, item_popularity=item_popularity)

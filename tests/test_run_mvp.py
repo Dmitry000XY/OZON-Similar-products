@@ -363,8 +363,19 @@ def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_al
         def from_config(_: dict[str, object]) -> "FakeScorer":
             return FakeScorer()
 
-        def score(self, _: pl.DataFrame, item_popularity: pl.DataFrame | None = None) -> pl.DataFrame:
+        def score(
+                self,
+                pair_aggregates: pl.DataFrame,
+                item_popularity: pl.DataFrame | None = None,
+        ) -> pl.DataFrame:
             return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
+
+        def score_lazy(
+                self,
+                pair_aggregates: pl.DataFrame,
+                item_popularity: pl.DataFrame | None = None,
+        ) -> pl.LazyFrame:
+            return self.score(pair_aggregates, item_popularity=item_popularity).lazy()
 
     class FakeWriter:
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
@@ -500,6 +511,13 @@ def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
                 item_popularity: pl.DataFrame | None = None,
         ) -> pl.DataFrame:
             return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
+
+        def score_lazy(
+                self,
+                pair_aggregates: pl.DataFrame,
+                item_popularity: pl.DataFrame | None = None,
+        ) -> pl.LazyFrame:
+            return self.score(pair_aggregates, item_popularity=item_popularity).lazy()
 
     class FakeTopKSelector:
         def __init__(self, **_: object) -> None:
@@ -892,6 +910,13 @@ def test_run_mvp_pipeline_loads_raw_events_day_by_day(
                 item_popularity: pl.DataFrame | None = None,
         ) -> pl.DataFrame:
             return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
+
+        def score_lazy(
+                self,
+                pair_aggregates: pl.DataFrame,
+                item_popularity: pl.DataFrame | None = None,
+        ) -> pl.LazyFrame:
+            return self.score(pair_aggregates, item_popularity=item_popularity).lazy()
 
     class FakeWriter:
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:

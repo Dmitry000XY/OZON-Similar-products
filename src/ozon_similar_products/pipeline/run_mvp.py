@@ -617,11 +617,11 @@ def run_mvp_pipeline(
     del action_distribution
 
     if scorer.normalize_by_item_popularity:
-        pair_scores = scorer.score(pair_aggregates, item_popularity=item_popularity)
+        pair_scores = scorer.score_lazy(pair_aggregates, item_popularity=item_popularity)
     else:
-        pair_scores = scorer.score(pair_aggregates)
+        pair_scores = scorer.score_lazy(pair_aggregates)
 
-    pair_scores_rows = pair_scores.height
+    pair_scores_rows = pair_scores.select(pl.len()).collect().item()
     del pair_aggregates
     del item_popularity
 
