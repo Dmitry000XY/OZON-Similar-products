@@ -16,10 +16,11 @@ class SessionBuilder:
     """Build user sessions from clean item events.
 
     SessionBuilder has one responsibility: split a user's ordered event stream
-    into short time-based contexts and assign ``session_id``. It does not score
-    events, does not assign weights, and does not collapse repeated items. The
-    downstream ItemPairBuilder decides how to turn events inside a session into
-    item-level signals.
+    into short time-based contexts and assign compact session identity fields:
+    ``session_index`` and ``session_start_date``. It does not score events, does
+    not assign weights, and does not collapse repeated items. The downstream
+    ItemPairBuilder decides how to turn events inside a session into item-level
+    signals.
     """
 
     timeout_minutes: int = 30
