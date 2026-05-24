@@ -16,10 +16,11 @@ class SessionBuilder:
     """Build user sessions from clean item events.
 
     SessionBuilder has one responsibility: split a user's ordered event stream
-    into short time-based contexts and assign ``session_id``. It does not score
-    events, does not assign weights, and does not collapse repeated items. The
-    downstream ItemPairBuilder decides how to turn events inside a session into
-    item-level signals.
+    into short time-based contexts and assign compact session identity fields:
+    ``session_index`` and ``session_start_date``. It does not score events, does
+    not assign weights, and does not collapse repeated items. The downstream
+    ItemPairBuilder decides how to turn events inside a session into item-level
+    signals.
     """
 
     timeout_minutes: int = 30
@@ -62,8 +63,8 @@ class SessionBuilder:
             )
             .with_columns(
                 (
-                    pl.col("time_gap_seconds").is_null()
-                    | (pl.col("time_gap_seconds") > self.timeout_minutes * 60)
+                        pl.col("time_gap_seconds").is_null()
+                        | (pl.col("time_gap_seconds") > self.timeout_minutes * 60)
                 )
                 .cast(pl.Int64)
                 .alias("is_new_session")
@@ -81,13 +82,8 @@ class SessionBuilder:
                 .alias("session_start_date")
             )
             .with_columns(
-                (
-                    pl.col("user_id").cast(pl.String)
-                    + "_"
-                    + pl.col("session_start_date").cast(pl.String)
-                    + "_"
-                    + pl.col("session_index").cast(pl.String)
-                ).alias("session_id")
+                pl.col("session_index").cast(pl.Int64),
+                pl.col("session_start_date").cast(pl.Date, strict=False),
             )
             .select(schemas.SESSIONS_COLUMNS)
             .collect()
