@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,7 +21,7 @@ from ozon_similar_products.output.writers import RecommendationWriter
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
 from ozon_similar_products.preprocessing.clean_events import EventCleaner
 from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
-from ozon_similar_products.retrieval.build_pairs import ItemPairBuilder
+from ozon_similar_products.retrieval.build_pairs import DailyPairStats, ItemPairBuilder
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 from ozon_similar_products.retrieval.topk import TopKSelector
 
@@ -300,26 +300,76 @@ def _partition_sessions_by_session_start_date(
     ]
 
 
-def _build_and_write_daily_pairs(
-        pair_builder: ItemPairBuilder,
-        daily_sessions: list[tuple[str, pl.DataFrame]],
+@dataclass(frozen=True)
+class DailyPairStatsPaths:
+    """Paths to compact daily pair-stat artifacts built for a pipeline run."""
+
+    count_paths: list[Path]
+    user_key_paths: list[Path]
+    session_key_paths: list[Path]
+    raw_pair_rows: int
+
+
+def _write_daily_pair_stats(
+        *,
+        stats: DailyPairStats,
+        partition_date: str,
         output_dir: Path,
-) -> tuple[list[Path], int]:
-    """Build daily item-pair artifacts and write each partition immediately."""
+) -> tuple[Path, Path, Path]:
+    """Write compact daily pair-stat artifacts and return their paths."""
+    counts_dir = output_dir / "counts"
+    user_keys_dir = output_dir / "user_keys"
+    session_keys_dir = output_dir / "session_keys"
+
+    counts_dir.mkdir(parents=True, exist_ok=True)
+    user_keys_dir.mkdir(parents=True, exist_ok=True)
+    session_keys_dir.mkdir(parents=True, exist_ok=True)
+
+    count_path = counts_dir / f"date={partition_date}.parquet"
+    user_key_path = user_keys_dir / f"date={partition_date}.parquet"
+    session_key_path = session_keys_dir / f"date={partition_date}.parquet"
+
+    stats.counts.write_parquet(count_path)
+    stats.user_keys.write_parquet(user_key_path)
+    stats.session_keys.write_parquet(session_key_path)
+
+    return count_path, user_key_path, session_key_path
+
+
+def _build_and_write_daily_pair_stats(
+        *,
+        daily_sessions: Sequence[tuple[str, pl.DataFrame]],
+        pair_builder: ItemPairBuilder,
+        output_dir: Path,
+) -> DailyPairStatsPaths:
+    """Build compact daily pair stats for each sessions partition and write them."""
+    count_paths: list[Path] = []
+    user_key_paths: list[Path] = []
+    session_key_paths: list[Path] = []
+    raw_pair_rows = 0
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    daily_pair_paths: list[Path] = []
-    total_rows = 0
-
     for partition_date, sessions in daily_sessions:
-        pairs = pair_builder.transform_day(sessions)
-        total_rows += pairs.height
+        stats = pair_builder.build_daily_pair_stats(sessions)
+        raw_pair_rows += stats.raw_pair_rows
 
-        output_path = output_dir / f"date={partition_date}.parquet"
-        pairs.write_parquet(output_path)
-        daily_pair_paths.append(output_path)
+        count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+            stats=stats,
+            partition_date=partition_date,
+            output_dir=output_dir,
+        )
 
-    return daily_pair_paths, total_rows
+        count_paths.append(count_path)
+        user_key_paths.append(user_key_path)
+        session_key_paths.append(session_key_path)
+
+    return DailyPairStatsPaths(
+        count_paths=count_paths,
+        user_key_paths=user_key_paths,
+        session_key_paths=session_key_paths,
+        raw_pair_rows=raw_pair_rows,
+    )
 
 
 def _action_shares_from_distribution(
@@ -373,7 +423,7 @@ def run_mvp_pipeline(
     1. load daily raw events;
     2. clean events by day;
     3. build sessions over the whole window;
-    4. build item pairs;
+    4. build compact daily item-pair stats;
     5. aggregate pairs over window;
     6. score pairs;
     7. select top-K;
@@ -473,25 +523,23 @@ def run_mvp_pipeline(
             _as_path(sessions_dir, "data/processed/sessions"),
         )
 
-    logger.info("[run_mvp_pipeline] build item pairs")
+    logger.info("[run_mvp_pipeline] build compact daily item-pair stats")
     pair_builder = ItemPairBuilder.from_config(config)
-    logger.info("[run_mvp_pipeline] pair builder config=%s", pair_builder)
-
     daily_sessions_for_pairs = _partition_sessions_by_session_start_date(sessions_window)
     daily_pairs_output_dir = _as_path(
         artifacts_config.get("daily_pairs_dir"),
         "data/processed/item_pairs",
     )
-    daily_pair_paths, daily_pairs_rows = _build_and_write_daily_pairs(
-        pair_builder=pair_builder,
+    daily_pair_stats_paths = _build_and_write_daily_pair_stats(
         daily_sessions=daily_sessions_for_pairs,
+        pair_builder=pair_builder,
         output_dir=daily_pairs_output_dir,
     )
-
+    daily_pairs_rows = daily_pair_stats_paths.raw_pair_rows
     logger.info(
         "[run_mvp_pipeline] daily item pairs rows=%s days=%s output_dir=%s",
         daily_pairs_rows,
-        len(daily_pair_paths),
+        len(daily_pair_stats_paths.count_paths),
         daily_pairs_output_dir,
     )
 
@@ -499,9 +547,11 @@ def run_mvp_pipeline(
     del daily_sessions_for_pairs
     del sessions_window
 
-    logger.info("[run_mvp_pipeline] aggregate pairs")
-    pair_aggregates = PairAggregator().aggregate_window_from_paths(
-        daily_pair_paths=daily_pair_paths,
+    logger.info("[run_mvp_pipeline] aggregate pairs from compact daily stats")
+    pair_aggregates = PairAggregator().aggregate_window_from_daily_stats_paths(
+        count_paths=daily_pair_stats_paths.count_paths,
+        user_key_paths=daily_pair_stats_paths.user_key_paths,
+        session_key_paths=daily_pair_stats_paths.session_key_paths,
         window_start=window_start,
         window_end=window_end,
     )
