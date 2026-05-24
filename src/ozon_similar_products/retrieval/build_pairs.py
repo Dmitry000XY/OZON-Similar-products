@@ -10,6 +10,9 @@ from ozon_similar_products.data import schemas
 from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.data.validation import (
     validate_daily_item_pairs,
+    validate_daily_pair_counts,
+    validate_daily_pair_session_keys,
+    validate_daily_pair_user_keys,
     validate_sessions,
 )
 
@@ -26,6 +29,21 @@ def _as_lazy(frame: FrameLike) -> pl.LazyFrame:
 def _empty_daily_pairs() -> pl.DataFrame:
     """Return an empty daily-pairs DataFrame with the public contract columns."""
     return empty_contract_frame(schemas.DAILY_ITEM_PAIRS_COLUMNS)
+
+
+def _empty_daily_pair_counts() -> pl.DataFrame:
+    """Return an empty daily pair-counts DataFrame with the public contract columns."""
+    return empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+
+
+def _empty_daily_pair_user_keys() -> pl.DataFrame:
+    """Return an empty daily pair-user-keys DataFrame with the public contract columns."""
+    return empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS)
+
+
+def _empty_daily_pair_session_keys() -> pl.DataFrame:
+    """Return an empty daily pair-session-keys DataFrame with the public contract columns."""
+    return empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS)
 
 
 def _build_signal_priority(action_types: Sequence[str]) -> dict[str, int]:
@@ -47,6 +65,16 @@ def _priority_expr(priority: Mapping[str, int]) -> pl.Expr:
     for action_type, action_priority in priority.items():
         expr = pl.when(pl.col("action_type") == action_type).then(action_priority).otherwise(expr)
     return expr.cast(pl.Int64).alias("signal_priority")
+
+
+@dataclass(frozen=True)
+class DailyPairStats:
+    """Compact daily pair artifacts derived from raw directed pair rows."""
+
+    counts: pl.DataFrame
+    user_keys: pl.DataFrame
+    session_keys: pl.DataFrame
+    raw_pair_rows: int
 
 
 @dataclass(frozen=True)
@@ -167,6 +195,64 @@ class ItemPairBuilder:
 
         validate_daily_item_pairs(pairs)
         return pairs
+
+    def build_daily_pair_stats(self, sessions: FrameLike) -> DailyPairStats:
+        """Build compact daily pair statistics for one sessions partition.
+
+        This keeps the old pair semantics but stores compact daily artifacts:
+        count aggregates, unique user keys and unique session keys. The raw pair
+        rows count is preserved for pipeline manifests.
+        """
+        pairs = self.transform_day(sessions)
+        raw_pair_rows = pairs.height
+
+        if pairs.is_empty():
+            stats = DailyPairStats(
+                counts=_empty_daily_pair_counts(),
+                user_keys=_empty_daily_pair_user_keys(),
+                session_keys=_empty_daily_pair_session_keys(),
+                raw_pair_rows=0,
+            )
+            validate_daily_pair_counts(stats.counts)
+            validate_daily_pair_user_keys(stats.user_keys)
+            validate_daily_pair_session_keys(stats.session_keys)
+            return stats
+
+        counts = (
+            pairs.group_by(["pair_date", "item_id", "similar_item_id"])
+            .agg(
+                pl.len().alias("pair_count"),
+                (pl.col("signal_type") == "view").sum().alias("view_count"),
+                (pl.col("signal_type") == "click").sum().alias("click_count"),
+                (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
+                (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
+            )
+            .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+            .sort(["pair_date", "item_id", "similar_item_id"])
+        )
+
+        user_keys = (
+            pairs.select(schemas.DAILY_PAIR_USER_KEYS_COLUMNS)
+            .unique()
+            .sort(["pair_date", "item_id", "similar_item_id", "user_id"])
+        )
+
+        session_keys = (
+            pairs.select(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS)
+            .unique()
+            .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
+        )
+
+        validate_daily_pair_counts(counts)
+        validate_daily_pair_user_keys(user_keys)
+        validate_daily_pair_session_keys(session_keys)
+
+        return DailyPairStats(
+            counts=counts,
+            user_keys=user_keys,
+            session_keys=session_keys,
+            raw_pair_rows=raw_pair_rows,
+        )
 
     def _build_session_items(self, sessions: FrameLike) -> pl.LazyFrame:
         """Collapse repeated item actions inside a session to one strongest signal."""

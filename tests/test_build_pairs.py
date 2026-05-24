@@ -3,7 +3,8 @@ from datetime import date, datetime
 import polars as pl
 import pytest
 
-from ozon_similar_products.retrieval.build_pairs import ItemPairBuilder
+from ozon_similar_products.data import schemas
+from ozon_similar_products.retrieval.build_pairs import DailyPairStats, ItemPairBuilder
 
 
 def _sessions(rows: list[dict]) -> pl.DataFrame:
@@ -53,6 +54,126 @@ def test_build_pairs_uses_target_signal_type() -> None:
     assert "session_id" not in result.columns
     assert "session_index" in result.columns
     assert result["session_index"].to_list() == [1, 1, 1, 1, 1, 1]
+
+
+def test_build_daily_pair_stats_matches_raw_pair_semantics() -> None:
+    sessions = _sessions(
+        [
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+            },
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 1),
+                "action_type": "to_cart",
+                "item_id": 20,
+            },
+            {
+                "user_id": 1,
+                "session_index": 2,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 11, 0),
+                "action_type": "view",
+                "item_id": 10,
+            },
+            {
+                "user_id": 1,
+                "session_index": 2,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 11, 1),
+                "action_type": "click",
+                "item_id": 20,
+            },
+            {
+                "user_id": 2,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 12, 0),
+                "action_type": "view",
+                "item_id": 10,
+            },
+            {
+                "user_id": 2,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 12, 1),
+                "action_type": "view",
+                "item_id": 20,
+            },
+        ]
+    )
+
+    stats = ItemPairBuilder().build_daily_pair_stats(sessions)
+
+    assert isinstance(stats, DailyPairStats)
+    assert stats.raw_pair_rows == 6
+
+    assert stats.counts.columns == schemas.DAILY_PAIR_COUNTS_COLUMNS
+    assert stats.user_keys.columns == schemas.DAILY_PAIR_USER_KEYS_COLUMNS
+    assert stats.session_keys.columns == schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS
+
+    row = stats.counts.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+    ).row(0, named=True)
+
+    assert row["pair_count"] == 3
+    assert row["view_count"] == 1
+    assert row["click_count"] == 1
+    assert row["favorite_count"] == 0
+    assert row["to_cart_count"] == 1
+
+    user_keys = stats.user_keys.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+    )
+    assert user_keys.height == 2
+    assert set(user_keys["user_id"].to_list()) == {1, 2}
+
+    session_keys = stats.session_keys.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+    )
+    assert session_keys.height == 3
+
+
+def test_build_daily_pair_stats_returns_empty_contracts_for_no_pairs() -> None:
+    sessions = _sessions(
+        [
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+            }
+        ]
+    )
+
+    stats = ItemPairBuilder().build_daily_pair_stats(sessions)
+
+    assert stats.raw_pair_rows == 0
+    assert stats.counts.is_empty()
+    assert stats.user_keys.is_empty()
+    assert stats.session_keys.is_empty()
+    assert stats.counts.columns == schemas.DAILY_PAIR_COUNTS_COLUMNS
+    assert stats.user_keys.columns == schemas.DAILY_PAIR_USER_KEYS_COLUMNS
+    assert stats.session_keys.columns == schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS
 
 
 def test_build_pairs_collapses_repeated_item_to_strongest_signal() -> None:
