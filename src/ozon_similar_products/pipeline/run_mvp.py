@@ -289,16 +289,9 @@ def _partition_sessions_by_session_start_date(
     if sessions.is_empty():
         return []
 
-    sessions_with_start_date = sessions.with_columns(
-        pl.col("event_date")
-        .min()
-        .over(["user_id", "session_id"])
-        .alias("_session_start_date")
-    )
-
     partitions = _partition_frame_by_date_column(
-        sessions_with_start_date,
-        "_session_start_date",
+        sessions,
+        "session_start_date",
     )
 
     return [

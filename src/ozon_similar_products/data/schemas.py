@@ -33,7 +33,8 @@ PRODUCT_INFORMATION_COLUMNS = _PRODUCTS.get("expected_columns", [])
 
 SESSIONS_COLUMNS = [
     "user_id",
-    "session_id",
+    "session_index",
+    "session_start_date",
     "event_date",
     "timestamp",
     "action_type",
@@ -64,8 +65,8 @@ DAILY_ITEM_PAIRS_COLUMNS = [
     "pair_date",
     "item_id",
     "similar_item_id",
-    "session_id",
     "user_id",
+    "session_index",
     "source_action_type",
     "target_action_type",
     "signal_type",

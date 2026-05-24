@@ -72,7 +72,8 @@ def test_partition_sessions_by_session_start_date_keeps_cross_midnight_session_t
     sessions = pl.DataFrame(
         {
             "user_id": [1, 1],
-            "session_id": ["1_2026-05-10_1", "1_2026-05-10_1"],
+            "session_index": [1, 1],
+            "session_start_date": [date(2026, 5, 10), date(2026, 5, 10)],
             "event_date": [date(2026, 5, 10), date(2026, 5, 11)],
             "timestamp": [
                 "2026-05-10 23:55:00",

@@ -69,7 +69,7 @@ def _aggregate_pairs_lazy(
             (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
             (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
             pl.col("user_id").n_unique().alias("unique_users"),
-            pl.struct(["user_id", "session_id"]).n_unique().alias("unique_sessions"),
+            pl.struct(["user_id", "session_index"]).n_unique().alias("unique_sessions"),
         )
         .with_columns(
             pl.lit(window_start).alias("window_start"),

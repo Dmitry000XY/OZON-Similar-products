@@ -135,7 +135,7 @@ class ItemPairBuilder:
 
         valid_session_items = session_items.join(
             valid_sessions,
-            on=["user_id", "session_id"],
+            on=["user_id", "session_index"],
             how="inner",
         )
 
@@ -143,7 +143,7 @@ class ItemPairBuilder:
             valid_session_items
             .join(
                 valid_session_items,
-                on=["user_id", "session_id"],
+                on=["user_id", "session_index"],
                 how="inner",
                 suffix="_similar",
             )
@@ -152,13 +152,13 @@ class ItemPairBuilder:
                 pl.col("session_start_date").cast(pl.Date, strict=False).alias("pair_date"),
                 pl.col("item_id"),
                 pl.col("item_id_similar").alias("similar_item_id"),
-                pl.col("session_id"),
                 pl.col("user_id"),
+                pl.col("session_index"),
                 pl.col("item_action_type").alias("source_action_type"),
                 pl.col("item_action_type_similar").alias("target_action_type"),
                 pl.col("item_action_type_similar").alias("signal_type"),
             )
-            .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_id"])
+            .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
             .collect()
         )
 
@@ -175,7 +175,8 @@ class ItemPairBuilder:
             _as_lazy(sessions)
             .select(
                 "user_id",
-                "session_id",
+                "session_index",
+                "session_start_date",
                 "event_date",
                 "item_id",
                 "action_type",
@@ -183,9 +184,8 @@ class ItemPairBuilder:
             .filter(pl.col("item_id").is_not_null())
             .filter(pl.col("action_type").is_in(list(self.item_action_types)))
             .with_columns(_priority_expr(priority))
-            .group_by(["user_id", "session_id", "item_id"])
+            .group_by(["user_id", "session_index", "session_start_date", "item_id"])
             .agg(
-                pl.col("event_date").min().alias("session_start_date"),
                 pl.col("action_type")
                 .sort_by(pl.col("signal_priority"), descending=True)
                 .first()
@@ -197,10 +197,10 @@ class ItemPairBuilder:
     def _build_valid_sessions(self, session_items: pl.LazyFrame) -> pl.LazyFrame:
         """Keep sessions that can create pairs and are not too long/noisy."""
         return (
-            session_items.group_by(["user_id", "session_id"])
+            session_items.group_by(["user_id", "session_index"])
             .agg(pl.len().alias("items_count"))
             .filter(pl.col("items_count").is_between(2, self.max_items_per_session))
-            .select("user_id", "session_id")
+            .select("user_id", "session_index")
         )
 
     def _resolved_signal_priority(self) -> Mapping[str, int]:

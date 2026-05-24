@@ -62,8 +62,8 @@ class SessionBuilder:
             )
             .with_columns(
                 (
-                    pl.col("time_gap_seconds").is_null()
-                    | (pl.col("time_gap_seconds") > self.timeout_minutes * 60)
+                        pl.col("time_gap_seconds").is_null()
+                        | (pl.col("time_gap_seconds") > self.timeout_minutes * 60)
                 )
                 .cast(pl.Int64)
                 .alias("is_new_session")
@@ -81,13 +81,8 @@ class SessionBuilder:
                 .alias("session_start_date")
             )
             .with_columns(
-                (
-                    pl.col("user_id").cast(pl.String)
-                    + "_"
-                    + pl.col("session_start_date").cast(pl.String)
-                    + "_"
-                    + pl.col("session_index").cast(pl.String)
-                ).alias("session_id")
+                pl.col("session_index").cast(pl.Int64),
+                pl.col("session_start_date").cast(pl.Date, strict=False),
             )
             .select(schemas.SESSIONS_COLUMNS)
             .collect()

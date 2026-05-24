@@ -15,7 +15,8 @@ def test_build_pairs_uses_target_signal_type() -> None:
         [
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 0),
                 "action_type": "view",
@@ -23,7 +24,8 @@ def test_build_pairs_uses_target_signal_type() -> None:
             },
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 1),
                 "action_type": "to_cart",
@@ -31,7 +33,8 @@ def test_build_pairs_uses_target_signal_type() -> None:
             },
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 2),
                 "action_type": "view",
@@ -47,6 +50,9 @@ def test_build_pairs_uses_target_signal_type() -> None:
     assert result.filter((pl.col("item_id") == 30) & (pl.col("similar_item_id") == 20))[0, "signal_type"] == "to_cart"
     assert result.filter((pl.col("item_id") == 20) & (pl.col("similar_item_id") == 10))[0, "signal_type"] == "view"
     assert result.filter(pl.col("item_id") == pl.col("similar_item_id")).is_empty()
+    assert "session_id" not in result.columns
+    assert "session_index" in result.columns
+    assert result["session_index"].to_list() == [1, 1, 1, 1, 1, 1]
 
 
 def test_build_pairs_collapses_repeated_item_to_strongest_signal() -> None:
@@ -54,7 +60,8 @@ def test_build_pairs_collapses_repeated_item_to_strongest_signal() -> None:
         [
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 0),
                 "action_type": "view",
@@ -62,7 +69,8 @@ def test_build_pairs_collapses_repeated_item_to_strongest_signal() -> None:
             },
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 1),
                 "action_type": "to_cart",
@@ -70,7 +78,8 @@ def test_build_pairs_collapses_repeated_item_to_strongest_signal() -> None:
             },
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 2),
                 "action_type": "click",
@@ -91,7 +100,8 @@ def test_build_pairs_skips_single_item_and_too_long_sessions() -> None:
         [
             {
                 "user_id": 1,
-                "session_id": "single",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 0),
                 "action_type": "view",
@@ -99,7 +109,8 @@ def test_build_pairs_skips_single_item_and_too_long_sessions() -> None:
             },
             {
                 "user_id": 2,
-                "session_id": "long",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 0),
                 "action_type": "view",
@@ -107,7 +118,8 @@ def test_build_pairs_skips_single_item_and_too_long_sessions() -> None:
             },
             {
                 "user_id": 2,
-                "session_id": "long",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 1),
                 "action_type": "view",
@@ -115,7 +127,8 @@ def test_build_pairs_skips_single_item_and_too_long_sessions() -> None:
             },
             {
                 "user_id": 2,
-                "session_id": "long",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 2),
                 "action_type": "view",
@@ -134,7 +147,8 @@ def test_build_pairs_accepts_lazy_frame_and_ignores_null_items() -> None:
         [
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 0),
                 "action_type": "view",
@@ -142,7 +156,8 @@ def test_build_pairs_accepts_lazy_frame_and_ignores_null_items() -> None:
             },
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 1),
                 "action_type": "view",
@@ -150,7 +165,8 @@ def test_build_pairs_accepts_lazy_frame_and_ignores_null_items() -> None:
             },
             {
                 "user_id": 1,
-                "session_id": "s1",
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
                 "event_date": date(2026, 5, 1),
                 "timestamp": datetime(2026, 5, 1, 10, 2),
                 "action_type": "click",
@@ -189,7 +205,6 @@ def test_build_pairs_can_be_created_from_config() -> None:
     assert builder.max_items_per_session == 7
     assert tuple(builder.item_action_types) == ("view", "click", "favorite", "to_cart")
     assert builder.signal_priority == {"view": 1, "click": 2, "favorite": 3, "to_cart": 4}
-
 
 
 def test_build_pairs_from_config_treats_string_action_type_as_single_value() -> None:
