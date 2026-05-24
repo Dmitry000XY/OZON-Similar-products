@@ -1,8 +1,8 @@
-# Architecture
+# Архитектура
 
 Проект реализует offline pipeline похожих товаров для Ozon Fresh.
 
-## Current MVP pipeline
+## Текущий MVP-пайплайн
 
 ```text
 raw user actions
@@ -21,7 +21,7 @@ raw user actions
 `FallbackLayer` является отдельным post-top-k слоем и не должен
 встраиваться в preprocessing/retrieval этапы.
 
-## Package structure after cleanup
+## Структура пакета после рефакторинга
 
 ```text
 data/          # loading, schemas, validation
@@ -38,13 +38,30 @@ pipeline/      # orchestration
 docs/archive/  # archived EDA code and history
 ```
 
-## Archived EDA code
+## Единый слой конфигурации и совместимые обёртки
+
+- Единый источник правды для загрузки конфигов: `src/ozon_similar_products/config.py`.
+- Публичный API для production-кода: `PROJECT_ROOT`, `resolve_config_path`,
+  `load_yaml_config`, `load_paths_config`, `load_data_config`, `load_configs`,
+  `resolve_project_path`, `get_path_from_config`.
+- `src/ozon_similar_products/data/config.py` сохранён только как совместимый
+  shim для старых импортов в ноутбуках/тестах; логики загрузки YAML там больше нет.
+- `src/ozon_similar_products/output/lookup.py` также является совместимым re-export:
+  канонический runtime-lookup живёт в `src/ozon_similar_products/serving/lookup.py`.
+
+## Ограничения fallback-реализации
+
+`FallbackLayer` в текущем виде — MVP/local-слой (по умолчанию выключен). Он
+использует Python-level сборку строк и не рассчитан на production-scale каталоги
+без отдельного Polars-native переписывания merge-этапа.
+
+## Архивный EDA-код
 
 - Legacy EDA helpers хранятся в `docs/archive/code/`.
 - Архивный код не участвует в runtime pipeline.
 - Архивный код нельзя импортировать из `src/`, `tests/`, `scripts/`.
 
-## PR1 acceptance criteria (compact)
+## Критерии приёмки PR1 (кратко)
 
 1. В `src/ozon_similar_products` нет `eda_*` модулей вне `diagnostics/`.
 2. Reusable EDA helpers перенесены в `diagnostics/`.
@@ -53,13 +70,13 @@ docs/archive/  # archived EDA code and history
 5. `README.md`, `docs/architecture.md`, `scripts/README.md` обновлены под актуальную структуру.
 6. Проходят `uv run ruff check src scripts tests` и `uv run pytest`.
 
-## PR1 preflight checklist
+## Чеклист перед PR1
 
 1. Зафиксировать текущие EDA-импорты в `tests/` и `notebooks/`.
 2. Перенести/удалить только подтверждённые точки импорта.
 3. После переноса проверить, что активные тесты используют только новые пути.
 
-## Future refactor (separate PRs)
+## Дальнейший рефакторинг (отдельные PR)
 
 - PR4: offline evaluation metrics;
 - PR5: decide Python version policy (`>=3.14` vs wider compatibility);

@@ -445,6 +445,13 @@ pair_count = view_count + click_count + favorite_count + to_cart_count
 
 Запуск:
 
+Если терминал открыт в папке `docs/`, перейдите в корень проекта
+относительным путём:
+
+```bash
+cd ..
+```
+
 ```bash
 uv run pytest tests/test_aggregate_pairs.py
 ```

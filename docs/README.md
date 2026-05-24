@@ -5,7 +5,7 @@
 ## Основные документы
 
 - [Контракты данных](data_contract.md) — актуальные таблицы pipeline, обязательные колонки и границы ответственности слоёв.
-- [Data layer](modules/data_layer.md) — границы слоя данных и его публичный API.
+- [Слой данных](modules/data_layer.md) — границы слоя данных и его публичный API.
 - [Calibrated multi-channel веса](calibrated_multichannel_weights.md) — подробное решение по весам `view`, `click`, `favorite`, `to_cart`, частотной калибровке и тому, почему веса применяются только в `CoVisitationScorer`.
 - [ItemPairBuilder](item_pair_builder.md) — как из сессий строятся directed item-item pairs, почему `signal_type` равен target action type, и почему приоритеты сигналов живут в config.
 - [PairAggregator](aggregate_pairs.md) — как дневные пары агрегируются за rolling window и почему агрегатор считает только channel counts, без весов и score.

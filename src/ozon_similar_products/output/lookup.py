@@ -1,4 +1,4 @@
-"""Backward-compatible lookup import path.
+"""Temporary backward-compatible lookup import path.
 
 The canonical runtime location is ``ozon_similar_products.serving.lookup``.
 """

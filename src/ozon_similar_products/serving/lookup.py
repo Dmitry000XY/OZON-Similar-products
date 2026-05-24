@@ -72,7 +72,7 @@ def _build_lookup_mapping(frame: pl.DataFrame) -> dict[int | str, list[int | str
     item_col, list_col = schemas.WIDGET_OUTPUT_COLUMNS
 
     mapping: dict[int | str, list[int | str]] = {}
-    for row in frame.select([item_col, list_col]).to_dicts():
+    for row in frame.select([item_col, list_col]).iter_rows(named=True):
         item_id = row[item_col]
         similar_items = row[list_col] or []
         mapping[item_id] = [item for item in similar_items if item is not None]

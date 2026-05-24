@@ -1,4 +1,4 @@
-# Project Roadmap
+# Дорожная карта проекта
 
 1. EDA данных.
 2. Очистка действий.
@@ -10,7 +10,7 @@
 8. Offline evaluation.
 9. Улучшения: query signals, Item2Vec, personalization, reranker.
 
-## Future refactor backlog (post-cleanup)
+## Бэклог дальнейшего рефакторинга (после cleanup)
 
 - решить политику версии Python (`>=3.14` vs более широкий диапазон);
 - возможный split retrieval на graph/scoring/ranking.

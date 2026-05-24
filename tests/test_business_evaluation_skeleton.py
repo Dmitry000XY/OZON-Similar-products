@@ -128,6 +128,20 @@ def test_fallback_merger_rejects_invalid_config() -> None:
     assert FallbackMerger(config=FallbackConfig(enabled=True, top_k=10)) is not None
 
 
+def test_fallback_config_reports_parameter_name_for_invalid_string_ints() -> None:
+    with pytest.raises(ValueError, match="fallback.top_k"):
+        FallbackConfig.from_config(
+            {"fallback": {"top_k": "abc"}},
+            top_k=20,
+        )
+
+    with pytest.raises(ValueError, match="fallback.candidate_pool_size"):
+        FallbackConfig.from_config(
+            {"fallback": {"candidate_pool_size": "not-a-number"}},
+            top_k=20,
+        )
+
+
 def test_scorecard_builder_returns_immutable_payload() -> None:
     metrics = OfflineMetrics(hit_rate_at_k=0.42, ndcg_at_k=0.31)
 

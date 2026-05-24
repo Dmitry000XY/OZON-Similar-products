@@ -1,4 +1,10 @@
-"""Fallback layer for post-top-K business rules."""
+"""Fallback layer for post-top-K business rules.
+
+Current implementation is intentionally MVP/local:
+- disabled by default;
+- uses Python-level row assembly in ``FallbackMerger``;
+- should be rewritten to Polars-native operations before production-scale usage.
+"""
 
 from __future__ import annotations
 
@@ -57,7 +63,10 @@ def _as_positive_int(value: Any, default: int, parameter_name: str) -> int:
     elif isinstance(value, int):
         parsed = value
     elif isinstance(value, str):
-        parsed = int(value)
+        try:
+            parsed = int(value)
+        except ValueError as error:
+            raise ValueError(f"{parameter_name} must be a positive integer") from error
     else:
         raise TypeError(f"{parameter_name} must be a positive integer")
 
@@ -169,7 +178,7 @@ class FallbackCandidateBuilder:
 
 @dataclass(frozen=True)
 class FallbackMerger:
-    """Merge behavioral recommendations with fallback candidates."""
+    """Merge recommendations with fallback candidates (MVP/local implementation)."""
 
     config: FallbackConfig
 
@@ -220,9 +229,9 @@ class FallbackMerger:
             rows = (
                 frame
                 .sort(["rank", "score", "similar_item_id"], descending=[False, True, False])
-                .to_dicts()
+                .iter_rows(named=True)
             )
-            grouped[item_id] = rows
+            grouped[item_id] = [dict(row) for row in rows]
         return grouped
 
     def _build_rows_for_source(
