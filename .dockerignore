@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.pyc
+
+data
+outputs
+artifacts
+notebooks
+
+.coverage
+*.log
+*.tmp
