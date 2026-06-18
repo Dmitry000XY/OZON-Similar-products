@@ -159,19 +159,56 @@ def test_scorecard_builder_returns_immutable_payload() -> None:
     assert scorecard.metrics.ndcg_at_k == 0.31
 
 
-def test_split_and_metrics_are_explicit_skeletons() -> None:
+def test_split_and_metrics_compute_real_values() -> None:
+    frame = pl.DataFrame(
+        {
+            "item_id": [1, 2, 3],
+            "event_date": [
+                date(2024, 4, 30),
+                date(2024, 5, 1),
+                date(2024, 5, 2),
+            ],
+        }
+    )
     split_config = TemporalSplitConfig(
         train_until_date=date(2024, 4, 30),
         validation_start_date=date(2024, 5, 1),
         validation_end_date=date(2024, 5, 7),
     )
 
-    with pytest.raises(NotImplementedError, match="Planned for PR4"):
-        split_train_validation(_recommendations_frame(), split_config)
+    train, validation = split_train_validation(frame, split_config)
 
-    with pytest.raises(NotImplementedError, match="Planned for PR4"):
-        compute_offline_metrics(
-            recommendations=_recommendations_frame(),
-            ground_truth=_recommendations_frame(),
-            top_k=20,
-        )
+    assert train["item_id"].to_list() == [1]
+    assert validation["item_id"].to_list() == [2, 3]
+
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [1, 1, 2],
+            "similar_item_id": [10, 11, 20],
+            "score": [0.9, 0.8, 0.7],
+            "rank": [1, 2, 1],
+            "source": ["behavioral", "behavioral", "fallback"],
+        }
+    )
+    ground_truth = pl.DataFrame(
+        {
+            "item_id": [1, 1, 2],
+            "relevant_item_id": [11, 12, 20],
+            "relevance": [1.0, 0.5, 1.0],
+            "target_action_type": ["to_cart", "click", "to_cart"],
+            "evidence_count": [1, 1, 1],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=2,
+    )
+
+    assert metrics.evaluated_items == 2
+    assert metrics.ground_truth_pairs == 3
+    assert metrics.hit_rate_at_k == 1.0
+    assert metrics.to_cart_hit_rate_at_k == 1.0
+    assert metrics.coverage_at_k == 1.0
+    assert metrics.fallback_share_at_k == pytest.approx(1 / 3)
