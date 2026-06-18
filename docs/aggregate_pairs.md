@@ -10,6 +10,7 @@ src/ozon_similar_products/retrieval/aggregate_pairs.py
 
 Главное правило: **PairAggregator не применяет веса и не считает score**.
 
+
 Он только считает фактические статистики по парам и каналам поведения:
 
 ```text

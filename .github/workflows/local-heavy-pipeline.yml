@@ -291,6 +291,10 @@ jobs:
               Prefix = 'outputs\recommendations\latest'
             },
             @{
+              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\recommendations\runs'
+              Prefix = 'outputs\recommendations\runs'
+            },
+            @{
               Root = Join-Path $env:RUNNER_RUNTIME 'outputs\demo'
               Prefix = 'outputs\demo'
             },
@@ -315,13 +319,18 @@ jobs:
               $fullName = $file.FullName
               $reason = $null
 
-              if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
-                $reason = 'raw-or-processed-data-path'
-              } elseif ($file.Extension -eq '.parquet') {
-                $reason = 'parquet-skipped'
-              } elseif ($file.Length -gt $limitBytes) {
-                $reason = 'over-100mb'
-              }
+                if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
+                  $reason = 'raw-or-processed-data-path'
+                } elseif ($file.Extension -eq '.parquet') {
+                  # Allow parquet files only for recommendation outputs (latest and runs)
+                  if ($fullName -match '[\\/]outputs[\\/]recommendations[\\/]') {
+                    $reason = $null
+                  } else {
+                    $reason = 'parquet-skipped'
+                  }
+                } elseif ($file.Length -gt $limitBytes) {
+                  $reason = 'over-100mb'
+                }
 
               if ($reason) {
                 $skipped.Add([ordered]@{
