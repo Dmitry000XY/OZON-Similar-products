@@ -1,0 +1,393 @@
+name: Local heavy pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: What to run inside Docker
+        required: true
+        default: full
+        type: choice
+        options:
+          - pipeline
+          - lookup
+          - evaluation
+          - full
+      train_until_date:
+        description: Inclusive window end date, YYYY-MM-DD
+        required: true
+        default: "2024-04-30"
+        type: string
+      lookback_days:
+        description: Rolling window size in days
+        required: true
+        default: "1"
+        type: string
+      top_k:
+        description: Recommendation top K for pipeline config override and preview
+        required: true
+        default: "20"
+        type: string
+      config_path:
+        description: Pipeline config path
+        required: true
+        default: configs/baseline.yaml
+        type: string
+      upload_artifact:
+        description: Upload safe compact artifact bundle
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ozon-local-heavy-pipeline
+  cancel-in-progress: false
+
+jobs:
+  local-heavy:
+    name: Local heavy pipeline
+    runs-on: [self-hosted, windows, x64, ozon-local-heavy]
+    timeout-minutes: 1440
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RUNNER_RUNTIME: D:\ozon-local-runner
+      COMPOSE_PROJECT: ozon-local-heavy
+      ARTIFACT_FILE_LIMIT_BYTES: "104857600"
+
+    steps:
+      - name: Check actor allowlist
+        run: |
+          $allowedActors = @(
+            'Dmitry000XY',
+            'SvinPepe',
+            'Sleepy-Fenrir',
+            'IDhide',
+            'arinaortenberg',
+            'svinpepe2',
+            'AccidentalGenius13'
+          )
+          $actor = '${{ github.actor }}'
+          Write-Host "actor=$actor"
+          if ($allowedActors -notcontains $actor) {
+            throw "Actor '$actor' is not allowed to run this self-hosted workflow."
+          }
+
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Print diagnostics
+        run: |
+          Write-Host "repository=${{ github.repository }}"
+          Write-Host "actor=${{ github.actor }}"
+          Write-Host "ref=${{ github.ref }}"
+          Write-Host "sha=${{ github.sha }}"
+          Write-Host "runner.name=${{ runner.name }}"
+          Write-Host "runner.os=${{ runner.os }}"
+          Write-Host "workspace=$env:GITHUB_WORKSPACE"
+          Write-Host "runtime=$env:RUNNER_RUNTIME"
+          docker --version
+          docker compose version
+          docker info
+          Get-PSDrive -Name C,D | Format-Table -AutoSize
+          @(
+            $env:RUNNER_RUNTIME,
+            (Join-Path $env:RUNNER_RUNTIME 'data\raw'),
+            (Join-Path $env:RUNNER_RUNTIME 'data\processed'),
+            (Join-Path $env:RUNNER_RUNTIME 'outputs'),
+            (Join-Path $env:RUNNER_RUNTIME 'artifacts')
+          ) | ForEach-Object {
+            Write-Host "path_exists=$($_): $(Test-Path -LiteralPath $_)"
+          }
+
+      - name: Prepare runtime directories
+        run: |
+          @(
+            $env:RUNNER_RUNTIME,
+            (Join-Path $env:RUNNER_RUNTIME 'data\raw'),
+            (Join-Path $env:RUNNER_RUNTIME 'data\processed'),
+            (Join-Path $env:RUNNER_RUNTIME 'outputs'),
+            (Join-Path $env:RUNNER_RUNTIME 'artifacts'),
+            (Join-Path $env:RUNNER_RUNTIME 'artifacts\logs')
+          ) | ForEach-Object {
+            New-Item -ItemType Directory -Path $_ -Force | Out-Null
+          }
+
+      - name: Validate Docker Compose config
+        run: |
+          docker compose `
+            -p $env:COMPOSE_PROJECT `
+            -f docker-compose.yml `
+            -f docker-compose.local-runner.yml `
+            config
+
+      - name: Build pipeline image
+        run: |
+          docker compose `
+            -p $env:COMPOSE_PROJECT `
+            -f docker-compose.yml `
+            -f docker-compose.local-runner.yml `
+            build pipeline
+
+      - name: Run selected pipeline mode
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $runMode = '${{ inputs.run_mode }}'
+          $trainUntilDate = '${{ inputs.train_until_date }}'
+          $lookbackDays = '${{ inputs.lookback_days }}'
+          $topK = '${{ inputs.top_k }}'
+          $configPath = '${{ inputs.config_path }}'
+
+          if ([string]::IsNullOrWhiteSpace($trainUntilDate)) {
+            throw 'train_until_date must not be empty.'
+          }
+          if ([string]::IsNullOrWhiteSpace($lookbackDays)) {
+            throw 'lookback_days must not be empty.'
+          }
+          if ([string]::IsNullOrWhiteSpace($topK)) {
+            throw 'top_k must not be empty.'
+          }
+          if ([string]::IsNullOrWhiteSpace($configPath)) {
+            throw 'config_path must not be empty.'
+          }
+
+          $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
+          $logRoot = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"
+          New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+
+          $composeArgs = @(
+            'compose',
+            '-p', $env:COMPOSE_PROJECT,
+            '-f', 'docker-compose.yml',
+            '-f', 'docker-compose.local-runner.yml'
+          )
+
+          function Invoke-PipelineContainer {
+            param(
+              [Parameter(Mandatory = $true)][string]$StepName,
+              [Parameter(Mandatory = $true)][string[]]$ContainerArgs
+            )
+
+            $logFile = Join-Path $logRoot "$StepName.log"
+            Write-Host "Running $StepName"
+            & docker @composeArgs run --rm pipeline @ContainerArgs 2>&1 |
+              Tee-Object -FilePath $logFile
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "$StepName failed with exit code $LASTEXITCODE. See $logFile"
+            }
+          }
+
+          function Invoke-RecommendationPipeline {
+            Invoke-PipelineContainer `
+              -StepName 'pipeline' `
+              -ContainerArgs @(
+                'uv', 'run', '--no-dev', 'python', 'scripts/run_mvp_pipeline.py',
+                $trainUntilDate,
+                '--lookback-days', $lookbackDays,
+                '--config-path', $configPath,
+                '--top-k', $topK
+              )
+          }
+
+          function Invoke-LookupPreview {
+            if (Test-Path -LiteralPath 'scripts/preview_latest_recommendations.py') {
+              Invoke-PipelineContainer `
+                -StepName 'lookup-preview' `
+                -ContainerArgs @(
+                  'uv', 'run', '--no-dev', 'python', 'scripts/preview_latest_recommendations.py',
+                  '--top-k', $topK,
+                  '--head', '20'
+                )
+            } else {
+              Write-Host 'scripts/preview_latest_recommendations.py is missing; skipping lookup preview.'
+            }
+
+            if (Test-Path -LiteralPath 'scripts/export_recommendation_preview.py') {
+              Invoke-PipelineContainer `
+                -StepName 'export-preview' `
+                -ContainerArgs @(
+                  'uv', 'run', '--no-dev', 'python', 'scripts/export_recommendation_preview.py',
+                  '--top-k', $topK,
+                  '--max-items', '25',
+                  '--output-dir', 'outputs/demo'
+                )
+            } else {
+              Write-Host 'scripts/export_recommendation_preview.py is missing; skipping demo export.'
+            }
+          }
+
+          function Invoke-Evaluation {
+            if (Test-Path -LiteralPath 'scripts/run_evaluation.py') {
+              Invoke-PipelineContainer `
+                -StepName 'evaluation' `
+                -ContainerArgs @('uv', 'run', '--no-dev', 'python', 'scripts/run_evaluation.py')
+            } else {
+              $evaluationDir = Join-Path $env:RUNNER_RUNTIME 'outputs\evaluation'
+              New-Item -ItemType Directory -Path $evaluationDir -Force | Out-Null
+              'No evaluation script exists in this branch.' |
+                Set-Content -LiteralPath (Join-Path $evaluationDir 'README.txt') -Encoding utf8
+              Write-Host 'No evaluation script exists in this branch; wrote outputs/evaluation/README.txt.'
+            }
+          }
+
+          switch ($runMode) {
+            'pipeline' {
+              Invoke-RecommendationPipeline
+            }
+            'lookup' {
+              Invoke-LookupPreview
+            }
+            'evaluation' {
+              Invoke-Evaluation
+            }
+            'full' {
+              Invoke-RecommendationPipeline
+              Invoke-LookupPreview
+              Invoke-Evaluation
+            }
+            default {
+              throw "Unsupported run_mode: $runMode"
+            }
+          }
+
+          $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
+          if (Test-Path -LiteralPath $outputsRoot) {
+            Get-ChildItem -LiteralPath $outputsRoot -Recurse -File |
+              Sort-Object Length -Descending |
+              Select-Object FullName, Length, LastWriteTime -First 200 |
+              Format-Table -AutoSize
+          }
+
+      - name: Build safe artifact bundle
+        id: bundle
+        if: ${{ inputs.upload_artifact }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
+          $bundle = Join-Path $env:RUNNER_RUNTIME "artifacts\github\$runLabel"
+          if (Test-Path -LiteralPath $bundle) {
+            Remove-Item -LiteralPath $bundle -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+
+          $limitBytes = [int64]$env:ARTIFACT_FILE_LIMIT_BYTES
+          $copied = New-Object System.Collections.Generic.List[object]
+          $skipped = New-Object System.Collections.Generic.List[object]
+
+          $sources = @(
+            @{
+              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\recommendations\latest'
+              Prefix = 'outputs\recommendations\latest'
+            },
+            @{
+              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\demo'
+              Prefix = 'outputs\demo'
+            },
+            @{
+              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\evaluation'
+              Prefix = 'outputs\evaluation'
+            },
+            @{
+              Root = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"
+              Prefix = 'logs'
+            }
+          )
+
+          foreach ($source in $sources) {
+            $root = $source.Root
+            if (-not (Test-Path -LiteralPath $root)) {
+              continue
+            }
+
+            Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+              $file = $_
+              $fullName = $file.FullName
+              $reason = $null
+
+              if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
+                $reason = 'raw-or-processed-data-path'
+              } elseif ($file.Extension -eq '.parquet') {
+                $reason = 'parquet-skipped'
+              } elseif ($file.Length -gt $limitBytes) {
+                $reason = 'over-100mb'
+              }
+
+              if ($reason) {
+                $skipped.Add([ordered]@{
+                  path = $fullName
+                  bytes = $file.Length
+                  reason = $reason
+                })
+                return
+              }
+
+              $relative = [System.IO.Path]::GetRelativePath($root, $fullName)
+              $targetDir = Join-Path $bundle $source.Prefix
+              $target = Join-Path $targetDir $relative
+              New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+              Copy-Item -LiteralPath $fullName -Destination $target -Force
+              $copied.Add([ordered]@{
+                source = $fullName
+                artifact_path = [System.IO.Path]::GetRelativePath($bundle, $target)
+                bytes = $file.Length
+              })
+            }
+          }
+
+          $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
+          if (Test-Path -LiteralPath $outputsRoot) {
+            Get-ChildItem -LiteralPath $outputsRoot -Recurse -File |
+              Select-Object FullName, Length, LastWriteTime |
+              ConvertTo-Json -Depth 4 |
+              Set-Content -LiteralPath (Join-Path $bundle 'outputs_file_index.json') -Encoding utf8
+          }
+
+          $manifest = [ordered]@{
+            repository = '${{ github.repository }}'
+            actor = '${{ github.actor }}'
+            ref = '${{ github.ref }}'
+            sha = '${{ github.sha }}'
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            runner_name = '${{ runner.name }}'
+            runtime = $env:RUNNER_RUNTIME
+            inputs = [ordered]@{
+              run_mode = '${{ inputs.run_mode }}'
+              train_until_date = '${{ inputs.train_until_date }}'
+              lookback_days = '${{ inputs.lookback_days }}'
+              top_k = '${{ inputs.top_k }}'
+              config_path = '${{ inputs.config_path }}'
+            }
+            copied_files = $copied
+            skipped_files = $skipped
+          }
+
+          $manifest |
+            ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath (Join-Path $bundle 'manifest.json') -Encoding utf8
+
+          Get-ChildItem -LiteralPath $bundle -Recurse -File |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+          "bundle_path=$bundle" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload safe artifact bundle
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-heavy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.bundle.outputs.bundle_path }}
+          if-no-files-found: error
+          retention-days: 7

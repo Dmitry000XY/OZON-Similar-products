@@ -33,21 +33,26 @@ def load_manifest(manifest_path: str | Path) -> dict[str, Any]:
     return manifest
 
 
-def find_compact_recommendations_path(manifest: Mapping[str, Any]) -> str | None:
-    """Find compact recommendations path in flat or nested manifest data."""
-    for key in COMPACT_RECOMMENDATIONS_PATH_KEYS:
+def find_manifest_path(manifest: Mapping[str, Any], *keys: str) -> str | None:
+    """Find a path value by key in flat or nested ``paths`` manifest sections."""
+    for key in keys:
         value = manifest.get(key)
         if isinstance(value, str):
             return value
 
     paths = manifest.get("paths")
     if isinstance(paths, Mapping):
-        for key in COMPACT_RECOMMENDATIONS_PATH_KEYS:
+        for key in keys:
             value = paths.get(key)
             if isinstance(value, str):
                 return value
 
     return None
+
+
+def find_compact_recommendations_path(manifest: Mapping[str, Any]) -> str | None:
+    """Find compact recommendations path in flat or nested manifest data."""
+    return find_manifest_path(manifest, *COMPACT_RECOMMENDATIONS_PATH_KEYS)
 
 
 def json_ready(value: Any) -> Any:

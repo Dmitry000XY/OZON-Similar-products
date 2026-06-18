@@ -616,7 +616,8 @@ outputs:
 
 source:
   package_dir: src/ozon_similar_products
-  future_layer_dirs: []
+  required_layer_dirs: []
+  optional_future_layer_dirs: []
   required_modules: []
 
 project_dirs:
