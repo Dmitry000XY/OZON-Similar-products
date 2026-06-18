@@ -67,7 +67,11 @@ business:
   fallback:
     enabled: false
     top_k: 20
-    source_label: fallback
     candidate_pool_size: 200
-    include_cold_start_items: true
     min_item_events: 1
+    enable_category_type: true
+    enable_category: true
+    enable_type: true
+    enable_brand: false
+    enable_global: true
+    include_catalog_only_sources: false
