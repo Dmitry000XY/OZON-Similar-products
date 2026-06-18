@@ -37,14 +37,14 @@ scoring:
     click: 10.0
     favorite: 15.0
     to_cart: 30.0
-  min_pair_count: 1
-  min_unique_users: 1
-  min_unique_sessions: 1
+  min_pair_count: 2
+  min_unique_users: 2
+  min_unique_sessions: 2
   calibration:
     action_shares_used_for_calibration: null
     calibration_start: null
     calibration_end: null
-  normalize_by_item_popularity: false
+  normalize_by_item_popularity: true
   popularity_normalization:
     popularity_column: unique_users
     smoothing: 1.0
@@ -65,7 +65,7 @@ outputs:
 
 business:
   fallback:
-    enabled: false
+    enabled: true
     top_k: 20
     candidate_pool_size: 200
     min_item_events: 1
