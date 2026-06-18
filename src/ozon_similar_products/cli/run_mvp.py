@@ -3,10 +3,41 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
+from copy import deepcopy
 import logging
+import tempfile
 from pathlib import Path
+from typing import Any
 
+import yaml
+
+from ozon_similar_products.config import load_yaml_config
 from ozon_similar_products.pipeline.run_mvp import run_mvp_pipeline
+
+
+def _config_with_top_k_override(
+    config: Mapping[str, Any],
+    top_k: int | None,
+) -> dict[str, Any]:
+    """Return a config copy with ``top_k`` applied to pipeline selection settings."""
+    overridden = deepcopy(dict(config))
+    if top_k is None:
+        return overridden
+
+    for section_name in ("pipeline", "topk"):
+        section = overridden.get(section_name)
+        if section is None:
+            overridden[section_name] = {"top_k": top_k}
+            continue
+        if not isinstance(section, Mapping):
+            raise TypeError(f"{section_name} section must be a mapping")
+
+        section_copy = dict(section)
+        section_copy["top_k"] = top_k
+        overridden[section_name] = section_copy
+
+    return overridden
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=30,
         help="Rolling window size in days (default: 30).",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Override recommendation top-K selection for the run.",
     )
     parser.add_argument(
         "--config-path",
@@ -47,11 +84,21 @@ def main() -> int:
     )
 
     try:
-        run_mvp_pipeline(
-            train_until_date=args.train_until_date,
-            lookback_days=args.lookback_days,
-            config_path=args.config_path,
-        )
+        config = load_yaml_config(args.config_path)
+        config = _config_with_top_k_override(config, args.top_k)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "run_mvp.override.yaml"
+            config_path.write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            run_mvp_pipeline(
+                train_until_date=args.train_until_date,
+                lookback_days=args.lookback_days,
+                config_path=config_path,
+            )
     except Exception:
         logger.exception(
             "[run_mvp_pipeline] failed train_until_date=%s lookback_days=%s config=%s",
