@@ -7,7 +7,7 @@ from pathlib import Path
 
 import polars as pl
 
-from ozon_similar_products.data.config import (
+from ozon_similar_products.config import (
     ProjectConfig,
     get_path_from_config,
     load_configs,

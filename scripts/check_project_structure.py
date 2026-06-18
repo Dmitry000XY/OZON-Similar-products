@@ -24,15 +24,21 @@ def count_parquet(relative_path: str) -> int:
 def configured_directories() -> list[str]:
     """Return directories expected by the current project config."""
     paths_config = load_paths_config()
+    source_config = paths_config["source"]
     return paths_config["project_dirs"] + [
-        paths_config["source"]["package_dir"],
-        *paths_config["source"]["future_layer_dirs"],
+        source_config["package_dir"],
+        *source_config.get("required_layer_dirs", []),
     ]
 
 
 def configured_modules() -> list[str]:
     """Return required Python modules from path config."""
     return load_paths_config()["source"]["required_modules"]
+
+
+def optional_future_directories() -> list[str]:
+    """Return optional future package directories from path config."""
+    return load_paths_config()["source"].get("optional_future_layer_dirs", [])
 
 
 def configured_archives() -> list[str]:
@@ -59,6 +65,7 @@ def main() -> None:
 
     print("Project structure report:")
     print_status("Directories", configured_directories())
+    print_status("Optional future directories", optional_future_directories())
     print_status("Python modules", configured_modules())
 
     print("\nData:")

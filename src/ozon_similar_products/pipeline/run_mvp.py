@@ -13,6 +13,7 @@ from typing import Any
 
 import polars as pl
 
+from ozon_similar_products.business.fallback import FallbackConfig, FallbackLayer
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.data import load_configs, load_events, schemas
 from ozon_similar_products.data.frames import empty_contract_frame
@@ -384,9 +385,10 @@ def run_mvp_pipeline(
     5. aggregate pairs over window;
     6. score pairs;
     7. select top-K;
-    8. save detailed recommendations;
-    9. save widget output;
-    10. update latest snapshot.
+    8. apply fallback layer (optional);
+    9. save detailed recommendations;
+    10. save widget output;
+    11. update latest snapshot.
     """
     logger = logging.getLogger(__name__)
     run_started = time.perf_counter()
@@ -580,7 +582,6 @@ def run_mvp_pipeline(
 
     pair_scores_rows = pair_scores.height
     del pair_aggregates
-    del item_popularity
 
     logger.info(
         "[run_mvp_pipeline] pair scores rows=%s calibration_used=%s",
@@ -608,12 +609,33 @@ def run_mvp_pipeline(
     recommendations = selector.select(pair_scores)
     del pair_scores
 
+    fallback_config = FallbackConfig.from_config(config, top_k=top_k)
+    if fallback_config.enabled:
+        logger.info(
+            "[run_mvp_pipeline] apply fallback enabled=%s top_k=%s include_cold_start_items=%s",
+            fallback_config.enabled,
+            fallback_config.top_k,
+            fallback_config.include_cold_start_items,
+        )
+        recommendations = FallbackLayer(config=fallback_config).apply(
+            recommendations,
+            item_popularity=item_popularity,
+        )
+
+    del item_popularity
+
     recommendations_rows = recommendations.height
+    fallback_rows = (
+        recommendations
+        .filter(pl.col("source") == fallback_config.source_label)
+        .height
+    )
     if recommendations_rows == 0:
         logger.warning("[run_mvp_pipeline] recommendations empty")
     logger.info(
-        "[run_mvp_pipeline] recommendations rows=%s",
+        "[run_mvp_pipeline] recommendations rows=%s fallback_rows=%s",
         recommendations_rows,
+        fallback_rows,
     )
 
     detailed_dir = outputs_config.get("detailed_recommendations_dir", "outputs/recommendations/detailed")
@@ -651,6 +673,8 @@ def run_mvp_pipeline(
         "score_method": scorer.method,
         "top_k": top_k,
         "calibration_used": scorer.action_shares is not None,
+        "fallback_enabled": fallback_config.enabled,
+        "fallback_source_label": fallback_config.source_label,
         "detailed_recommendations_path": detailed_relative_path,
         "widget_recommendations_path": widget_relative_path,
         "paths": {
@@ -665,6 +689,7 @@ def run_mvp_pipeline(
             "pair_aggregates": pair_aggregates_rows,
             "pair_scores": pair_scores_rows,
             "recommendations": recommendations_rows,
+            "fallback_recommendations": fallback_rows,
         },
     }
     run_manifest_path = writer.save_manifest(manifest, run_dir)

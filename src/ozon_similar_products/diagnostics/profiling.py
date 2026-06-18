@@ -1,4 +1,4 @@
-"""Reusable profiling helpers for raw parquet EDA."""
+"""Reusable profiling helpers for parquet EDA and diagnostics."""
 
 from collections.abc import Iterable, Sequence
 from pathlib import Path

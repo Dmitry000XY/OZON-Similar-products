@@ -531,6 +531,13 @@ tests/test_item_popularity_builder.py
 
 Запуск тестов:
 
+Если терминал открыт в папке `docs/`, перейдите в корень проекта
+относительным путём:
+
+```bash
+cd ..
+```
+
 ```bash
 uv run pytest tests/test_item_popularity_builder.py
 ```
