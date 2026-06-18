@@ -14,16 +14,20 @@ Offline-пайплайн для кейса **Ozon Fresh**: построение 
 Pipeline строит baseline-рекомендации по цепочке:
 
 ```text
-raw user actions
-→ clean events
-→ sessions
-→ item-item pairs
-→ pair aggregates
-→ pair scores
+daily raw user actions
+→ daily clean events parquet
+→ streaming sessions with cross-day carry-over
+→ compact daily item-pair stats
+→ pair aggregates over the rolling window
+→ lazy pair scoring
 → top-K recommendations
 → saved artifacts
 → lookup
 ```
+
+Крупные промежуточные слои записываются как parquet-артефакты и переиспользуются через path/lazy scan там, где это
+возможно. Это снижает потребление RAM на длинных rolling window и позволяет не держать в памяти full-window raw events,
+full-window item pairs и full-window sessions.
 
 На выходе создаются:
 
@@ -35,6 +39,27 @@ outputs/recommendations/latest/manifest.json
 ```
 
 `latest/manifest.json` указывает на актуальную версию рекомендаций.
+
+Промежуточные pipeline-артефакты по умолчанию пишутся в `data/processed/`:
+
+```text
+data/processed/events_clean/date=YYYY-MM-DD.parquet
+data/processed/sessions/date=YYYY-MM-DD.parquet
+data/processed/item_pairs/counts/date=YYYY-MM-DD.parquet
+data/processed/item_pairs/user_keys/date=YYYY-MM-DD.parquet
+data/processed/item_pairs/session_keys/date=YYYY-MM-DD.parquet
+data/processed/pair_aggregates/window_start=..._window_end=....parquet
+data/processed/item_popularity/window_start=..._window_end=....parquet
+data/processed/action_type_distribution/window_start=..._window_end=....parquet
+```
+
+`item_pairs/counts` хранит агрегированные дневные счётчики по directed item-pair.
+
+`item_pairs/user_keys` и `item_pairs/session_keys` хранят deduplicated keys для точного подсчёта `unique_users` и
+`unique_sessions` на rolling window.
+
+В manifest поле `rows.daily_pairs` сохраняет старый смысл: количество raw directed pair rows, которое было бы построено
+до compact aggregation. При этом сами raw daily pair rows больше не являются основным сохраняемым артефактом pipeline.
 
 ---
 
@@ -80,7 +105,7 @@ uv run python scripts/check_project_structure.py
 Запуск полного MVP pipeline:
 
 ```bash
-uv run python scripts/run_mvp_pipeline.py 2024-04-30 --lookback-days 1
+uv run python scripts/run_mvp_pipeline.py 2026-04-30 --lookback-days 1
 ```
 
 или через package CLI
@@ -105,7 +130,7 @@ configs/baseline.yaml
 Можно передать другой config:
 
 ```bash
-uv run python scripts/run_mvp_pipeline.py 2024-04-30 --lookback-days 1 --config-path configs/baseline.yaml
+uv run python scripts/run_mvp_pipeline.py 2026-04-30 --lookback-days 1 --config-path configs/baseline.yaml
 ```
 
 ---
@@ -152,6 +177,28 @@ uv run python scripts/preview_latest_recommendations.py --manifest-path outputs/
 
 ---
 
+## Оптимизированный pipeline
+
+Текущая версия pipeline ориентирована на длинные rolling window и большие объёмы пользовательских событий.
+
+Основные оптимизации:
+
+- raw events читаются по дням, а не одним full-window DataFrame;
+- clean events сразу пишутся как daily parquet checkpoints;
+- сессии строятся streaming-проходом по daily clean partitions;
+- активные сессии, которые могут продолжиться на следующий день, переносятся через cross-day carry-over;
+- сессии используют компактную идентичность через `user_id`, `session_index`, `session_start_date` вместо строкового
+  `session_id`;
+- raw daily item-pair rows не сохраняются как основной артефакт;
+- вместо них пишутся compact daily pair stats: `counts`, `user_keys`, `session_keys`;
+- pair aggregation строится из compact stats paths;
+- pair scoring выполняется lazy-планом перед top-K selection.
+
+Такая схема уменьшает memory pressure в наиболее тяжёлых местах pipeline: sessionization, pair building, pair
+aggregation и scoring.
+
+---
+
 ## Тесты и проверки
 
 Запустить все тесты:
@@ -164,6 +211,12 @@ uv run pytest
 
 ```bash
 uv run pytest tests/test_run_mvp.py
+```
+
+Проверить retrieval layer:
+
+```bash
+uv run pytest tests/test_build_pairs.py tests/test_aggregate_pairs.py tests/test_scoring.py tests/test_topk.py
 ```
 
 Проверить recommendation output layer:
@@ -192,8 +245,9 @@ uv run pyrefly check src scripts tests
 configs/baseline.yaml                         # параметры baseline
 scripts/run_mvp_pipeline.py                   # запуск полного pipeline
 scripts/preview_latest_recommendations.py     # просмотр результата и lookup
-src/ozon_similar_products/pipeline/run_mvp.py # orchestration runner
-src/ozon_similar_products/retrieval/          # pairs, scoring, top-K
+src/ozon_similar_products/preprocessing/      # clean events и session builder
+src/ozon_similar_products/features/           # item popularity и calibration stats
+src/ozon_similar_products/retrieval/          # pairs, aggregation, scoring, top-K
 src/ozon_similar_products/diagnostics/        # reusable EDA/profiling/session diagnostics
 src/ozon_similar_products/business/           # fallback and business rules
 src/ozon_similar_products/evaluation/         # offline metrics and scorecards
@@ -209,11 +263,13 @@ tests/                                        # unit и integration tests
 Реализован MVP baseline:
 
 - подготовка и чтение данных;
-- очистка событий;
-- построение сессий;
-- построение item-item пар;
-- агрегация пар;
-- scoring;
+- очистка событий по дневным partition-ам;
+- streaming-построение сессий с переносом активной сессии между днями;
+- компактная идентичность сессии через `user_id`, `session_index`, `session_start_date`;
+- построение compact daily item-pair stats вместо сохранения raw daily pair rows;
+- агрегация пар из compact stats;
+- item popularity и action-type calibration stats;
+- lazy scoring перед top-K selection;
 - top-K selection;
 - сохранение рекомендаций;
 - manifest/latest snapshot;

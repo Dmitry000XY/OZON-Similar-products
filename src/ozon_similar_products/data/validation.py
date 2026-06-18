@@ -75,6 +75,18 @@ def validate_daily_item_pairs(frame: pl.DataFrame | pl.LazyFrame) -> None:
     validate_frame_has_columns(frame, schemas.DAILY_ITEM_PAIRS_COLUMNS)
 
 
+def validate_daily_pair_counts(frame: pl.DataFrame | pl.LazyFrame) -> None:
+    validate_frame_has_columns(frame, schemas.DAILY_PAIR_COUNTS_COLUMNS)
+
+
+def validate_daily_pair_user_keys(frame: pl.DataFrame | pl.LazyFrame) -> None:
+    validate_frame_has_columns(frame, schemas.DAILY_PAIR_USER_KEYS_COLUMNS)
+
+
+def validate_daily_pair_session_keys(frame: pl.DataFrame | pl.LazyFrame) -> None:
+    validate_frame_has_columns(frame, schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS)
+
+
 def validate_pair_aggregates(frame: pl.DataFrame | pl.LazyFrame) -> None:
     validate_frame_has_columns(frame, schemas.PAIR_AGGREGATES_COLUMNS)
 

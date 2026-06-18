@@ -111,6 +111,13 @@ def _as_frame(frame: FrameLike) -> pl.DataFrame:
     return frame
 
 
+def _as_lazy(frame: FrameLike) -> pl.LazyFrame:
+    """Return a LazyFrame for both eager and lazy Polars inputs."""
+    if isinstance(frame, pl.LazyFrame):
+        return frame
+    return frame.lazy()
+
+
 def _empty_pair_scores() -> pl.DataFrame:
     """Return an empty pair-scores DataFrame with the public contract columns."""
     return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
@@ -227,40 +234,35 @@ class CoVisitationScorer:
             popularity_power=popularity_power,
         )
 
-    def score(
+    def score_lazy(
             self,
             pair_aggregates: FrameLike,
             item_popularity: FrameLike | None = None,
-    ) -> pl.DataFrame:
-        """Compute pair scores from pair aggregates."""
+    ) -> pl.LazyFrame:
+        """Build a lazy pair-score plan from pair aggregates."""
         validate_pair_aggregates(pair_aggregates)
-        aggregates = _as_frame(pair_aggregates)
 
-        if aggregates.is_empty():
-            scores = _empty_pair_scores()
-            validate_pair_scores(scores)
-            return scores
-
-        filtered = aggregates.filter(
-            (pl.col("pair_count") >= self.min_pair_count)
-            & (pl.col("unique_users") >= self.min_unique_users)
-            & (pl.col("unique_sessions") >= self.min_unique_sessions)
+        scored = (
+            _as_lazy(pair_aggregates)
+            .filter(
+                (pl.col("pair_count") >= self.min_pair_count)
+                & (pl.col("unique_users") >= self.min_unique_users)
+                & (pl.col("unique_sessions") >= self.min_unique_sessions)
+            )
+            .with_columns(
+                self._base_score_expression().cast(pl.Float64).alias("base_score")
+            )
         )
 
-        if filtered.is_empty():
-            scores = _empty_pair_scores()
-            validate_pair_scores(scores)
-            return scores
-
-        scored = filtered.with_columns(
-            self._base_score_expression().cast(pl.Float64).alias("base_score")
-        )
         if self.normalize_by_item_popularity:
             if item_popularity is None:
                 raise ValueError(
                     "item_popularity must be provided when normalize_by_item_popularity=True"
                 )
-            scored = self._apply_item_popularity_normalization(scored, item_popularity)
+            scored = self._apply_item_popularity_normalization_lazy(
+                scored,
+                item_popularity,
+            )
         else:
             scored = scored.with_columns(pl.col("base_score").alias("score"))
 
@@ -269,6 +271,18 @@ class CoVisitationScorer:
             .sort(["item_id", "score", "similar_item_id"], descending=[False, True, False])
         )
 
+        validate_pair_scores(scores)
+        return scores
+
+    def score(
+            self,
+            pair_aggregates: FrameLike,
+            item_popularity: FrameLike | None = None,
+    ) -> pl.DataFrame:
+        """Compute pair scores from pair aggregates."""
+        scores = self.score_lazy(pair_aggregates, item_popularity=item_popularity).collect()
+        if scores.is_empty():
+            scores = _empty_pair_scores()
         validate_pair_scores(scores)
         return scores
 
@@ -334,3 +348,45 @@ class CoVisitationScorer:
                       ) ** self.popularity_power
 
         return normalized.with_columns((pl.col("base_score") / denominator).alias("score"))
+
+    def _apply_item_popularity_normalization_lazy(
+            self,
+            scored: pl.LazyFrame,
+            item_popularity: FrameLike,
+    ) -> pl.LazyFrame:
+        popularity_lazy = _as_lazy(item_popularity)
+        validate_item_popularity(popularity_lazy)
+
+        popularity_columns = set(popularity_lazy.collect_schema().names())
+        if self.popularity_column not in popularity_columns:
+            raise ValueError(f"popularity_column '{self.popularity_column}' is missing")
+
+        popularity_lookup = popularity_lazy.select(
+            ["item_id", pl.col(self.popularity_column).cast(pl.Float64).alias("popularity")]
+        )
+
+        normalized = (
+            scored.join(
+                popularity_lookup.rename(
+                    {"item_id": "item_id", "popularity": "source_popularity"}
+                ),
+                on="item_id",
+                how="left",
+            )
+            .join(
+                popularity_lookup.rename(
+                    {"item_id": "similar_item_id", "popularity": "candidate_popularity"}
+                ),
+                on="similar_item_id",
+                how="left",
+            )
+        )
+
+        denominator = (
+            (pl.col("source_popularity") + self.popularity_smoothing)
+            * (pl.col("candidate_popularity") + self.popularity_smoothing)
+        ) ** self.popularity_power
+
+        return normalized.with_columns(
+            (pl.col("base_score") / denominator).alias("score")
+        )
