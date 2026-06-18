@@ -1,0 +1,13 @@
+services:
+  pipeline:
+    volumes:
+      - .:/app
+      - "D:/ozon-local-runner/data/raw:/app/data/raw:ro"
+      - "D:/ozon-local-runner/data/processed:/app/data/processed"
+      - "D:/ozon-local-runner/outputs:/app/outputs"
+      - "D:/ozon-local-runner/artifacts:/app/artifacts"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UV_LINK_MODE: copy
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      POLARS_MAX_THREADS: "8"

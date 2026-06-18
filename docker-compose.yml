@@ -1,0 +1,23 @@
+services:
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ozon-similar-products-pipeline:local
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      UV_LINK_MODE: copy
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      POLARS_MAX_THREADS: "8"
+    volumes:
+      - .:/app
+    command:
+      - uv
+      - run
+      - --no-dev
+      - python
+      - scripts/run_mvp_pipeline.py
+      - "2024-04-30"
+      - --lookback-days
+      - "1"

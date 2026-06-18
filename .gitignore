@@ -223,6 +223,12 @@ __marimo__/
 /data/processed/**
 /data/samples/**
 /outputs/**
+/artifacts/**
+/logs/**
+/.runner-pid
+/.runner
+/.credentials
+/.credentials_rsaparams
 
 # Keep documentation and placeholders in ignored folders
 !/data/**/
@@ -231,6 +237,9 @@ __marimo__/
 !/outputs/**/
 !/outputs/**/README.md
 !/outputs/**/.gitkeep
+!/artifacts/**/
+!/artifacts/**/README.md
+!/artifacts/**/.gitkeep
 
 # Local temporary folders
 /_tmp*/
