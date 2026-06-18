@@ -74,7 +74,7 @@ def main() -> int:
 
     args = parse_args()
     logger = logging.getLogger(__name__)
-    config_path = _config_with_top_k_override(args.config_path, args.top_k)
+    config_path = _config_with_top_k_override(args.config_path, getattr(args, "top_k", None))
 
     logger.info(
         "[run_mvp_pipeline] start train_until_date=%s lookback_days=%s config=%s",
