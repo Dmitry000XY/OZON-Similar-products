@@ -3,7 +3,7 @@
 from ozon_similar_products.evaluation.ground_truth import (
     DEFAULT_ACTION_RELEVANCE_WEIGHTS,
     GROUND_TRUTH_COLUMNS,
-    build_ground_truth_from_sessions,
+    build_ground_truth_from_daily_pair_counts,
     validate_ground_truth,
 )
 from ozon_similar_products.evaluation.metrics import (
@@ -31,7 +31,7 @@ __all__ = [
     "OfflineMetrics",
     "TemporalSplitConfig",
     "append_experiment_index",
-    "build_ground_truth_from_sessions",
+    "build_ground_truth_from_daily_pair_counts",
     "build_scorecard",
     "compute_offline_metrics",
     "metrics_to_flat_dict",

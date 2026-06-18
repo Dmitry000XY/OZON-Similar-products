@@ -17,8 +17,9 @@ import yaml
 
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.data import load_configs, load_events, schemas
+from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.evaluation import (
-    build_ground_truth_from_sessions,
+    build_ground_truth_from_daily_pair_counts,
     build_scorecard,
     compute_offline_metrics,
     metrics_to_flat_dict,
@@ -29,13 +30,16 @@ from ozon_similar_products.output.manifest import find_manifest_path, load_manif
 from ozon_similar_products.pipeline.run_mvp import run_mvp_pipeline
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
 from ozon_similar_products.preprocessing.clean_events import EventCleaner
+from ozon_similar_products.retrieval.build_pairs import ItemPairBuilder
 
 
 def _parse_iso_date(value: str) -> date:
     try:
         return date.fromisoformat(value)
     except ValueError as error:
-        raise argparse.ArgumentTypeError("date must be an ISO date string: YYYY-MM-DD") from error
+        raise argparse.ArgumentTypeError(
+            "date must be an ISO date string: YYYY-MM-DD"
+        ) from error
 
 
 def _date_range_strings(start_date: date, end_date: date) -> list[str]:
@@ -93,6 +97,7 @@ def _config_with_top_k_override(
         if section is None:
             overridden[section_name] = {"top_k": top_k}
             continue
+
         if not isinstance(section, Mapping):
             raise TypeError(f"{section_name} section must be a mapping")
 
@@ -121,6 +126,7 @@ def _item_action_types(config: Mapping[str, Any]) -> list[str]:
     action_types = events_config.get("item_action_types", schemas.ITEM_SIGNAL_TYPES)
     if isinstance(action_types, str):
         return [action_types]
+
     return list(action_types)
 
 
@@ -139,7 +145,9 @@ def _config_with_experiment_paths(
             "events_clean_dir": str(artifacts_dir / "events_clean"),
             "sessions_dir": str(artifacts_dir / "sessions"),
             "item_popularity_dir": str(artifacts_dir / "item_popularity"),
-            "action_type_distribution_dir": str(artifacts_dir / "action_type_distribution"),
+            "action_type_distribution_dir": str(
+                artifacts_dir / "action_type_distribution"
+            ),
             "daily_pairs_dir": str(artifacts_dir / "item_pairs"),
             "pair_aggregates_dir": str(artifacts_dir / "pair_aggregates"),
         }
@@ -184,31 +192,90 @@ def _resolve_manifest_artifact_path(
     return (manifest_path.parent / artifact_path).resolve()
 
 
-def _build_validation_sessions(
+def _build_validation_pair_counts(
     *,
     config: Mapping[str, Any],
     validation_start_date: date,
     validation_end_date: date,
+    logger: logging.Logger,
 ) -> pl.DataFrame:
+    """Build compact validation pair counts day by day.
+
+    This keeps experiment evaluation memory-friendly: we do not load the whole
+    validation window and do not self-join all validation sessions at once.
+    """
+
     data_config = load_configs(project_root=PROJECT_ROOT)
     action_types = _item_action_types(config)
 
-    raw_validation_events = load_events(
-        config=data_config,
-        use_sample=False,
-        dates=_date_range_strings(validation_start_date, validation_end_date),
-        action_types=action_types,
-    )
-
     cleaner = EventCleaner(item_action_types=action_types)
-    clean_validation_events = cleaner.transform_day(raw_validation_events)
-
     session_builder = SessionBuilder.from_config(dict(config))
-    return session_builder.transform_window([clean_validation_events])
+    pair_builder = ItemPairBuilder.from_config(dict(config))
+
+    count_frames: list[pl.DataFrame] = []
+    missing_dates: list[str] = []
+
+    for partition_date in _date_range_strings(
+        validation_start_date,
+        validation_end_date,
+    ):
+        try:
+            raw_day = load_events(
+                config=data_config,
+                use_sample=False,
+                dates=[partition_date],
+                action_types=action_types,
+            )
+        except FileNotFoundError:
+            missing_dates.append(partition_date)
+            continue
+
+        clean_day = cleaner.transform_day(raw_day)
+        sessions_day = session_builder.transform_day(clean_day)
+        stats = pair_builder.build_daily_pair_stats(sessions_day)
+
+        if not stats.counts.is_empty():
+            count_frames.append(stats.counts)
+
+        logger.info(
+            "[run_experiment] validation date=%s raw_rows=%s clean_rows=%s "
+            "sessions_rows=%s pair_count_rows=%s",
+            partition_date,
+            raw_day.height,
+            clean_day.height,
+            sessions_day.height,
+            stats.counts.height,
+        )
+
+    if missing_dates:
+        logger.warning(
+            "[run_experiment] validation raw events missing for dates=%s",
+            missing_dates,
+        )
+
+    if not count_frames:
+        logger.warning("[run_experiment] validation pair counts are empty")
+        return empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+
+    return (
+        pl.concat(count_frames, how="vertical")
+        .group_by(["pair_date", "item_id", "similar_item_id"])
+        .agg(
+            pl.col("pair_count").sum().alias("pair_count"),
+            pl.col("view_count").sum().alias("view_count"),
+            pl.col("click_count").sum().alias("click_count"),
+            pl.col("favorite_count").sum().alias("favorite_count"),
+            pl.col("to_cart_count").sum().alias("to_cart_count"),
+        )
+        .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+        .sort(["pair_date", "item_id", "similar_item_id"])
+    )
 
 
 def _find_item_popularity_artifact(experiment_dir: Path) -> Path | None:
-    candidates = sorted((experiment_dir / "artifacts" / "item_popularity").glob("*.parquet"))
+    candidates = sorted(
+        (experiment_dir / "artifacts" / "item_popularity").glob("*.parquet")
+    )
     if not candidates:
         return None
     return candidates[-1]
@@ -216,7 +283,10 @@ def _find_item_popularity_artifact(experiment_dir: Path) -> Path | None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run MVP pipeline and evaluate recommendations on a future validation window.",
+        description=(
+            "Run MVP pipeline and evaluate recommendations on a future "
+            "validation window."
+        ),
     )
     parser.add_argument(
         "train_until_date",
@@ -312,7 +382,9 @@ def main() -> int:
         config_path=config_snapshot_path,
     )
 
-    latest_manifest_path = experiment_dir / "recommendations" / "latest" / "manifest.json"
+    latest_manifest_path = (
+        experiment_dir / "recommendations" / "latest" / "manifest.json"
+    )
     pipeline_manifest = load_manifest(latest_manifest_path)
     detailed_recommendations_path = _resolve_manifest_artifact_path(
         latest_manifest_path,
@@ -322,13 +394,19 @@ def main() -> int:
 
     recommendations = pl.read_parquet(detailed_recommendations_path)
 
-    logger.info("[run_experiment] build validation ground truth")
-    validation_sessions = _build_validation_sessions(
+    logger.info("[run_experiment] build validation pair counts")
+    validation_pair_counts = _build_validation_pair_counts(
         config=config,
         validation_start_date=args.validation_start_date,
         validation_end_date=args.validation_end_date,
+        logger=logger,
     )
-    ground_truth = build_ground_truth_from_sessions(validation_sessions)
+
+    validation_pair_counts_path = experiment_dir / "validation_pair_counts.parquet"
+    validation_pair_counts.write_parquet(validation_pair_counts_path)
+
+    logger.info("[run_experiment] build validation ground truth")
+    ground_truth = build_ground_truth_from_daily_pair_counts(validation_pair_counts)
 
     ground_truth_path = experiment_dir / "ground_truth.parquet"
     ground_truth.write_parquet(ground_truth_path)
@@ -359,6 +437,7 @@ def main() -> int:
             "git_sha": _git_sha(),
             "config_path": config_snapshot_path,
             "recommendations_path": detailed_recommendations_path,
+            "validation_pair_counts_path": validation_pair_counts_path,
             "ground_truth_path": ground_truth_path,
         },
     )
@@ -395,6 +474,7 @@ def main() -> int:
         "top_k": top_k,
         "pipeline_manifest_path": latest_manifest_path,
         "recommendations_path": detailed_recommendations_path,
+        "validation_pair_counts_path": validation_pair_counts_path,
         "ground_truth_path": ground_truth_path,
         "metrics_path": metrics_path,
         "scorecard_path": scorecard_path,

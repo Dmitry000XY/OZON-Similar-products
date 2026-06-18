@@ -2,34 +2,31 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 import polars as pl
 
-from ozon_similar_products.evaluation.ground_truth import build_ground_truth_from_sessions
+from ozon_similar_products.evaluation.ground_truth import build_ground_truth_from_daily_pair_counts
 
 
-def test_build_ground_truth_from_sessions_prefers_to_cart_relevance() -> None:
-    sessions = pl.DataFrame(
+def test_build_ground_truth_from_daily_pair_counts_weights_to_cart() -> None:
+    pair_counts = pl.DataFrame(
         {
-            "user_id": [1, 1, 1],
-            "session_index": [1, 1, 1],
-            "session_start_date": [date(2024, 4, 30)] * 3,
-            "event_date": [date(2024, 4, 30)] * 3,
-            "timestamp": [
-                datetime(2024, 4, 30, 10, 0),
-                datetime(2024, 4, 30, 10, 1),
-                datetime(2024, 4, 30, 10, 2),
-            ],
-            "action_type": ["view", "click", "to_cart"],
-            "item_id": [100, 200, 300],
+            "pair_date": [date(2024, 4, 24), date(2024, 4, 24)],
+            "item_id": [100, 100],
+            "similar_item_id": [200, 300],
+            "pair_count": [1, 1],
+            "view_count": [0, 0],
+            "click_count": [1, 0],
+            "favorite_count": [0, 0],
+            "to_cart_count": [0, 1],
         }
     )
 
-    ground_truth = build_ground_truth_from_sessions(sessions)
+    ground_truth = build_ground_truth_from_daily_pair_counts(pair_counts)
 
-    row = ground_truth.filter((pl.col("item_id") == 100) & (pl.col("relevant_item_id") == 300))
+    to_cart_row = ground_truth.filter(pl.col("relevant_item_id") == 300)
 
-    assert row.height == 1
-    assert row["target_action_type"].to_list() == ["to_cart"]
-    assert row["relevance"].to_list() == [1.0]
+    assert to_cart_row.height == 1
+    assert to_cart_row["target_action_type"].to_list() == ["to_cart"]
+    assert to_cart_row["relevance"].to_list() == [1.0]

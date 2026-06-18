@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 import polars as pl
 
 from ozon_similar_products.data.frames import empty_contract_frame
-from ozon_similar_products.data.validation import validate_sessions
+from ozon_similar_products.data.validation import validate_daily_pair_counts
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
@@ -27,21 +27,14 @@ DEFAULT_ACTION_RELEVANCE_WEIGHTS: dict[str, float] = {
 }
 
 
-def _as_lazy(frame: FrameLike) -> pl.LazyFrame:
+def _collect_if_lazy(frame: FrameLike) -> pl.DataFrame:
     if isinstance(frame, pl.LazyFrame):
-        return frame
-    return frame.lazy()
+        return frame.collect()
+    return frame
 
 
 def _empty_ground_truth() -> pl.DataFrame:
     return empty_contract_frame(GROUND_TRUTH_COLUMNS)
-
-
-def _relevance_expr(action_weights: Mapping[str, float]) -> pl.Expr:
-    expr = pl.lit(0.0)
-    for action_type, weight in action_weights.items():
-        expr = pl.when(pl.col("action_type") == action_type).then(float(weight)).otherwise(expr)
-    return expr.cast(pl.Float64).alias("__relevance")
 
 
 def validate_ground_truth(frame: FrameLike) -> None:
@@ -55,23 +48,46 @@ def validate_ground_truth(frame: FrameLike) -> None:
         raise ValueError(f"ground_truth: missing expected columns: {sorted(missing)}")
 
 
-def build_ground_truth_from_sessions(
-    sessions: FrameLike,
+def _weighted_relevance_expr(action_weights: Mapping[str, float]) -> pl.Expr:
+    return (
+        pl.col("view_count").cast(pl.Float64) * float(action_weights.get("view", 0.0))
+        + pl.col("click_count").cast(pl.Float64) * float(action_weights.get("click", 0.0))
+        + pl.col("favorite_count").cast(pl.Float64) * float(action_weights.get("favorite", 0.0))
+        + pl.col("to_cart_count").cast(pl.Float64) * float(action_weights.get("to_cart", 0.0))
+    ).alias("relevance")
+
+
+def _target_action_type_expr() -> pl.Expr:
+    """Return the strongest observed validation action for the target item."""
+
+    return (
+        pl.when(pl.col("to_cart_count") > 0)
+        .then(pl.lit("to_cart"))
+        .when(pl.col("favorite_count") > 0)
+        .then(pl.lit("favorite"))
+        .when(pl.col("click_count") > 0)
+        .then(pl.lit("click"))
+        .when(pl.col("view_count") > 0)
+        .then(pl.lit("view"))
+        .otherwise(pl.lit(None, dtype=pl.Utf8))
+        .alias("target_action_type")
+    )
+
+
+def build_ground_truth_from_daily_pair_counts(
+    daily_pair_counts: FrameLike,
     *,
     action_weights: Mapping[str, float] | None = None,
-    item_action_types: Sequence[str] | None = None,
     min_relevance: float = 0.0,
 ) -> pl.DataFrame:
-    """Build directed item-to-item ground truth from validation sessions.
+    """Build compact evaluation ground truth from validation daily pair counts.
 
-    For every validation session, each item is treated as a source item and
-    every other item in the same session is treated as a relevant candidate.
-
-    Target-item action type defines relevance strength. By default, ``to_cart``
-    is the strongest signal, while view/click/favorite are weaker signals.
+    This is the scalable path for experiment evaluation. It reuses the same
+    item-pair semantics as the main pipeline and avoids a large all-window
+    session self-join.
     """
 
-    validate_sessions(sessions)
+    validate_daily_pair_counts(daily_pair_counts)
 
     if min_relevance < 0.0:
         raise ValueError("min_relevance must be >= 0")
@@ -80,83 +96,42 @@ def build_ground_truth_from_sessions(
     if not weights:
         raise ValueError("action_weights must not be empty")
 
-    allowed_action_types = list(item_action_types or weights.keys())
-    if not allowed_action_types:
-        raise ValueError("item_action_types must not be empty")
+    pair_counts = _collect_if_lazy(daily_pair_counts)
 
-    session_items = (
-        _as_lazy(sessions)
-        .select(
-            "user_id",
-            "session_index",
-            "item_id",
-            "action_type",
-        )
-        .filter(pl.col("item_id").is_not_null())
-        .filter(pl.col("action_type").is_in(allowed_action_types))
-        .with_columns(_relevance_expr(weights))
-        .filter(pl.col("__relevance") > min_relevance)
-        .group_by(["user_id", "session_index", "item_id"])
-        .agg(
-            pl.col("__relevance").max().alias("relevance"),
-            pl.col("action_type")
-            .sort_by(pl.col("__relevance"), descending=True)
-            .first()
-            .alias("target_action_type"),
-            pl.len().alias("evidence_count"),
-        )
-    )
-
-    pairs = (
-        session_items.join(
-            session_items,
-            on=["user_id", "session_index"],
-            how="inner",
-            suffix="_target",
-        )
-        .filter(pl.col("item_id") != pl.col("item_id_target"))
-        .select(
-            pl.col("item_id"),
-            pl.col("item_id_target").alias("relevant_item_id"),
-            pl.col("relevance_target").alias("relevance"),
-            pl.col("target_action_type_target").alias("target_action_type"),
-            pl.col("evidence_count_target").alias("evidence_count"),
-        )
-        .collect()
-    )
-
-    if pairs.is_empty():
+    if pair_counts.is_empty():
         ground_truth = _empty_ground_truth()
         validate_ground_truth(ground_truth)
         return ground_truth
 
-    best_target_actions = (
-        pairs.sort(
-            ["item_id", "relevant_item_id", "relevance", "target_action_type"],
-            descending=[False, False, True, False],
-        )
-        .unique(
-            subset=["item_id", "relevant_item_id"],
-            keep="first",
-            maintain_order=True,
-        )
-        .select(["item_id", "relevant_item_id", "target_action_type"])
-    )
-
-    ground_truth = (
-        pairs.group_by(["item_id", "relevant_item_id"])
+    aggregated = (
+        pair_counts.group_by(["item_id", "similar_item_id"])
         .agg(
-            pl.col("relevance").max().alias("relevance"),
-            pl.col("evidence_count").sum().alias("evidence_count"),
+            pl.col("pair_count").sum().alias("evidence_count"),
+            pl.col("view_count").sum().alias("view_count"),
+            pl.col("click_count").sum().alias("click_count"),
+            pl.col("favorite_count").sum().alias("favorite_count"),
+            pl.col("to_cart_count").sum().alias("to_cart_count"),
         )
-        .join(
-            best_target_actions,
-            on=["item_id", "relevant_item_id"],
-            how="left",
+        .with_columns(
+            _weighted_relevance_expr(weights),
+            _target_action_type_expr(),
         )
-        .select(GROUND_TRUTH_COLUMNS)
+        .filter(pl.col("relevance") > min_relevance)
+        .select(
+            pl.col("item_id"),
+            pl.col("similar_item_id").alias("relevant_item_id"),
+            pl.col("relevance"),
+            pl.col("target_action_type"),
+            pl.col("evidence_count"),
+        )
         .sort(["item_id", "relevance", "relevant_item_id"], descending=[False, True, False])
     )
 
+    if aggregated.is_empty():
+        ground_truth = _empty_ground_truth()
+        validate_ground_truth(ground_truth)
+        return ground_truth
+
+    ground_truth = aggregated.select(GROUND_TRUTH_COLUMNS)
     validate_ground_truth(ground_truth)
     return ground_truth
