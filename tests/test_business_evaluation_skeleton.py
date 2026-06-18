@@ -7,6 +7,7 @@ import pytest
 
 from ozon_similar_products.business import (
     FallbackConfig,
+    FallbackIndexBuilder,
     FallbackLayer,
     FallbackMerger,
     merge_fallback_candidates,
@@ -228,6 +229,179 @@ def test_fallback_brand_level_is_optional() -> None:
     ]
 
 
+def test_fallback_candidate_without_metadata_appears_only_in_global_level() -> None:
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [6],
+            "similar_item_id": [1],
+            "score": [0.9],
+            "rank": [1],
+            "source": ["behavioral"],
+        }
+    )
+
+    merged = merge_fallback_candidates(
+        recommendations=recommendations,
+        item_popularity=_item_popularity_frame(),
+        product_information=_product_information_frame(),
+        config=FallbackConfig(
+            enabled=True,
+            top_k=6,
+            include_cold_start_items=False,
+            candidate_pool_size=10,
+        ),
+    )
+
+    item_6 = merged.filter(pl.col("item_id") == 6).sort("rank")
+
+    assert item_6["similar_item_id"].to_list() == [1, 2, 3, 4, 5, 7]
+    assert item_6["source"].to_list() == [
+        "behavioral",
+        "fallback_global_popular",
+        "fallback_global_popular",
+        "fallback_global_popular",
+        "fallback_global_popular",
+        "fallback_global_popular",
+    ]
+
+
+def test_fallback_include_catalog_only_sources_uses_precomputed_indexes() -> None:
+    product_information = pl.concat(
+        [
+            _product_information_frame(),
+            pl.DataFrame(
+                {
+                    "item_id": [8],
+                    "name": ["item_8"],
+                    "brand": ["brand_z"],
+                    "type": ["milk"],
+                    "category_id": [10],
+                    "category_name": ["dairy"],
+                }
+            ),
+        ],
+        how="vertical",
+    )
+
+    merged = merge_fallback_candidates(
+        recommendations=pl.DataFrame(
+            {
+                "item_id": [],
+                "similar_item_id": [],
+                "score": [],
+                "rank": [],
+                "source": [],
+            }
+        ),
+        item_popularity=_item_popularity_frame(),
+        product_information=product_information,
+        config=FallbackConfig(
+            enabled=True,
+            top_k=3,
+            include_cold_start_items=False,
+            include_catalog_only_sources=True,
+            candidate_pool_size=10,
+        ),
+    )
+
+    item_8 = merged.filter(pl.col("item_id") == 8).sort("rank")
+
+    assert item_8["similar_item_id"].to_list() == [1, 2, 3]
+    assert item_8["source"].to_list() == [
+        "fallback_category_type_popular",
+        "fallback_category_type_popular",
+        "fallback_category_type_popular",
+    ]
+
+
+def test_fallback_index_respects_candidate_pool_limits_and_reuses_global_list() -> None:
+    fallback_index = FallbackIndexBuilder(
+        config=FallbackConfig(
+            enabled=True,
+            top_k=3,
+            candidate_pool_size=10,
+            global_candidate_pool_size=4,
+            metadata_candidate_pool_size=2,
+        )
+    ).build(
+        item_popularity=_item_popularity_frame(),
+        product_information=_product_information_frame(),
+    )
+
+    assert fallback_index.global_candidates == [1, 2, 3, 4]
+    assert fallback_index.by_category_type[(10, "milk")] == [1, 2]
+    assert fallback_index.by_category[10] == [1, 2]
+    metadata_candidate_lists = [
+        *fallback_index.by_category_type.values(),
+        *fallback_index.by_category.values(),
+        *fallback_index.by_type.values(),
+        *fallback_index.by_brand.values(),
+    ]
+    assert all(7 not in candidates for candidates in metadata_candidate_lists)
+
+
+def test_fallback_index_is_built_once_for_many_source_items(
+        monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item_count = 300
+    recommendations = pl.DataFrame(
+        {
+            "item_id": list(range(1, 101)),
+            "similar_item_id": list(range(101, 201)),
+            "score": [1.0] * 100,
+            "rank": [1] * 100,
+            "source": ["behavioral"] * 100,
+        }
+    )
+    item_popularity = pl.DataFrame(
+        {
+            "item_id": list(range(1, item_count + 1)),
+            "events_count": list(range(item_count, 0, -1)),
+            "unique_users": list(range(item_count, 0, -1)),
+            "views_count": list(range(item_count, 0, -1)),
+            "clicks_count": list(range(item_count, 0, -1)),
+            "favorites_count": list(range(item_count, 0, -1)),
+            "to_cart_count": list(range(item_count, 0, -1)),
+        }
+    )
+    product_information = pl.DataFrame(
+        {
+            "item_id": list(range(1, item_count + 1)),
+            "name": [f"item_{item_id}" for item_id in range(1, item_count + 1)],
+            "brand": ["brand"] * item_count,
+            "type": ["type"] * item_count,
+            "category_id": [10] * item_count,
+            "category_name": ["category"] * item_count,
+        }
+    )
+    build_calls = 0
+    original_build = FallbackIndexBuilder.build
+
+    def build_spy(self: FallbackIndexBuilder, *args: object, **kwargs: object):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build(self, *args, **kwargs)
+
+    monkeypatch.setattr(FallbackIndexBuilder, "build", build_spy)
+
+    merged = merge_fallback_candidates(
+        recommendations=recommendations,
+        item_popularity=item_popularity,
+        product_information=product_information,
+        config=FallbackConfig(
+            enabled=True,
+            top_k=3,
+            include_cold_start_items=True,
+            global_candidate_pool_size=20,
+            metadata_candidate_pool_size=20,
+        ),
+    )
+
+    assert build_calls == 1
+    assert merged.filter(pl.col("item_id") == 1).height == 3
+    assert merged.filter(pl.col("source").str.starts_with("fallback")).height > 0
+
+
 def test_fallback_merger_rejects_invalid_config() -> None:
     with pytest.raises(ValueError, match="fallback.top_k"):
         FallbackConfig(enabled=True, top_k=0)
@@ -237,6 +411,12 @@ def test_fallback_merger_rejects_invalid_config() -> None:
 
     with pytest.raises(ValueError, match="fallback.candidate_pool_size"):
         FallbackConfig(enabled=True, candidate_pool_size=0)
+
+    with pytest.raises(ValueError, match="fallback.global_candidate_pool_size"):
+        FallbackConfig(enabled=True, global_candidate_pool_size=0)
+
+    with pytest.raises(ValueError, match="fallback.metadata_candidate_pool_size"):
+        FallbackConfig(enabled=True, metadata_candidate_pool_size=0)
 
     assert FallbackMerger(config=FallbackConfig(enabled=True, top_k=10)) is not None
 
