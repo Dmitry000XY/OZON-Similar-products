@@ -1,5 +1,4 @@
 """CLI entrypoint for parameter tuning over an explicit search space."""
-
 from __future__ import annotations
 
 import argparse
@@ -9,10 +8,11 @@ import math
 import random
 import shutil
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from itertools import islice, product
 from pathlib import Path
 from typing import Any
 
@@ -27,15 +27,11 @@ def _parse_iso_date(value: str) -> date:
     try:
         return date.fromisoformat(value)
     except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "date must be an ISO date string: YYYY-MM-DD"
-        ) from error
+        raise argparse.ArgumentTypeError("date must be an ISO date string: YYYY-MM-DD") from error
 
 
 def _resolve_project_path(path: Path) -> Path:
-    if path.is_absolute():
-        return path
-    return (PROJECT_ROOT / path).resolve()
+    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
 def _safe_sweep_id(name: str | None = None) -> str:
@@ -50,12 +46,10 @@ def _safe_sweep_id(name: str | None = None) -> str:
 
 
 def set_by_dot_path(config: Mapping[str, Any], dot_path: str, value: Any) -> dict[str, Any]:
-    """Return a deep config copy with one dot-path override applied."""
     if not dot_path:
         raise ValueError("dot_path must be non-empty")
-
-    overridden = deepcopy(dict(config))
-    cursor: dict[str, Any] = overridden
+    result = deepcopy(dict(config))
+    cursor: dict[str, Any] = result
     parts = dot_path.split(".")
     for part in parts[:-1]:
         current = cursor.get(part)
@@ -63,15 +57,13 @@ def set_by_dot_path(config: Mapping[str, Any], dot_path: str, value: Any) -> dic
             current = {}
         if not isinstance(current, Mapping):
             raise TypeError(f"Cannot set {dot_path}: {part} is not a mapping")
-        current_copy = dict(current)
-        cursor[part] = current_copy
-        cursor = current_copy
+        cursor[part] = dict(current)
+        cursor = cursor[part]
     cursor[parts[-1]] = value
-    return overridden
+    return result
 
 
 def apply_overrides(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
-    """Apply a set of dot-path overrides to a config copy."""
     result = deepcopy(dict(config))
     for dot_path, value in overrides.items():
         result = set_by_dot_path(result, dot_path, value)
@@ -105,34 +97,24 @@ def _as_non_negative_float(value: Any, parameter_name: str) -> float:
 
 
 def _decimal_places(value: float) -> int:
-    normalized = format(value, "f").rstrip("0").rstrip(".")
-    if "." not in normalized:
-        return 0
-    return len(normalized.split(".", maxsplit=1)[1])
+    text = format(value, "f").rstrip("0").rstrip(".")
+    return 0 if "." not in text else len(text.split(".", maxsplit=1)[1])
 
 
-def _float_range_values(
-    parameter_name: str,
-    spec: Mapping[str, Any],
-) -> list[float]:
-    minimum = float(spec["min"])
-    maximum = float(spec["max"])
-    step = spec.get("step")
+def _float_range_values(parameter_name: str, spec: Mapping[str, Any]) -> list[float]:
+    minimum, maximum = float(spec["min"]), float(spec["max"])
     if minimum > maximum:
         raise ValueError(f"{parameter_name}: min must be <= max")
-    if step is None:
+    if spec.get("step") is None:
         raise ValueError(f"{parameter_name}: float_range requires step for grid expansion")
-
-    step_value = _as_non_negative_float(step, f"{parameter_name}.step")
-    if step_value <= 0.0:
+    step = _as_non_negative_float(spec["step"], f"{parameter_name}.step")
+    if step <= 0.0:
         raise ValueError(f"{parameter_name}.step must be > 0")
-
-    minimum_decimal = Decimal(str(minimum))
+    current = Decimal(str(minimum))
     maximum_decimal = Decimal(str(maximum))
-    step_decimal = Decimal(str(step_value))
+    step_decimal = Decimal(str(step))
+    digits = _decimal_places(step)
     values: list[float] = []
-    current = minimum_decimal
-    digits = _decimal_places(step_value)
     while current <= maximum_decimal:
         values.append(round(float(current), digits))
         current += step_decimal
@@ -141,28 +123,18 @@ def _float_range_values(
     return values
 
 
-def _log_float_range_values(
-    parameter_name: str,
-    spec: Mapping[str, Any],
-) -> list[float]:
-    minimum = float(spec["min"])
-    maximum = float(spec["max"])
+def _log_float_range_values(parameter_name: str, spec: Mapping[str, Any]) -> list[float]:
+    minimum, maximum = float(spec["min"]), float(spec["max"])
     if minimum <= 0.0 or maximum <= 0.0:
         raise ValueError(f"{parameter_name}: log_float_range bounds must be > 0")
     if minimum > maximum:
         raise ValueError(f"{parameter_name}: min must be <= max")
-
     count = _as_positive_int(spec.get("num", 3), f"{parameter_name}.num")
     if count == 1:
         return [_normalize_number(minimum)]
-
-    log_min = math.log(minimum)
-    log_max = math.log(maximum)
+    log_min, log_max = math.log(minimum), math.log(maximum)
     step = (log_max - log_min) / float(count - 1)
-    return [
-        _normalize_number(math.exp(log_min + index * step))
-        for index in range(count)
-    ]
+    return [_normalize_number(math.exp(log_min + index * step)) for index in range(count)]
 
 
 def _parameter_values(parameter_name: str, spec: Mapping[str, Any]) -> list[Any]:
@@ -173,8 +145,7 @@ def _parameter_values(parameter_name: str, spec: Mapping[str, Any]) -> list[Any]
             raise ValueError(f"Search-space parameter {parameter_name} must define non-empty values")
         return values
     if parameter_type == "int_range":
-        minimum = int(spec["min"])
-        maximum = int(spec["max"])
+        minimum, maximum = int(spec["min"]), int(spec["max"])
         step = _as_positive_int(spec.get("step", 1), f"{parameter_name}.step")
         if minimum > maximum:
             raise ValueError(f"{parameter_name}: min must be <= max")
@@ -186,10 +157,6 @@ def _parameter_values(parameter_name: str, spec: Mapping[str, Any]) -> list[Any]
     raise ValueError(f"Unsupported search-space type for {parameter_name}: {parameter_type}")
 
 
-def _parameter_is_mutable(parameter_name: str, spec: Mapping[str, Any]) -> bool:
-    return len(_parameter_values(parameter_name, spec)) > 1
-
-
 def _sample_parameter_value(
     parameter_name: str,
     spec: Mapping[str, Any],
@@ -198,21 +165,16 @@ def _sample_parameter_value(
     discrete_only: bool = False,
 ) -> Any:
     parameter_type = str(spec.get("type", "choice"))
-    if parameter_type == "choice":
-        return rng.choice(_parameter_values(parameter_name, spec))
-    if parameter_type == "int_range":
+    if parameter_type in {"choice", "int_range"}:
         return rng.choice(_parameter_values(parameter_name, spec))
     if parameter_type == "float_range":
         if discrete_only or spec.get("step") is not None:
             return rng.choice(_parameter_values(parameter_name, spec))
-        minimum = float(spec["min"])
-        maximum = float(spec["max"])
-        return _normalize_number(rng.uniform(minimum, maximum))
+        return _normalize_number(rng.uniform(float(spec["min"]), float(spec["max"])))
     if parameter_type == "log_float_range":
         if discrete_only:
             return rng.choice(_parameter_values(parameter_name, spec))
-        minimum = float(spec["min"])
-        maximum = float(spec["max"])
+        minimum, maximum = float(spec["min"]), float(spec["max"])
         if minimum <= 0.0 or maximum <= 0.0:
             raise ValueError(f"{parameter_name}: log_float_range bounds must be > 0")
         return _normalize_number(math.exp(rng.uniform(math.log(minimum), math.log(maximum))))
@@ -239,6 +201,10 @@ def _sample_trial(
     }
 
 
+def _parameter_is_mutable(parameter_name: str, spec: Mapping[str, Any]) -> bool:
+    return len(_parameter_values(parameter_name, spec)) > 1
+
+
 def _mutate_parameter_value(
     parameter_name: str,
     spec: Mapping[str, Any],
@@ -246,30 +212,21 @@ def _mutate_parameter_value(
     *,
     rng: random.Random,
 ) -> Any:
-    parameter_type = str(spec.get("type", "choice"))
     values = _parameter_values(parameter_name, spec)
     if len(values) <= 1:
         return current_value
-
-    if parameter_type == "choice":
+    if str(spec.get("type", "choice")) == "choice":
         alternatives = [value for value in values if value != current_value]
         return rng.choice(alternatives) if alternatives else current_value
-
-    if parameter_type in {"int_range", "float_range", "log_float_range"}:
-        if current_value not in values:
-            return min(values, key=lambda value: abs(float(value) - float(current_value)))
-
-        index = values.index(current_value)
-        neighbors = []
-        if index > 0:
-            neighbors.append(values[index - 1])
-        if index < len(values) - 1:
-            neighbors.append(values[index + 1])
-        if neighbors:
-            return rng.choice(neighbors)
-        return current_value
-
-    raise ValueError(f"Unsupported search-space type for {parameter_name}: {parameter_type}")
+    if current_value not in values:
+        return min(values, key=lambda value: abs(float(value) - float(current_value)))
+    index = values.index(current_value)
+    neighbors = []
+    if index > 0:
+        neighbors.append(values[index - 1])
+    if index < len(values) - 1:
+        neighbors.append(values[index + 1])
+    return rng.choice(neighbors) if neighbors else current_value
 
 
 def _mutate_trial(
@@ -282,7 +239,6 @@ def _mutate_trial(
     parameters = search_space.get("parameters")
     if not isinstance(parameters, Mapping) or not parameters:
         raise ValueError("search_space.yaml must contain non-empty parameters")
-
     mutable_parameters = [
         str(name)
         for name, spec in parameters.items()
@@ -290,65 +246,48 @@ def _mutate_trial(
     ]
     if not mutable_parameters:
         return dict(current_trial)
-
     updated = dict(current_trial)
-    mutation_count = min(max(1, mutations), len(mutable_parameters))
-    selected_parameters = rng.sample(mutable_parameters, k=mutation_count)
-    for parameter_name in selected_parameters:
+    for parameter_name in rng.sample(mutable_parameters, k=min(max(1, mutations), len(mutable_parameters))):
         spec = parameters[parameter_name]
-        if not isinstance(spec, Mapping):
-            continue
-        updated[parameter_name] = _mutate_parameter_value(
-            parameter_name,
-            spec,
-            updated.get(parameter_name),
-            rng=rng,
-        )
+        if isinstance(spec, Mapping):
+            updated[parameter_name] = _mutate_parameter_value(
+                parameter_name,
+                spec,
+                updated.get(parameter_name),
+                rng=rng,
+            )
     return updated
 
 
-def generate_grid_trials(search_space: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Generate all grid combinations from search_space.yaml parameters."""
+def _iter_grid_trials(search_space: Mapping[str, Any]) -> Iterator[dict[str, Any]]:
     parameters = search_space.get("parameters")
     if not isinstance(parameters, Mapping) or not parameters:
         raise ValueError("search_space.yaml must contain non-empty parameters")
-
-    names = list(parameters.keys())
+    names = [str(name) for name in parameters]
     value_lists = [
         _parameter_values(str(name), spec if isinstance(spec, Mapping) else {})
         for name, spec in parameters.items()
     ]
-
-    trials: list[dict[str, Any]] = [{}]
-    for name, values in zip(names, value_lists, strict=True):
-        trials = [
-            {**trial, str(name): value}
-            for trial in trials
-            for value in values
-        ]
-    return trials
+    for values in product(*value_lists):
+        yield dict(zip(names, values, strict=True))
 
 
-def select_trials(
-    search_space: Mapping[str, Any],
-    *,
-    strategy: str,
-    max_trials: int,
-) -> list[dict[str, Any]]:
-    """Select trial overrides for grid/random/successive_halving strategies."""
+def generate_grid_trials(search_space: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return list(_iter_grid_trials(search_space))
+
+
+def _select_sampled_trials(search_space: Mapping[str, Any], *, max_trials: int) -> list[dict[str, Any]]:
+    rng = _new_rng()
+    return [_sample_trial(search_space, rng=rng) for _ in range(max_trials)]
+
+
+def select_trials(search_space: Mapping[str, Any], *, strategy: str, max_trials: int) -> list[dict[str, Any]]:
     if max_trials <= 0:
         raise ValueError("max_trials must be a positive integer")
-
     if strategy == "grid":
-        return generate_grid_trials(search_space)[:max_trials]
-
+        return list(islice(_iter_grid_trials(search_space), max_trials))
     if strategy in {"random", "successive_halving"}:
-        rng = _new_rng()
-        all_trials = generate_grid_trials(search_space)
-        shuffled = list(all_trials)
-        rng.shuffle(shuffled)
-        return shuffled[:max_trials]
-
+        return _select_sampled_trials(search_space, max_trials=max_trials)
     raise ValueError(f"Unsupported tuning strategy: {strategy}")
 
 
@@ -363,22 +302,16 @@ def _primary_metric_name(search_space: Mapping[str, Any]) -> str:
 
 def _supporting_metric_names(search_space: Mapping[str, Any]) -> list[str]:
     objective = _objective_config(search_space)
-    supporting_metrics = objective.get("supporting_metrics")
-    if isinstance(supporting_metrics, list):
-        return [str(name) for name in supporting_metrics]
-
-    tie_breakers = objective.get("tie_breakers")
-    if isinstance(tie_breakers, list):
-        return [str(name) for name in tie_breakers]
-
+    if isinstance(objective.get("supporting_metrics"), list):
+        return [str(name) for name in objective["supporting_metrics"]]
+    if isinstance(objective.get("tie_breakers"), list):
+        return [str(name) for name in objective["tie_breakers"]]
     return ["ndcg_at_k", "recall_at_k", "mrr_at_k", "coverage_at_k", "to_cart_recall_at_k"]
 
 
 def _penalty_metric_names(search_space: Mapping[str, Any]) -> list[str]:
     penalty_metrics = _objective_config(search_space).get("penalty_metrics")
-    if not isinstance(penalty_metrics, list):
-        return ["popularity_bias_at_k"]
-    return [str(name) for name in penalty_metrics]
+    return [str(name) for name in penalty_metrics] if isinstance(penalty_metrics, list) else ["popularity_bias_at_k"]
 
 
 def _metric_value(metrics: Mapping[str, Any], name: str, *, default: float = 0.0) -> float:
@@ -395,51 +328,33 @@ def _clamp01(value: float) -> float:
 def _constraint_satisfied(row: Mapping[str, Any], constraint_name: str, expected: Any) -> bool:
     numeric_expected = float(expected)
     if constraint_name.startswith("min_"):
-        metric_name = constraint_name.removeprefix("min_")
-        return _metric_value(row, metric_name) >= numeric_expected
+        return _metric_value(row, constraint_name.removeprefix("min_")) >= numeric_expected
     if constraint_name.startswith("max_"):
-        metric_name = constraint_name.removeprefix("max_")
-        return _metric_value(row, metric_name) <= numeric_expected
+        return _metric_value(row, constraint_name.removeprefix("max_")) <= numeric_expected
     raise ValueError(f"Unsupported objective constraint: {constraint_name}")
 
 
 def _geometric_mean(values: Sequence[float]) -> float:
-    if not values:
-        return 0.0
-    if any(value <= 0.0 for value in values):
+    if not values or any(value <= 0.0 for value in values):
         return 0.0
     return math.exp(sum(math.log(value) for value in values) / len(values))
 
 
-def _objective_fields(
-    row: Mapping[str, Any],
-    search_space: Mapping[str, Any],
-) -> tuple[bool, float]:
+def _objective_fields(row: Mapping[str, Any], search_space: Mapping[str, Any]) -> tuple[bool, float]:
     objective = _objective_config(search_space)
     constraints = objective.get("constraints", {})
     if not isinstance(constraints, Mapping):
         constraints = {}
-
-    for constraint_name, expected in constraints.items():
-        if not _constraint_satisfied(row, str(constraint_name), expected):
-            return False, 0.0
-
-    primary_metric = _primary_metric_name(search_space)
-    supporting_metrics = _supporting_metric_names(search_space)
-    penalty_metrics = _penalty_metric_names(search_space)
-
-    normalized_primary = _clamp01(_metric_value(row, primary_metric))
-    components = [normalized_primary]
-    components.extend(_clamp01(_metric_value(row, name)) for name in supporting_metrics)
-    components.extend(1.0 - _clamp01(_metric_value(row, name)) for name in penalty_metrics)
-    balanced_quality = _geometric_mean(components)
-    return True, normalized_primary * balanced_quality
+    if any(not _constraint_satisfied(row, str(name), expected) for name, expected in constraints.items()):
+        return False, 0.0
+    primary = _clamp01(_metric_value(row, _primary_metric_name(search_space)))
+    components = [primary]
+    components.extend(_clamp01(_metric_value(row, name)) for name in _supporting_metric_names(search_space))
+    components.extend(1.0 - _clamp01(_metric_value(row, name)) for name in _penalty_metric_names(search_space))
+    return True, primary * _geometric_mean(components)
 
 
-def _objective_sort_key(
-    row: Mapping[str, Any],
-    search_space: Mapping[str, Any],
-) -> tuple[float, float, float, str]:
+def _objective_sort_key(row: Mapping[str, Any], search_space: Mapping[str, Any]) -> tuple[float, float, float, str]:
     return (
         float(row.get("objective_score") or 0.0),
         _metric_value(row, _primary_metric_name(search_space)),
@@ -449,28 +364,24 @@ def _objective_sort_key(
 
 
 def _annotate_objective_rows(
-    rows: Iterable[Mapping[str, Any]],
-    search_space: Mapping[str, Any],
+    rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
-    annotated_rows = [dict(row) for row in rows]
+    annotated = [dict(row) for row in rows]
     primary_metric = _primary_metric_name(search_space)
-
-    for row in annotated_rows:
-        eligible, objective_score = _objective_fields(row, search_space)
-        row["objective_score"] = _normalize_number(objective_score)
+    for row in annotated:
+        eligible, score = _objective_fields(row, search_space)
+        row["objective_score"] = _normalize_number(score)
         row["objective_eligible"] = eligible
         row["objective_rank"] = None
         row["objective_primary_metric"] = primary_metric
-
-    eligible_rows = sorted(
-        (row for row in annotated_rows if row["objective_eligible"]),
+    eligible = sorted(
+        (row for row in annotated if row["objective_eligible"]),
         key=lambda row: _objective_sort_key(row, search_space),
         reverse=True,
     )
-    for index, row in enumerate(eligible_rows, start=1):
-        row["objective_rank"] = index
-
-    return annotated_rows
+    for rank, row in enumerate(eligible, start=1):
+        row["objective_rank"] = rank
+    return annotated
 
 
 def best_trial_row(
@@ -479,20 +390,16 @@ def best_trial_row(
     *,
     preferred_stage: int | None = None,
 ) -> Mapping[str, Any]:
-    """Select the best trial by balanced objective score."""
-    annotated_rows = _annotate_objective_rows(rows, search_space)
-    if not annotated_rows:
+    annotated = _annotate_objective_rows(rows, search_space)
+    if not annotated:
         raise ValueError("Cannot select best trial from an empty result set")
-
-    candidates = annotated_rows
+    candidates = annotated
     if preferred_stage is not None:
-        stage_rows = [row for row in annotated_rows if row.get("stage") == preferred_stage]
+        stage_rows = [row for row in annotated if row.get("stage") == preferred_stage]
         if stage_rows:
             candidates = stage_rows
-
-    eligible_candidates = [row for row in candidates if row.get("objective_eligible")]
-    pool = eligible_candidates or candidates
-    return max(pool, key=lambda row: _objective_sort_key(row, search_space))
+    eligible = [row for row in candidates if row.get("objective_eligible")]
+    return max(eligible or candidates, key=lambda row: _objective_sort_key(row, search_space))
 
 
 def _copy_if_different(source: Path, destination: Path) -> Path:
@@ -504,46 +411,43 @@ def _copy_if_different(source: Path, destination: Path) -> Path:
 
 
 def _grid_trial_count(search_space: Mapping[str, Any]) -> int | None:
-    try:
-        return len(generate_grid_trials(search_space))
-    except ValueError:
+    parameters = search_space.get("parameters")
+    if not isinstance(parameters, Mapping) or not parameters:
         return None
+    total = 1
+    try:
+        for name, spec in parameters.items():
+            if not isinstance(spec, Mapping):
+                return None
+            total *= len(_parameter_values(str(name), spec))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return total
 
 
-def _effective_trial_lookback_days(
-    overrides: Mapping[str, Any],
-    default_lookback_days: int,
-) -> int:
-    if "pipeline.lookback_days" in overrides:
-        return _as_positive_int(overrides["pipeline.lookback_days"], "pipeline.lookback_days")
-    return _as_positive_int(default_lookback_days, "lookback_days")
+def _effective_trial_lookback_days(overrides: Mapping[str, Any], default_lookback_days: int) -> int:
+    return _as_positive_int(overrides.get("pipeline.lookback_days", default_lookback_days), "lookback_days")
 
 
 def _effective_trial_top_k(
-    config: Mapping[str, Any],
-    overrides: Mapping[str, Any],
-    default_top_k: int | None,
+    config: Mapping[str, Any], overrides: Mapping[str, Any], default_top_k: int | None
 ) -> int | None:
-    for override_key in ("topk.top_k", "pipeline.top_k"):
-        if override_key in overrides:
-            return _as_positive_int(overrides[override_key], override_key)
-
+    for key in ("topk.top_k", "pipeline.top_k"):
+        if key in overrides:
+            return _as_positive_int(overrides[key], key)
     if default_top_k is not None:
         return _as_positive_int(default_top_k, "top_k")
-
     for section_name in ("topk", "pipeline"):
         section = config.get(section_name)
         if isinstance(section, Mapping) and section.get("top_k") is not None:
             return _as_positive_int(section["top_k"], f"{section_name}.top_k")
-
     return None
 
 
 def _with_trial_artifact_dirs(config: Mapping[str, Any], trial_dir: Path) -> dict[str, Any]:
     updated = deepcopy(dict(config))
-    artifacts = updated.get("artifacts")
-    artifact_config = dict(artifacts) if isinstance(artifacts, Mapping) else {}
-    artifact_root = trial_dir / "artifacts"
+    artifacts = dict(updated.get("artifacts", {})) if isinstance(updated.get("artifacts"), Mapping) else {}
+    root = trial_dir / "artifacts"
     for key in (
         "events_clean_dir",
         "sessions_dir",
@@ -552,17 +456,14 @@ def _with_trial_artifact_dirs(config: Mapping[str, Any], trial_dir: Path) -> dic
         "daily_pairs_dir",
         "pair_aggregates_dir",
     ):
-        artifact_config[key] = (artifact_root / key.removesuffix("_dir")).as_posix()
-    updated["artifacts"] = artifact_config
+        artifacts[key] = (root / key.removesuffix("_dir")).as_posix()
+    updated["artifacts"] = artifacts
     return updated
 
 
 def _write_yaml(path: Path, payload: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(dict(payload), sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    path.write_text(yaml.safe_dump(dict(payload), sort_keys=False, allow_unicode=True), encoding="utf-8")
     return path
 
 
@@ -573,7 +474,6 @@ def _write_results_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
         for key in row:
             if key not in fieldnames:
                 fieldnames.append(key)
-
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -588,16 +488,13 @@ def _strip_trial_recommendation_parquets(trial_dir: Path) -> None:
 
 
 def _trial_dir(sweep_dir: Path, trial_id: str, stage: int | None) -> Path:
-    base_dir = sweep_dir / "trials" / trial_id
     if stage is None:
-        return base_dir
-    return base_dir / f"stage_{stage}"
+        return sweep_dir / "trials" / trial_id
+    return sweep_dir / "trials" / trial_id / f"stage_{stage}"
 
 
 def _trial_run_id(trial_id: str, stage: int | None) -> str:
-    if stage is None:
-        return trial_id
-    return f"{trial_id}_stage{stage}"
+    return trial_id if stage is None else f"{trial_id}_stage{stage}"
 
 
 def _run_trial(
@@ -616,19 +513,13 @@ def _run_trial(
     stage = strategy_columns.get("stage")
     stage_value = int(stage) if stage is not None else None
     trial_dir = _trial_dir(sweep_dir, trial_id, stage_value)
-    trial_started = time.perf_counter()
-
+    started = time.perf_counter()
     trial_config = apply_overrides(base_config, overrides)
     trial_run_config = _with_trial_artifact_dirs(trial_config, trial_dir)
-    trial_top_k = _effective_trial_top_k(
-        trial_config,
-        overrides,
-        default_top_k=default_top_k,
-    )
-
+    trial_top_k = _effective_trial_top_k(trial_config, overrides, default_top_k)
     logger.info(
-        "[run_tune] trial_id=%s stage=%s overrides=%s "
-        "resource_lookback_days=%s resource_validation_days=%s effective_top_k=%s output_dir=%s",
+        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s "
+        "resource_validation_days=%s effective_top_k=%s output_dir=%s",
         trial_id,
         stage_value,
         overrides,
@@ -637,7 +528,6 @@ def _run_trial(
         trial_top_k,
         trial_dir,
     )
-
     trial_config_path = _write_yaml(trial_dir / "config.yaml", trial_run_config)
     result = execute_full_run(
         train_until_date=train_until_date,
@@ -654,21 +544,13 @@ def _run_trial(
     _copy_if_different(result.metrics_path, trial_dir / "metrics.json")
     _copy_if_different(result.manifest_path, trial_dir / "manifest.json")
     _strip_trial_recommendation_parquets(trial_dir)
-
-    elapsed_seconds = time.perf_counter() - trial_started
-    row = {
-        "trial_id": trial_id,
-        "run_dir": trial_dir.as_posix(),
-        **strategy_columns,
-        **overrides,
-        **metrics,
-    }
+    row = {"trial_id": trial_id, "run_dir": trial_dir.as_posix(), **strategy_columns, **overrides, **metrics}
     logger.info(
         "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f "
         "to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
         trial_id,
         stage_value,
-        elapsed_seconds,
+        time.perf_counter() - started,
         metrics.get("to_cart_hit_rate_at_k"),
         metrics.get("ndcg_at_k"),
         metrics.get("recall_at_k"),
@@ -678,32 +560,20 @@ def _run_trial(
 
 
 def _current_best_log(
-    rows: Sequence[Mapping[str, Any]],
-    search_space: Mapping[str, Any],
-    *,
-    preferred_stage: int | None = None,
+    rows: Sequence[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None
 ) -> tuple[str | None, float | None]:
     if not rows:
         return None, None
-    current_best = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
-    return str(current_best.get("trial_id")), _metric_value(
-        current_best,
-        _primary_metric_name(search_space),
-        default=float("-inf"),
+    best = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
+    return str(best.get("trial_id")), _metric_value(
+        best, _primary_metric_name(search_space), default=float("-inf")
     )
 
 
-def _annealing_temperature(
-    index: int,
-    total_trials: int,
-    *,
-    start: float,
-    end: float,
-) -> float:
+def _annealing_temperature(index: int, total_trials: int, *, start: float, end: float) -> float:
     if total_trials <= 1:
         return end
-    progress = float(index) / float(total_trials - 1)
-    return start * ((end / start) ** progress)
+    return start * ((end / start) ** (float(index) / float(total_trials - 1)))
 
 
 def run_tuning(
@@ -723,10 +593,20 @@ def run_tuning(
     annealing_temperature_end: float = 0.01,
     annealing_neighbor_mutations: int = 2,
 ) -> Path:
-    """Run a tuning sweep and return its output directory."""
     logger = logging.getLogger(__name__)
+    logger.info(
+        "[run_tune] initializing tuning_strategy=%s max_trials=%s config_path=%s "
+        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s",
+        tuning_strategy,
+        max_trials,
+        config_path,
+        search_space_path,
+        train_until_date.isoformat(),
+        lookback_days,
+        validation_days,
+        top_k,
+    )
     validation_window(train_until_date, validation_days)
-
     if max_trials <= 0:
         raise ValueError("max_trials must be a positive integer")
     if halving_reduction_factor <= 1:
@@ -742,19 +622,13 @@ def run_tuning(
     search_space = load_yaml_config(search_space_path)
     sweep_id = _safe_sweep_id(sweep_name)
     parameter_section = search_space.get("parameters", {})
-    parameter_names = (
-        [str(name) for name in parameter_section]
-        if isinstance(parameter_section, Mapping)
-        else []
-    )
+    parameter_names = [str(name) for name in parameter_section] if isinstance(parameter_section, Mapping) else []
     total_grid_combinations = _grid_trial_count(search_space)
     sweep_dir = _resolve_project_path(output_dir) / sweep_id
     sweep_dir.mkdir(parents=True, exist_ok=False)
-
     logger.info(
-        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s "
-        "config_path=%s search_space_path=%s train_until_date=%s "
-        "lookback_days=%s validation_days=%s top_k=%s output_dir=%s",
+        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s config_path=%s "
+        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s output_dir=%s",
         sweep_id,
         tuning_strategy,
         max_trials,
@@ -767,14 +641,12 @@ def run_tuning(
         sweep_dir,
     )
     logger.info(
-        "[run_tune] search_space parameters=%s parameter_names=%s "
-        "grid_combinations=%s primary_metric=%s",
+        "[run_tune] search_space parameters=%s parameter_names=%s grid_combinations=%s primary_metric=%s",
         len(parameter_names),
         parameter_names,
         total_grid_combinations,
         _primary_metric_name(search_space),
     )
-
     _write_yaml(sweep_dir / "base_config.yaml", base_config)
     _write_yaml(sweep_dir / "search_space.yaml", search_space)
 
@@ -784,18 +656,11 @@ def run_tuning(
     rng = _new_rng()
 
     if tuning_strategy in {"grid", "random"}:
-        trial_overrides = select_trials(
-            search_space,
-            strategy=tuning_strategy,
-            max_trials=max_trials,
-        )
+        trial_overrides = select_trials(search_space, strategy=tuning_strategy, max_trials=max_trials)
         for index, overrides in enumerate(trial_overrides, start=1):
             trial_id = f"trial_{index:04d}"
             trial_overrides_by_id[trial_id] = dict(overrides)
-            trial_lookback_days = _effective_trial_lookback_days(
-                overrides,
-                default_lookback_days=lookback_days,
-            )
+            trial_lookback_days = _effective_trial_lookback_days(overrides, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
@@ -813,27 +678,20 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
-            latest_row = rows[-1]
-            current_best_trial_id, current_best_primary = _current_best_log(rows, search_space)
+            best_id, best_primary = _current_best_log(rows, search_space)
             logger.info(
                 "[run_tune] trial_done trial_id=%s objective_score=%s current_best_trial_id=%s current_best_%s=%s",
                 trial_id,
-                latest_row.get("objective_score"),
-                current_best_trial_id,
+                rows[-1].get("objective_score"),
+                best_id,
                 _primary_metric_name(search_space),
-                current_best_primary,
+                best_primary,
             )
 
     elif tuning_strategy == "successive_halving":
-        stage_one_candidates = select_trials(
-            search_space,
-            strategy="successive_halving",
-            max_trials=max_trials,
-        )
-        stage_one_trial_ids: list[str] = []
+        stage_one_candidates = select_trials(search_space, strategy="successive_halving", max_trials=max_trials)
         for index, overrides in enumerate(stage_one_candidates, start=1):
             trial_id = f"trial_{index:04d}"
-            stage_one_trial_ids.append(trial_id)
             trial_overrides_by_id[trial_id] = dict(overrides)
             row, trial_config = _run_trial(
                 logger=logger,
@@ -841,11 +699,7 @@ def run_tuning(
                 sweep_dir=sweep_dir,
                 trial_id=trial_id,
                 overrides=overrides,
-                strategy_columns={
-                    "stage": 1,
-                    "resource_lookback_days": 1,
-                    "resource_validation_days": 1,
-                },
+                strategy_columns={"stage": 1, "resource_lookback_days": 1, "resource_validation_days": 1},
                 train_until_date=train_until_date,
                 lookback_days=1,
                 validation_days=1,
@@ -853,27 +707,18 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
-
         stage_one_rows = [row for row in rows if row.get("stage") == 1]
         survivors_count = max(1, math.ceil(len(stage_one_rows) / halving_reduction_factor))
-        ranked_stage_one = sorted(
-            stage_one_rows,
-            key=lambda row: _objective_sort_key(row, search_space),
-            reverse=True,
-        )
-        survivor_ids = [str(row["trial_id"]) for row in ranked_stage_one[:survivors_count]]
-        logger.info(
-            "[run_tune] successive_halving survivors=%s reduction_factor=%s",
-            survivor_ids,
-            halving_reduction_factor,
-        )
-
+        survivor_ids = [
+            str(row["trial_id"])
+            for row in sorted(stage_one_rows, key=lambda r: _objective_sort_key(r, search_space), reverse=True)[
+                :survivors_count
+            ]
+        ]
+        logger.info("[run_tune] successive_halving survivors=%s reduction_factor=%s", survivor_ids, halving_reduction_factor)
         for trial_id in survivor_ids:
             overrides = trial_overrides_by_id[trial_id]
-            trial_lookback_days = _effective_trial_lookback_days(
-                overrides,
-                default_lookback_days=lookback_days,
-            )
+            trial_lookback_days = _effective_trial_lookback_days(overrides, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
@@ -896,36 +741,22 @@ def run_tuning(
     elif tuning_strategy == "simulated_annealing":
         current_trial = _sample_trial(search_space, rng=rng, discrete_only=True)
         current_score = 0.0
-
         for index in range(max_trials):
             trial_id = f"trial_{index + 1:04d}"
             temperature = _annealing_temperature(
-                index,
-                max_trials,
-                start=annealing_temperature_start,
-                end=annealing_temperature_end,
+                index, max_trials, start=annealing_temperature_start, end=annealing_temperature_end
             )
-            if index == 0:
-                candidate_trial = dict(current_trial)
-            else:
-                candidate_trial = _mutate_trial(
-                    current_trial,
-                    search_space,
-                    mutations=annealing_neighbor_mutations,
-                    rng=rng,
-                )
-
-            trial_overrides_by_id[trial_id] = dict(candidate_trial)
-            trial_lookback_days = _effective_trial_lookback_days(
-                candidate_trial,
-                default_lookback_days=lookback_days,
+            candidate = dict(current_trial) if index == 0 else _mutate_trial(
+                current_trial, search_space, mutations=annealing_neighbor_mutations, rng=rng
             )
+            trial_overrides_by_id[trial_id] = dict(candidate)
+            trial_lookback_days = _effective_trial_lookback_days(candidate, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
                 sweep_dir=sweep_dir,
                 trial_id=trial_id,
-                overrides=candidate_trial,
+                overrides=candidate,
                 strategy_columns={
                     "resource_lookback_days": trial_lookback_days,
                     "resource_validation_days": validation_days,
@@ -939,55 +770,33 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             candidate_score = _objective_fields(row, search_space)[1]
-
-            if index == 0:
+            if index == 0 or candidate_score >= current_score:
                 accepted = True
-                current_trial = dict(candidate_trial)
-                current_score = candidate_score
             else:
-                if candidate_score >= current_score:
-                    accepted = True
-                else:
-                    acceptance_probability = math.exp(
-                        (candidate_score - current_score) / max(temperature, 1e-12)
-                    )
-                    accepted = rng.random() < acceptance_probability
-                if accepted:
-                    current_trial = dict(candidate_trial)
-                    current_score = candidate_score
-
+                accepted = rng.random() < math.exp((candidate_score - current_score) / max(temperature, 1e-12))
+            if accepted:
+                current_trial, current_score = dict(candidate), candidate_score
             row["accepted"] = accepted
             rows = _annotate_objective_rows([*rows, row], search_space)
-            latest_row = rows[-1]
             logger.info(
                 "[run_tune] annealing trial_id=%s accepted=%s temperature=%s objective_score=%s",
                 trial_id,
                 accepted,
-                latest_row.get("temperature"),
-                latest_row.get("objective_score"),
+                rows[-1].get("temperature"),
+                rows[-1].get("objective_score"),
             )
-
     else:
         raise ValueError(f"Unsupported tuning strategy: {tuning_strategy}")
 
     rows = _annotate_objective_rows(rows, search_space)
     _write_results_csv(sweep_dir / "results.csv", rows)
-
-    preferred_stage = (
-        2
-        if tuning_strategy == "successive_halving" and any(row.get("stage") == 2 for row in rows)
-        else None
-    )
+    preferred_stage = 2 if tuning_strategy == "successive_halving" and any(row.get("stage") == 2 for row in rows) else None
     best_row = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
     best_trial_id = str(best_row["trial_id"])
     best_config = trial_configs[best_trial_id]
-    excluded_keys = {"trial_id", "run_dir", *parameter_names}
     best_metrics = {
-        key: value
-        for key, value in best_row.items()
-        if key not in excluded_keys
+        key: value for key, value in best_row.items() if key not in {"trial_id", "run_dir", *parameter_names}
     }
-
     _write_yaml(sweep_dir / "best_config.yaml", best_config)
     write_json(sweep_dir / "best_metrics.json", best_metrics)
     write_json(
@@ -1029,11 +838,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-days", type=int, default=1)
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--config-path", type=Path, default=Path("configs/production.yaml"))
-    parser.add_argument(
-        "--search-space-path",
-        type=Path,
-        default=Path("configs/tuning/search_space.yaml"),
-    )
+    parser.add_argument("--search-space-path", type=Path, default=Path("configs/tuning/search_space.yaml"))
     parser.add_argument("--max-trials", type=int, default=30)
     parser.add_argument(
         "--tuning-strategy",
