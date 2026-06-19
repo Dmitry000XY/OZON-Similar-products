@@ -11,41 +11,49 @@ on:
         options:
           - full
           - tune
+
       train_until_date:
         description: Inclusive train window end date, YYYY-MM-DD
         required: true
         default: "2024-04-23"
         type: string
+
       lookback_days:
         description: Train rolling window size in days
         required: true
-        default: "7"
+        default: "1"
         type: string
+
       validation_days:
         description: Number of days after train_until_date used for validation
         required: true
         default: "1"
         type: string
+
       top_k:
         description: Recommendation top K
         required: true
         default: "20"
         type: string
+
       config_path:
         description: Config path
         required: true
         default: configs/production.yaml
         type: string
+
       search_space_path:
         description: Tuning search space config path
         required: true
         default: configs/tuning/search_space.yaml
         type: string
+
       max_trials:
         description: Maximum tuning trials
         required: true
         default: "30"
         type: string
+
       tuning_strategy:
         description: Tuning strategy
         required: true
@@ -55,6 +63,32 @@ on:
           - grid
           - random
           - successive_halving
+          - simulated_annealing
+
+      halving_reduction_factor:
+        description: Successive halving reduction factor
+        required: true
+        default: "3"
+        type: string
+
+      annealing_temperature_start:
+        description: Simulated annealing starting temperature
+        required: true
+        default: "0.10"
+        type: string
+
+      annealing_temperature_end:
+        description: Simulated annealing ending temperature
+        required: true
+        default: "0.01"
+        type: string
+
+      annealing_neighbor_mutations:
+        description: Number of parameters mutated per annealing neighbor
+        required: true
+        default: "2"
+        type: string
+
       upload_artifact:
         description: Upload safe compact artifact bundle
         required: true
@@ -72,11 +106,13 @@ concurrency:
 jobs:
   local-heavy:
     name: Local heavy pipeline
-    runs-on: [self-hosted, windows, x64, ozon-local-heavy]
+    runs-on: [ self-hosted, windows, x64, ozon-local-heavy ]
     timeout-minutes: 1440
+
     defaults:
       run:
         shell: pwsh
+
     env:
       RUNNER_RUNTIME: D:\ozon-local-runner
       COMPOSE_PROJECT: ozon-local-heavy
@@ -153,7 +189,7 @@ jobs:
       - name: Run selected pipeline mode
         run: |
           $ErrorActionPreference = 'Stop'
-
+          
           $runMode = '${{ inputs.run_mode }}'
           $trainUntilDate = '${{ inputs.train_until_date }}'
           $lookbackDays = '${{ inputs.lookback_days }}'
@@ -163,40 +199,66 @@ jobs:
           $searchSpacePath = '${{ inputs.search_space_path }}'
           $maxTrials = '${{ inputs.max_trials }}'
           $tuningStrategy = '${{ inputs.tuning_strategy }}'
-
-          foreach ($value in @($trainUntilDate, $lookbackDays, $validationDays, $topK, $configPath)) {
+          $halvingReductionFactor = '${{ inputs.halving_reduction_factor }}'
+          $annealingTemperatureStart = '${{ inputs.annealing_temperature_start }}'
+          $annealingTemperatureEnd = '${{ inputs.annealing_temperature_end }}'
+          $annealingNeighborMutations = '${{ inputs.annealing_neighbor_mutations }}'
+          
+          foreach ($value in @(
+            $trainUntilDate,
+            $lookbackDays,
+            $validationDays,
+            $topK,
+            $configPath
+          )) {
             if ([string]::IsNullOrWhiteSpace($value)) {
               throw 'Required workflow input must not be empty.'
             }
           }
-
+          
+          if ($runMode -eq 'tune') {
+            foreach ($value in @(
+              $searchSpacePath,
+              $maxTrials,
+              $tuningStrategy,
+              $halvingReductionFactor,
+              $annealingTemperatureStart,
+              $annealingTemperatureEnd,
+              $annealingNeighborMutations
+            )) {
+              if ([string]::IsNullOrWhiteSpace($value)) {
+                throw 'Required tuning workflow input must not be empty.'
+              }
+            }
+          }
+          
           $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
           $logRoot = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"
           New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
-
+          
           $composeArgs = @(
             'compose',
             '-p', $env:COMPOSE_PROJECT,
             '-f', 'docker-compose.yml',
             '-f', 'docker-compose.local-runner.yml'
           )
-
+          
           function Invoke-PipelineContainer {
             param(
               [Parameter(Mandatory = $true)][string]$StepName,
               [Parameter(Mandatory = $true)][string[]]$ContainerArgs
             )
-
+          
             $logFile = Join-Path $logRoot "$StepName.log"
             Write-Host "Running $StepName"
             & docker @composeArgs run --rm pipeline @ContainerArgs 2>&1 |
               Tee-Object -FilePath $logFile
-
+          
             if ($LASTEXITCODE -ne 0) {
               throw "$StepName failed with exit code $LASTEXITCODE. See $logFile"
             }
           }
-
+          
           if ($runMode -eq 'full') {
             Invoke-PipelineContainer `
               -StepName 'full' `
@@ -222,12 +284,16 @@ jobs:
                 '--search-space-path', $searchSpacePath,
                 '--max-trials', $maxTrials,
                 '--tuning-strategy', $tuningStrategy,
+                '--halving-reduction-factor', $halvingReductionFactor,
+                '--annealing-temperature-start', $annealingTemperatureStart,
+                '--annealing-temperature-end', $annealingTemperatureEnd,
+                '--annealing-neighbor-mutations', $annealingNeighborMutations,
                 '--sweep-name', $runLabel
               )
           } else {
             throw "Unsupported run_mode: $runMode"
           }
-
+          
           $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
           if (Test-Path -LiteralPath $outputsRoot) {
             Get-ChildItem -LiteralPath $outputsRoot -Recurse -File |
@@ -241,36 +307,36 @@ jobs:
         if: ${{ inputs.upload_artifact }}
         run: |
           $ErrorActionPreference = 'Stop'
-
+          
           $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
           $bundle = Join-Path $env:RUNNER_RUNTIME "artifacts\github\$runLabel"
           if (Test-Path -LiteralPath $bundle) {
             Remove-Item -LiteralPath $bundle -Recurse -Force
           }
           New-Item -ItemType Directory -Path $bundle -Force | Out-Null
-
+          
           $limitBytes = [int64]$env:ARTIFACT_FILE_LIMIT_BYTES
           $copied = New-Object System.Collections.Generic.List[object]
           $skipped = New-Object System.Collections.Generic.List[object]
-
+          
           $sources = @(
             @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\runs'; Prefix = 'outputs\runs' },
             @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\latest'; Prefix = 'outputs\latest' },
             @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\tuning'; Prefix = 'outputs\tuning' },
             @{ Root = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"; Prefix = 'logs' }
           )
-
+          
           foreach ($source in $sources) {
             $root = $source.Root
             if (-not (Test-Path -LiteralPath $root)) {
               continue
             }
-
+          
             Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
               $file = $_
               $fullName = $file.FullName
               $reason = $null
-
+          
               if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
                 $reason = 'raw-or-processed-data-path'
               } elseif ($file.Extension -eq '.parquet') {
@@ -282,7 +348,7 @@ jobs:
               } elseif ($file.Length -gt $limitBytes) {
                 $reason = 'over-100mb'
               }
-
+          
               if ($reason) {
                 $skipped.Add([ordered]@{
                   path = $fullName
@@ -291,7 +357,7 @@ jobs:
                 })
                 return
               }
-
+          
               $relative = [System.IO.Path]::GetRelativePath($root, $fullName)
               $targetDir = Join-Path $bundle $source.Prefix
               $target = Join-Path $targetDir $relative
@@ -304,7 +370,7 @@ jobs:
               })
             }
           }
-
+          
           $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
           if (Test-Path -LiteralPath $outputsRoot) {
             Get-ChildItem -LiteralPath $outputsRoot -Recurse -File |
@@ -312,7 +378,7 @@ jobs:
               ConvertTo-Json -Depth 4 |
               Set-Content -LiteralPath (Join-Path $bundle 'outputs_file_index.json') -Encoding utf8
           }
-
+          
           $manifest = [ordered]@{
             repository = '${{ github.repository }}'
             actor = '${{ github.actor }}'
@@ -332,19 +398,23 @@ jobs:
               search_space_path = '${{ inputs.search_space_path }}'
               max_trials = '${{ inputs.max_trials }}'
               tuning_strategy = '${{ inputs.tuning_strategy }}'
+              halving_reduction_factor = '${{ inputs.halving_reduction_factor }}'
+              annealing_temperature_start = '${{ inputs.annealing_temperature_start }}'
+              annealing_temperature_end = '${{ inputs.annealing_temperature_end }}'
+              annealing_neighbor_mutations = '${{ inputs.annealing_neighbor_mutations }}'
             }
             copied_files = $copied
             skipped_files = $skipped
           }
-
+          
           $manifest |
             ConvertTo-Json -Depth 8 |
             Set-Content -LiteralPath (Join-Path $bundle 'manifest.json') -Encoding utf8
-
+          
           Get-ChildItem -LiteralPath $bundle -Recurse -File |
             Select-Object FullName, Length |
             Format-Table -AutoSize
-
+          
           "bundle_path=$bundle" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload safe artifact bundle
