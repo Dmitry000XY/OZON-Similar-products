@@ -26,6 +26,15 @@ class OfflineMetrics:
     coverage_at_k: float | None = None
     popularity_bias_at_k: float | None = None
     fallback_share_at_k: float | None = None
+    fallback_category_type_share_at_k: float | None = None
+    fallback_category_share_at_k: float | None = None
+    fallback_type_share_at_k: float | None = None
+    fallback_brand_share_at_k: float | None = None
+    fallback_global_share_at_k: float | None = None
+    fallback_hit_rate_at_k: float | None = None
+    fallback_recall_at_k: float | None = None
+    fallback_to_cart_hit_rate_at_k: float | None = None
+    fallback_to_cart_recall_at_k: float | None = None
     view_hit_rate_at_k: float | None = None
     view_recall_at_k: float | None = None
     click_hit_rate_at_k: float | None = None
@@ -123,6 +132,31 @@ def _fallback_share(recommendations: pl.DataFrame, top_k: int) -> float | None:
     return fallback_rows / top_recommendations.height
 
 
+def _fallback_layer_shares(recommendations: pl.DataFrame, top_k: int) -> dict[str, float | None]:
+    share_names = {
+        "fallback_category_type_popular": "fallback_category_type_share_at_k",
+        "fallback_category_popular": "fallback_category_share_at_k",
+        "fallback_type_popular": "fallback_type_share_at_k",
+        "fallback_brand_popular": "fallback_brand_share_at_k",
+        "fallback_global_popular": "fallback_global_share_at_k",
+    }
+    empty_shares: dict[str, float | None] = {
+        metric_name: None for metric_name in share_names.values()
+    }
+    if recommendations.is_empty():
+        return empty_shares
+
+    top_recommendations = recommendations.filter(pl.col("rank") <= top_k)
+    if top_recommendations.is_empty():
+        return empty_shares
+
+    total_rows = float(top_recommendations.height)
+    return {
+        metric_name: top_recommendations.filter(pl.col("source") == source).height / total_rows
+        for source, metric_name in share_names.items()
+    }
+
+
 def _popularity_bias(
     recommendations: pl.DataFrame,
     top_k: int,
@@ -172,6 +206,70 @@ def _popularity_bias(
     return mean_candidate_popularity / max_popularity
 
 
+def _fallback_quality_metrics(
+    *,
+    truth_by_item: Mapping[Any, list[dict[str, Any]]],
+    recommendations_by_item: Mapping[Any, list[dict[str, Any]]],
+) -> dict[str, float | None]:
+    if not truth_by_item:
+        return {
+            "fallback_hit_rate_at_k": None,
+            "fallback_recall_at_k": None,
+            "fallback_to_cart_hit_rate_at_k": None,
+            "fallback_to_cart_recall_at_k": None,
+        }
+
+    hit_values: list[float] = []
+    recall_values: list[float] = []
+    to_cart_hit_values: list[float] = []
+    to_cart_recall_values: list[float] = []
+
+    for item_id, truth_rows in truth_by_item.items():
+        relevance_by_item = {row["relevant_item_id"]: float(row["relevance"]) for row in truth_rows}
+        total_relevance = sum(relevance_by_item.values())
+        fallback_rows = [
+            row
+            for row in recommendations_by_item.get(item_id, [])
+            if row.get("source") != "behavioral"
+        ]
+
+        fallback_relevance = 0.0
+        fallback_hit = False
+        for row in fallback_rows:
+            relevance = relevance_by_item.get(row["similar_item_id"])
+            if relevance is None:
+                continue
+            fallback_hit = True
+            fallback_relevance += relevance
+
+        hit_values.append(1.0 if fallback_hit else 0.0)
+        recall_values.append(_safe_divide(fallback_relevance, total_relevance))
+
+        to_cart_items = _action_relevant_items(truth_rows, "to_cart")
+        if not to_cart_items:
+            continue
+        to_cart_hits = {
+            row["similar_item_id"]
+            for row in fallback_rows
+            if row["similar_item_id"] in to_cart_items
+        }
+        to_cart_hit_values.append(1.0 if to_cart_hits else 0.0)
+        to_cart_recall_values.append(
+            _safe_divide(float(len(to_cart_hits)), float(len(to_cart_items)))
+        )
+
+    return {
+        "fallback_hit_rate_at_k": _mean(hit_values),
+        "fallback_recall_at_k": _mean(recall_values),
+        "fallback_to_cart_hit_rate_at_k": _mean(to_cart_hit_values)
+        if to_cart_hit_values
+        else None,
+        "fallback_to_cart_recall_at_k": _mean(to_cart_recall_values)
+        if to_cart_recall_values
+        else None,
+    }
+
+
 def compute_offline_metrics(
     recommendations: FrameLike,
     ground_truth: FrameLike,
@@ -189,10 +287,26 @@ def compute_offline_metrics(
 
     recommendations_frame = _collect_if_lazy(recommendations)
     ground_truth_frame = _collect_if_lazy(ground_truth)
+    fallback_layer_shares = _fallback_layer_shares(recommendations_frame, top_k)
 
     if ground_truth_frame.is_empty():
         return OfflineMetrics(
             fallback_share_at_k=_fallback_share(recommendations_frame, top_k),
+            fallback_category_type_share_at_k=fallback_layer_shares[
+                "fallback_category_type_share_at_k"
+            ],
+            fallback_category_share_at_k=fallback_layer_shares[
+                "fallback_category_share_at_k"
+            ],
+            fallback_type_share_at_k=fallback_layer_shares[
+                "fallback_type_share_at_k"
+            ],
+            fallback_brand_share_at_k=fallback_layer_shares[
+                "fallback_brand_share_at_k"
+            ],
+            fallback_global_share_at_k=fallback_layer_shares[
+                "fallback_global_share_at_k"
+            ],
             popularity_bias_at_k=_popularity_bias(recommendations_frame, top_k, context),
         )
 
@@ -276,6 +390,10 @@ def compute_offline_metrics(
 
     evaluated_items = len(truth_by_item)
     recommended_items = len(set(recommendations_by_item) & set(truth_by_item))
+    fallback_quality = _fallback_quality_metrics(
+        truth_by_item=truth_by_item,
+        recommendations_by_item=recommendations_by_item,
+    )
 
     return OfflineMetrics(
         hit_rate_at_k=_mean(hit_values),
@@ -285,6 +403,23 @@ def compute_offline_metrics(
         coverage_at_k=_safe_divide(float(recommended_items), float(evaluated_items)),
         popularity_bias_at_k=_popularity_bias(recommendations_frame, top_k, context),
         fallback_share_at_k=_fallback_share(recommendations_frame, top_k),
+        fallback_category_type_share_at_k=fallback_layer_shares[
+            "fallback_category_type_share_at_k"
+        ],
+        fallback_category_share_at_k=fallback_layer_shares[
+            "fallback_category_share_at_k"
+        ],
+        fallback_type_share_at_k=fallback_layer_shares["fallback_type_share_at_k"],
+        fallback_brand_share_at_k=fallback_layer_shares["fallback_brand_share_at_k"],
+        fallback_global_share_at_k=fallback_layer_shares["fallback_global_share_at_k"],
+        fallback_hit_rate_at_k=fallback_quality["fallback_hit_rate_at_k"],
+        fallback_recall_at_k=fallback_quality["fallback_recall_at_k"],
+        fallback_to_cart_hit_rate_at_k=fallback_quality[
+            "fallback_to_cart_hit_rate_at_k"
+        ],
+        fallback_to_cart_recall_at_k=fallback_quality[
+            "fallback_to_cart_recall_at_k"
+        ],
         view_hit_rate_at_k=_mean(action_hit_values["view"]) if action_hit_values["view"] else None,
         view_recall_at_k=_mean(action_recall_values["view"])
         if action_recall_values["view"]

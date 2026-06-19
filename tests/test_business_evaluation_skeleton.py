@@ -524,3 +524,58 @@ def test_split_and_metrics_compute_real_values() -> None:
     assert metrics.to_cart_recall_at_k == 1.0
     assert metrics.coverage_at_k == 1.0
     assert metrics.fallback_share_at_k == pytest.approx(1 / 3)
+    assert metrics.fallback_hit_rate_at_k == pytest.approx(0.5)
+    assert metrics.fallback_recall_at_k == pytest.approx(0.5)
+    assert metrics.fallback_to_cart_hit_rate_at_k == pytest.approx(0.5)
+    assert metrics.fallback_to_cart_recall_at_k == pytest.approx(0.5)
+
+
+def test_offline_metrics_report_fallback_layer_shares_and_quality() -> None:
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [1, 1, 1, 1, 1, 1, 2, 2],
+            "similar_item_id": [10, 11, 12, 13, 14, 15, 20, 21],
+            "score": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            "rank": [1, 2, 3, 4, 5, 6, 1, 2],
+            "source": [
+                "behavioral",
+                "fallback_category_type_popular",
+                "fallback_category_popular",
+                "fallback_type_popular",
+                "fallback_brand_popular",
+                "fallback_global_popular",
+                "behavioral",
+                "fallback_global_popular",
+            ],
+        }
+    )
+    ground_truth = pl.DataFrame(
+        {
+            "item_id": [1, 1, 1, 2, 2],
+            "relevant_item_id": [11, 12, 15, 20, 21],
+            "relevance": [1.0, 1.0, 1.0, 1.0, 1.0],
+            "target_action_type": ["to_cart", "click", "to_cart", "to_cart", "view"],
+            "evidence_count": [1, 1, 1, 1, 1],
+            "view_count": [0, 0, 0, 0, 1],
+            "click_count": [0, 1, 0, 0, 0],
+            "favorite_count": [0, 0, 0, 0, 0],
+            "to_cart_count": [1, 0, 1, 1, 0],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=6,
+    )
+
+    assert metrics.fallback_share_at_k == pytest.approx(6 / 8)
+    assert metrics.fallback_category_type_share_at_k == pytest.approx(1 / 8)
+    assert metrics.fallback_category_share_at_k == pytest.approx(1 / 8)
+    assert metrics.fallback_type_share_at_k == pytest.approx(1 / 8)
+    assert metrics.fallback_brand_share_at_k == pytest.approx(1 / 8)
+    assert metrics.fallback_global_share_at_k == pytest.approx(2 / 8)
+    assert metrics.fallback_hit_rate_at_k == 1.0
+    assert metrics.fallback_recall_at_k == pytest.approx(0.75)
+    assert metrics.fallback_to_cart_hit_rate_at_k == pytest.approx(0.5)
+    assert metrics.fallback_to_cart_recall_at_k == pytest.approx(0.5)
