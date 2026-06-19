@@ -12,6 +12,7 @@ from ozon_similar_products.business import (
     FallbackMerger,
     merge_fallback_candidates,
 )
+from ozon_similar_products.business.fallback import FrameLike
 from ozon_similar_products.evaluation import (
     OfflineMetrics,
     TemporalSplitConfig,
@@ -377,10 +378,18 @@ def test_fallback_index_is_built_once_for_many_source_items(
     build_calls = 0
     original_build = FallbackIndexBuilder.build
 
-    def build_spy(self: FallbackIndexBuilder, *args: object, **kwargs: object):
+    def build_spy(
+            self: FallbackIndexBuilder,
+            item_popularity: FrameLike,
+            product_information: FrameLike | None = None,
+    ):
         nonlocal build_calls
         build_calls += 1
-        return original_build(self, *args, **kwargs)
+        return original_build(
+            self,
+            item_popularity=item_popularity,
+            product_information=product_information,
+        )
 
     monkeypatch.setattr(FallbackIndexBuilder, "build", build_spy)
 
