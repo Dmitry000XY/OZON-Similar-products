@@ -309,6 +309,10 @@ def _publish_latest_full_run(run_dir: Path, latest_dir: Path, full_manifest: Map
         latest_dir / "recommendations" / "detailed.parquet",
     )
     shutil.copy2(
+        run_dir / "recommendations" / "enriched.parquet",
+        latest_dir / "recommendations" / "enriched.parquet",
+    )
+    shutil.copy2(
         run_dir / "recommendations" / "lookup.parquet",
         latest_dir / "recommendations" / "lookup.parquet",
     )
@@ -318,6 +322,7 @@ def _publish_latest_full_run(run_dir: Path, latest_dir: Path, full_manifest: Map
     latest_manifest = dict(full_manifest)
     latest_manifest["paths"] = {
         "detailed_recommendations_path": "recommendations/detailed.parquet",
+        "enriched_recommendations_path": "recommendations/enriched.parquet",
         "widget_recommendations_path": "recommendations/lookup.parquet",
         "lookup_recommendations_path": "recommendations/lookup.parquet",
         "metrics_path": "evaluation/metrics.json",

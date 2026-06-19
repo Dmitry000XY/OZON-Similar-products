@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import random
 import shutil
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import UTC, date, datetime
@@ -167,6 +169,25 @@ def best_trial_row(
     return max(rows, key=sort_key)
 
 
+def _primary_metric_name(search_space: Mapping[str, Any]) -> str:
+    objective = search_space.get("objective", {})
+    if not isinstance(objective, Mapping):
+        objective = {}
+    return str(objective.get("primary_metric", "to_cart_hit_rate_at_k"))
+
+
+def _copy_if_different(source: Path, destination: Path) -> Path:
+    if source.resolve() == destination.resolve():
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    return destination
+
+
+def _grid_trial_count(search_space: Mapping[str, Any]) -> int:
+    return len(generate_grid_trials(search_space))
+
+
 def _write_yaml(path: Path, payload: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -211,28 +232,69 @@ def run_tuning(
     sweep_name: str | None = None,
 ) -> Path:
     """Run a tuning sweep and return its output directory."""
+    logger = logging.getLogger(__name__)
     validation_window(train_until_date, validation_days)
 
     base_config = load_yaml_config(config_path)
     search_space = load_yaml_config(search_space_path)
+    sweep_id = _safe_sweep_id(sweep_name)
+    parameter_section = search_space.get("parameters", {})
+    parameter_names = (
+        [str(name) for name in parameter_section]
+        if isinstance(parameter_section, Mapping)
+        else []
+    )
+    total_grid_combinations = _grid_trial_count(search_space)
     trial_overrides = select_trials(
         search_space,
         strategy=tuning_strategy,
         max_trials=max_trials,
     )
-
-    sweep_id = _safe_sweep_id(sweep_name)
     sweep_dir = _resolve_project_path(output_dir) / sweep_id
     sweep_dir.mkdir(parents=True, exist_ok=False)
+
+    logger.info(
+        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s "
+        "config_path=%s search_space_path=%s train_until_date=%s "
+        "lookback_days=%s validation_days=%s top_k=%s output_dir=%s",
+        sweep_id,
+        tuning_strategy,
+        max_trials,
+        config_path,
+        search_space_path,
+        train_until_date.isoformat(),
+        lookback_days,
+        validation_days,
+        top_k,
+        sweep_dir,
+    )
+    logger.info(
+        "[run_tune] search_space parameters=%s parameter_names=%s "
+        "grid_combinations=%s trials_to_run=%s",
+        len(parameter_names),
+        parameter_names,
+        total_grid_combinations,
+        len(trial_overrides),
+    )
 
     _write_yaml(sweep_dir / "base_config.yaml", base_config)
     _write_yaml(sweep_dir / "search_space.yaml", search_space)
 
     rows: list[dict[str, Any]] = []
     trial_configs: dict[str, dict[str, Any]] = {}
+    primary_metric = _primary_metric_name(search_space)
     for index, overrides in enumerate(trial_overrides, start=1):
         trial_id = f"trial_{index:04d}"
         trial_dir = sweep_dir / "trials" / trial_id
+        trial_started = time.perf_counter()
+        logger.info(
+            "[run_tune] trial %s/%s trial_id=%s overrides=%s output_dir=%s",
+            index,
+            len(trial_overrides),
+            trial_id,
+            overrides,
+            trial_dir,
+        )
         trial_config = apply_overrides(base_config, overrides)
         trial_configs[trial_id] = trial_config
 
@@ -249,8 +311,8 @@ def run_tuning(
             publish_latest=False,
         )
         metrics = metrics_to_flat_dict(result.metrics)
-        shutil.copy2(result.metrics_path, trial_dir / "metrics.json")
-        shutil.copy2(result.manifest_path, trial_dir / "manifest.json")
+        _copy_if_different(result.metrics_path, trial_dir / "metrics.json")
+        _copy_if_different(result.manifest_path, trial_dir / "manifest.json")
         _strip_trial_recommendation_parquets(trial_dir)
 
         rows.append(
@@ -260,6 +322,24 @@ def run_tuning(
                 **overrides,
                 **metrics,
             }
+        )
+        elapsed_seconds = time.perf_counter() - trial_started
+        current_best = best_trial_row(rows, search_space)
+        logger.info(
+            "[run_tune] trial_done trial_id=%s to_cart_hit_rate_at_k=%s "
+            "ndcg_at_k=%s weighted_recall_at_k=%s coverage_at_k=%s "
+            "popularity_bias_at_k=%s elapsed_seconds=%.2f "
+            "current_best_trial_id=%s current_best_%s=%s",
+            trial_id,
+            metrics.get("to_cart_hit_rate_at_k"),
+            metrics.get("ndcg_at_k"),
+            metrics.get("weighted_recall_at_k"),
+            metrics.get("coverage_at_k"),
+            metrics.get("popularity_bias_at_k"),
+            elapsed_seconds,
+            current_best.get("trial_id"),
+            primary_metric,
+            current_best.get(primary_metric),
         )
 
     _write_results_csv(sweep_dir / "results.csv", rows)
@@ -292,6 +372,14 @@ def run_tuning(
             "top_k": top_k,
         },
     )
+    logger.info(
+        "[run_tune] done best_trial_id=%s best_%s=%s results_path=%s best_config_path=%s",
+        best_trial_id,
+        primary_metric,
+        best_row.get(primary_metric),
+        sweep_dir / "results.csv",
+        sweep_dir / "best_config.yaml",
+    )
     return sweep_dir
 
 
@@ -319,6 +407,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logger = logging.getLogger(__name__)
     args = parse_args()
     try:
         run_tuning(
@@ -333,8 +423,8 @@ def main() -> int:
             output_dir=args.output_dir,
             sweep_name=args.sweep_name,
         )
-    except Exception as error:
-        print(f"[run_tune] failed: {error}")
+    except Exception:
+        logger.exception("[run_tune] failed")
         return 1
     return 0
 

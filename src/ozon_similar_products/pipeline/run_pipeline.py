@@ -15,7 +15,7 @@ import polars as pl
 
 from ozon_similar_products.business.fallback import FallbackConfig, FallbackLayer
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
-from ozon_similar_products.data import load_configs, load_events, schemas
+from ozon_similar_products.data import load_configs, load_events, load_products, schemas
 from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 from ozon_similar_products.output.writers import RecommendationWriter
@@ -35,6 +35,7 @@ class PipelineRunResult:
     run_dir: Path
     manifest_path: Path
     detailed_recommendations_path: Path
+    enriched_recommendations_path: Path
     lookup_recommendations_path: Path
     manifest: dict[str, Any]
 
@@ -775,6 +776,10 @@ def publish_latest_run(run_result: PipelineRunResult, latest_dir: str | Path) ->
         latest_recommendations_dir / "detailed.parquet",
     )
     shutil.copy2(
+        run_result.enriched_recommendations_path,
+        latest_recommendations_dir / "enriched.parquet",
+    )
+    shutil.copy2(
         run_result.lookup_recommendations_path,
         latest_recommendations_dir / "lookup.parquet",
     )
@@ -783,10 +788,12 @@ def publish_latest_run(run_result: PipelineRunResult, latest_dir: str | Path) ->
     manifest.update(
         {
             "detailed_recommendations_path": "recommendations/detailed.parquet",
+            "enriched_recommendations_path": "recommendations/enriched.parquet",
             "widget_recommendations_path": "recommendations/lookup.parquet",
             "lookup_recommendations_path": "recommendations/lookup.parquet",
             "paths": {
                 "detailed_recommendations_path": "recommendations/detailed.parquet",
+                "enriched_recommendations_path": "recommendations/enriched.parquet",
                 "widget_recommendations_path": "recommendations/lookup.parquet",
                 "lookup_recommendations_path": "recommendations/lookup.parquet",
             },
@@ -1063,11 +1070,20 @@ def run_pipeline(
     logger.info("[run_pipeline] write outputs run_id=%s", run_id)
     recommendations_dir = run_dir / "recommendations"
     detailed_path = writer.save_detailed(recommendations, recommendations_dir / "detailed.parquet")
+    logger.info("[run_pipeline] load product_information for enriched recommendations")
+    products = load_products(data_config, columns=["item_id", "name"])
+    enriched_path = writer.save_enriched(
+        recommendations,
+        products,
+        recommendations_dir / "enriched.parquet",
+    )
     widget_path = writer.save_widget_format(recommendations, recommendations_dir / "lookup.parquet")
 
     del recommendations
+    del products
 
     detailed_relative_path = detailed_path.relative_to(run_dir).as_posix()
+    enriched_relative_path = enriched_path.relative_to(run_dir).as_posix()
     widget_relative_path = widget_path.relative_to(run_dir).as_posix()
     manifest = {
         "run_id": run_id,
@@ -1082,10 +1098,12 @@ def run_pipeline(
         "fallback_enabled": fallback_config.enabled,
         "fallback_source_label": fallback_config.source_label,
         "detailed_recommendations_path": detailed_relative_path,
+        "enriched_recommendations_path": enriched_relative_path,
         "widget_recommendations_path": widget_relative_path,
         "lookup_recommendations_path": widget_relative_path,
         "paths": {
             "detailed_recommendations_path": detailed_relative_path,
+            "enriched_recommendations_path": enriched_relative_path,
             "widget_recommendations_path": widget_relative_path,
             "lookup_recommendations_path": widget_relative_path,
         },
@@ -1106,6 +1124,7 @@ def run_pipeline(
         run_dir=run_dir,
         manifest_path=run_manifest_path,
         detailed_recommendations_path=detailed_path,
+        enriched_recommendations_path=enriched_path,
         lookup_recommendations_path=widget_path,
         manifest=manifest,
     )

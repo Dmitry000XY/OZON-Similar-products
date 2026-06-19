@@ -84,6 +84,7 @@ def test_update_latest_manifest_rebases_paths_for_lookup(tmp_path: Path) -> None
         {
             "run_id": "run_001",
             "paths": {
+                "enriched_recommendations_path": "enriched.parquet",
                 "widget_recommendations_path": "widget/lookup.parquet",
             },
         },
@@ -96,6 +97,9 @@ def test_update_latest_manifest_rebases_paths_for_lookup(tmp_path: Path) -> None
     latest_manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
     assert latest_manifest["paths"]["widget_recommendations_path"] == (
         "../runs/run_001/widget/lookup.parquet"
+    )
+    assert latest_manifest["paths"]["enriched_recommendations_path"] == (
+        "../runs/run_001/enriched.parquet"
     )
 
     lookup = SimilarItemsLookup(latest_manifest_path)

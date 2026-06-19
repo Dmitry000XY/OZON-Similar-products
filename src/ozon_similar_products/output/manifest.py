@@ -23,6 +23,7 @@ COMPACT_RECOMMENDATIONS_PATH_KEYS = (
 
 RECOMMENDATION_ARTIFACT_PATH_KEYS = (
     "detailed_recommendations_path",
+    "enriched_recommendations_path",
     *COMPACT_RECOMMENDATIONS_PATH_KEYS,
 )
 

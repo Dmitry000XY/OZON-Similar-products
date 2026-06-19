@@ -1,5 +1,6 @@
 """Tests for full run orchestration helpers."""
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -30,6 +31,17 @@ def test_publish_latest_full_run_uses_flat_latest_layout(tmp_path: Path) -> None
     pl.DataFrame({"item_id": [1], "similar_item_id": [2], "score": [1.0], "rank": [1], "source": ["behavioral"]}).write_parquet(
         run_dir / "recommendations" / "detailed.parquet"
     )
+    pl.DataFrame(
+        {
+            "item_id": [1],
+            "item_name": ["Item 1"],
+            "similar_item_id": [2],
+            "similar_item_name": ["Item 2"],
+            "rank": [1],
+            "score": [1.0],
+            "source": ["behavioral"],
+        }
+    ).write_parquet(run_dir / "recommendations" / "enriched.parquet")
     pl.DataFrame({"item_id": [1], "similar_items_sku_list": [[2]]}).write_parquet(
         run_dir / "recommendations" / "lookup.parquet"
     )
@@ -51,8 +63,12 @@ def test_publish_latest_full_run_uses_flat_latest_layout(tmp_path: Path) -> None
     latest = tmp_path / "outputs" / "latest"
     assert (latest / "manifest.json").exists()
     assert (latest / "recommendations" / "detailed.parquet").exists()
+    assert (latest / "recommendations" / "enriched.parquet").exists()
     assert (latest / "recommendations" / "lookup.parquet").exists()
     assert (latest / "evaluation" / "metrics.json").exists()
+    assert "recommendations/enriched.parquet" in (latest / "manifest.json").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_execute_full_run_writes_debug_artifacts_only_when_requested(
@@ -134,6 +150,9 @@ def test_execute_full_run_writes_debug_artifacts_only_when_requested(
 
     assert result.metrics_path.exists()
     assert not (result.run_dir / "evaluation" / "debug").exists()
+    saved_metrics = json.loads(result.metrics_path.read_text(encoding="utf-8"))
+    saved_scorecard = json.loads(result.scorecard_path.read_text(encoding="utf-8"))
+    assert saved_scorecard["metrics"] == saved_metrics
     manifest = (result.run_dir / "manifest.json").read_text(encoding="utf-8")
     assert "recommendations/detailed.parquet" in manifest
     assert "recommendations/lookup.parquet" in manifest

@@ -387,6 +387,17 @@ def test_run_pipeline_updates_latest_with_empty_recommendations_only_when_allowe
             _.write_parquet(path)
             return path
 
+        def save_enriched(
+                self,
+                _: pl.DataFrame,
+                products: pl.DataFrame,
+                output_path: str | Path,
+        ) -> Path:
+            path = Path(output_path) / "enriched.parquet"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            products.write_parquet(path)
+            return path
+
         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
             path = Path(output_path) / "lookup.parquet"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -405,6 +416,11 @@ def test_run_pipeline_updates_latest_with_empty_recommendations_only_when_allowe
     monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
     monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
     monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
+    monkeypatch.setattr(
+        run_pipeline,
+        "load_products",
+        lambda *_a, **_k: pl.DataFrame({"item_id": [], "name": []}),
+    )
     monkeypatch.setattr(run_pipeline, "EventCleaner", FakeEventCleaner)
     monkeypatch.setattr(run_pipeline, "SessionBuilder", EmptyTransform)
     monkeypatch.setattr(run_pipeline, "ItemPairBuilder", EmptyTransform)
@@ -542,6 +558,9 @@ def test_run_pipeline_logs_warnings_on_empty_input_and_output(
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
             return Path(output_path) / "detailed.parquet"
 
+        def save_enriched(self, _: pl.DataFrame, products: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "enriched.parquet"
+
         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
             return Path(output_path) / "lookup.parquet"
 
@@ -555,6 +574,11 @@ def test_run_pipeline_logs_warnings_on_empty_input_and_output(
     monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
     monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
     monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
+    monkeypatch.setattr(
+        run_pipeline,
+        "load_products",
+        lambda *_a, **_k: pl.DataFrame({"item_id": [], "name": []}),
+    )
     monkeypatch.setattr(run_pipeline, "EventCleaner", FakeEventCleaner)
     monkeypatch.setattr(run_pipeline, "SessionBuilder", FakeSessionBuilder)
     monkeypatch.setattr(run_pipeline, "ItemPairBuilder", FakeItemPairBuilder)
@@ -825,6 +849,22 @@ def _write_smoke_raw_events(project_root: Path) -> None:
     )
 
 
+def _write_smoke_products(project_root: Path) -> None:
+    """Create product_information parquet with names for enriched recommendations."""
+    products_dir = project_root / "data" / "raw" / "product_information" / "product_information"
+    products_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "item_id": [1, 2, 10, 11, 20],
+            "name": ["Item 1", "Item 2", "Item 10", "Item 11", "Item 20"],
+            "brand": ["brand"] * 5,
+            "type": ["type"] * 5,
+            "category_id": [100] * 5,
+            "category_name": ["category"] * 5,
+        }
+    ).write_parquet(products_dir / "part-0.parquet")
+
+
 def test_run_pipeline_smoke_with_synthetic_parquet_data(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -832,6 +872,7 @@ def test_run_pipeline_smoke_with_synthetic_parquet_data(
     """Run the real pipeline pipeline on a tiny synthetic parquet dataset."""
     baseline_path = _write_smoke_project_configs(tmp_path)
     _write_smoke_raw_events(tmp_path)
+    _write_smoke_products(tmp_path)
     monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
 
     run_pipeline.run_pipeline(
@@ -844,16 +885,30 @@ def test_run_pipeline_smoke_with_synthetic_parquet_data(
     assert latest_manifest_path.exists()
 
     detailed_outputs = list((tmp_path / "outputs" / "runs").rglob("detailed.parquet"))
+    enriched_outputs = list((tmp_path / "outputs" / "runs").rglob("enriched.parquet"))
     widget_outputs = list((tmp_path / "outputs" / "runs").rglob("lookup.parquet"))
     assert detailed_outputs
+    assert enriched_outputs
     assert widget_outputs
 
     detailed = pl.read_parquet(detailed_outputs[0])
+    enriched = pl.read_parquet(enriched_outputs[0])
     widget = pl.read_parquet(widget_outputs[0])
     assert detailed.height > 0
+    assert enriched.height == detailed.height
     assert widget.height > 0
     assert "weight_sum" not in detailed.columns
     assert "to_cart_count" in detailed.columns
+    assert enriched.columns == [
+        "item_id",
+        "item_name",
+        "similar_item_id",
+        "similar_item_name",
+        "rank",
+        "score",
+        "source",
+    ]
+    assert (tmp_path / "outputs" / "latest" / "recommendations" / "enriched.parquet").exists()
 
     lookup = SimilarItemsLookup(latest_manifest_path)
     similar_items = lookup.get_similar_items(1, top_k=5)
@@ -935,6 +990,9 @@ def test_run_pipeline_loads_raw_events_day_by_day(
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
             return Path(output_path) / "detailed.parquet"
 
+        def save_enriched(self, _: pl.DataFrame, products: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "enriched.parquet"
+
         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
             return Path(output_path) / "lookup.parquet"
 
@@ -951,6 +1009,11 @@ def test_run_pipeline_loads_raw_events_day_by_day(
     monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
     monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
     monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
+    monkeypatch.setattr(
+        run_pipeline,
+        "load_products",
+        lambda *_a, **_k: pl.DataFrame({"item_id": [], "name": []}),
+    )
     monkeypatch.setattr(run_pipeline, "CoVisitationScorer", FakeScorer)
     monkeypatch.setattr(
         run_pipeline,

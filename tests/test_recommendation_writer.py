@@ -48,6 +48,15 @@ def _recommendations_out_of_rank_order() -> pl.DataFrame:
     )
 
 
+def _products() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "item_id": [1, 10, 11, 20],
+            "name": ["Anchor", "Candidate A", "Candidate B", "Candidate C"],
+        }
+    )
+
+
 def test_save_detailed_writes_parquet_to_explicit_file_path(tmp_path: Path) -> None:
     """Detailed writer should save recommendations to a concrete parquet path."""
     recommendations = _recommendations()
@@ -106,6 +115,97 @@ def test_save_detailed_preserves_channel_diagnostic_columns(tmp_path: Path) -> N
     assert "unique_users" in saved.columns
     assert "unique_sessions" in saved.columns
     assert "weight_sum" not in saved.columns
+
+
+def test_save_enriched_writes_product_names_and_required_columns(tmp_path: Path) -> None:
+    recommendations = _recommendations_out_of_rank_order()
+    output_path = tmp_path / "recommendations" / "enriched.parquet"
+
+    written_path = RecommendationWriter().save_enriched(
+        recommendations,
+        _products(),
+        output_path,
+    )
+
+    assert written_path == output_path
+    saved = pl.read_parquet(output_path)
+    assert saved.columns == [
+        "item_id",
+        "item_name",
+        "similar_item_id",
+        "similar_item_name",
+        "rank",
+        "score",
+        "source",
+    ]
+    assert saved.to_dicts() == [
+        {
+            "item_id": 1,
+            "item_name": "Anchor",
+            "similar_item_id": 10,
+            "similar_item_name": "Candidate A",
+            "rank": 1,
+            "score": 100.0,
+            "source": "behavioral",
+        },
+        {
+            "item_id": 1,
+            "item_name": "Anchor",
+            "similar_item_id": 20,
+            "similar_item_name": "Candidate C",
+            "rank": 2,
+            "score": 80.0,
+            "source": "behavioral",
+        },
+        {
+            "item_id": 1,
+            "item_name": "Anchor",
+            "similar_item_id": 30,
+            "similar_item_name": None,
+            "rank": 3,
+            "score": 70.0,
+            "source": "behavioral",
+        },
+        {
+            "item_id": 2,
+            "item_name": None,
+            "similar_item_id": 40,
+            "similar_item_name": None,
+            "rank": 1,
+            "score": 90.0,
+            "source": "behavioral",
+        },
+        {
+            "item_id": 2,
+            "item_name": None,
+            "similar_item_id": 50,
+            "similar_item_name": None,
+            "rank": 2,
+            "score": 60.0,
+            "source": "behavioral",
+        },
+    ]
+
+
+def test_save_enriched_accepts_lazy_frames(tmp_path: Path) -> None:
+    output_path = tmp_path / "enriched.parquet"
+
+    RecommendationWriter().save_enriched(
+        _recommendations_out_of_rank_order().lazy(),
+        _products().lazy(),
+        output_path,
+    )
+
+    assert output_path.is_file()
+
+
+def test_save_enriched_validates_product_name_columns(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="product_information"):
+        RecommendationWriter().save_enriched(
+            _recommendations(),
+            pl.DataFrame({"item_id": [1]}),
+            tmp_path / "enriched.parquet",
+        )
 
 
 @pytest.mark.parametrize(
