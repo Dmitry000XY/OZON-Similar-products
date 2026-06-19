@@ -129,7 +129,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest-path",
         type=Path,
-        default=Path("outputs/recommendations/latest/manifest.json"),
+        default=Path("outputs/latest/manifest.json"),
         help="Path to latest manifest JSON.",
     )
     parser.add_argument(

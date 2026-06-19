@@ -1,9 +1,9 @@
-"""MVP pipeline runner."""
+"""Recommendation pipeline runner."""
 
 from __future__ import annotations
 
 import logging
-import os
+import shutil
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -29,6 +29,19 @@ from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
 from ozon_similar_products.retrieval.build_pairs import DailyPairStats, ItemPairBuilder
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 from ozon_similar_products.retrieval.topk import TopKSelector
+
+
+@dataclass(frozen=True)
+class PipelineRunResult:
+    """Materialized output paths and metadata for one recommendation run."""
+
+    run_id: str
+    run_dir: Path
+    manifest_path: Path
+    detailed_recommendations_path: Path
+    enriched_recommendations_path: Path
+    lookup_recommendations_path: Path
+    manifest: dict[str, Any]
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -266,7 +279,7 @@ def _load_clean_and_write_daily_events(
     if not clean_event_paths:
         if not allow_empty_input:
             raise FileNotFoundError(
-                "Input events were not found for run_mvp_pipeline: "
+                "Input events were not found for run_pipeline: "
                 f"date_window=[{window_start}..{window_end}], "
                 f"action_types={list(action_types)}, "
                 f"allow_empty_input={allow_empty_input}. "
@@ -274,7 +287,7 @@ def _load_clean_and_write_daily_events(
             ) from last_missing_error
 
         logger.warning(
-            "[run_mvp_pipeline] missing raw events; continuing with empty input "
+            "[run_pipeline] missing raw events; continuing with empty input "
             "allow_empty_input=%s",
             allow_empty_input,
         )
@@ -618,14 +631,6 @@ def _append_daily_session_partitions(
         output_path = output_dir / f"date={partition_date}.parquet"
         frame_to_write = frame.select(schemas.SESSIONS_COLUMNS)
 
-        if output_path.exists():
-            frame_to_write = (
-                pl.concat([pl.read_parquet(output_path), frame_to_write], how="vertical")
-                .unique(maintain_order=True)
-                .sort(["user_id", "timestamp", "item_id", "action_type"])
-                .select(schemas.SESSIONS_COLUMNS)
-            )
-
         frame_to_write.write_parquet(output_path)
 
 def _unique_paths(paths: Sequence[Path]) -> list[Path]:
@@ -759,29 +764,58 @@ def _run_id(train_until_date: str, lookback_days: int) -> str:
     return f"run_{train_until_date}_lb{lookback_days}"
 
 
-def _common_parent(paths: Sequence[Path]) -> Path | None:
-    if not paths:
-        return None
-    try:
-        common = os.path.commonpath([str(path.resolve()) for path in paths])
-    except ValueError:
-        return None
-    return Path(common)
+def _outputs_root(outputs_config: Mapping[str, Any]) -> Path:
+    return _as_path(outputs_config.get("root_dir"), "outputs")
 
 
-def _relative_or_name(path: Path, root: Path) -> Path:
-    try:
-        return path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return Path(path.name)
+def publish_latest_run(run_result: PipelineRunResult, latest_dir: str | Path) -> Path:
+    """Copy public recommendation outputs and manifest into the latest snapshot."""
+    writer = RecommendationWriter()
+    latest_path = Path(latest_dir)
+    latest_recommendations_dir = latest_path / "recommendations"
+    latest_recommendations_dir.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(
+        run_result.detailed_recommendations_path,
+        latest_recommendations_dir / "detailed.parquet",
+    )
+    shutil.copy2(
+        run_result.enriched_recommendations_path,
+        latest_recommendations_dir / "enriched.parquet",
+    )
+    shutil.copy2(
+        run_result.lookup_recommendations_path,
+        latest_recommendations_dir / "lookup.parquet",
+    )
+
+    manifest = dict(run_result.manifest)
+    manifest.update(
+        {
+            "detailed_recommendations_path": "recommendations/detailed.parquet",
+            "enriched_recommendations_path": "recommendations/enriched.parquet",
+            "widget_recommendations_path": "recommendations/lookup.parquet",
+            "lookup_recommendations_path": "recommendations/lookup.parquet",
+            "paths": {
+                "detailed_recommendations_path": "recommendations/detailed.parquet",
+                "enriched_recommendations_path": "recommendations/enriched.parquet",
+                "widget_recommendations_path": "recommendations/lookup.parquet",
+                "lookup_recommendations_path": "recommendations/lookup.parquet",
+            },
+        }
+    )
+    return writer.save_manifest(manifest, latest_path)
 
 
-def run_mvp_pipeline(
+def run_pipeline(
         train_until_date: str,
         lookback_days: int,
         config_path: str | Path = "configs/baseline.yaml",
-) -> None:
-    """Run full MVP pipeline over a rolling window.
+        *,
+        output_dir: str | Path | None = None,
+        run_id: str | None = None,
+        update_latest: bool = True,
+) -> PipelineRunResult:
+    """Run recommendation pipeline over a rolling train window.
 
     Pipeline stages:
     1. load daily raw events;
@@ -794,12 +828,12 @@ def run_mvp_pipeline(
     8. apply fallback layer (optional);
     9. save detailed recommendations;
     10. save widget output;
-    11. update latest snapshot.
+    11. optionally update latest snapshot.
     """
     logger = logging.getLogger(__name__)
     run_started = time.perf_counter()
 
-    logger.info("[run_mvp_pipeline] load config=%s", config_path)
+    logger.info("[run_pipeline] load config=%s", config_path)
     config = load_yaml_config(config_path)
     pipeline_config = _as_mapping(config.get("pipeline", {}))
     artifacts_config = _as_mapping(config.get("artifacts", {}))
@@ -809,7 +843,7 @@ def run_mvp_pipeline(
     window_start, window_end = _window_bounds(train_until_date, lookback_days)
     action_types = _item_action_types(config)
     logger.info(
-        "[run_mvp_pipeline] window=%s..%s lookback_days=%s action_types=%s",
+        "[run_pipeline] window=%s..%s lookback_days=%s action_types=%s",
         window_start,
         window_end,
         lookback_days,
@@ -833,7 +867,7 @@ def run_mvp_pipeline(
         "data/processed/events_clean",
     )
 
-    logger.info("[run_mvp_pipeline] load and clean raw events by day")
+    logger.info("[run_pipeline] load and clean raw events by day")
     clean_event_paths, raw_events_rows, clean_events_rows = _load_clean_and_write_daily_events(
         data_config=data_config,
         cleaner=cleaner,
@@ -847,13 +881,13 @@ def run_mvp_pipeline(
 
     if raw_events_rows == 0:
         logger.warning(
-            "[run_mvp_pipeline] raw events empty for window=%s..%s",
+            "[run_pipeline] raw events empty for window=%s..%s",
             window_start,
             window_end,
         )
 
     logger.info(
-        "[run_mvp_pipeline] raw events loaded rows=%s clean events rows=%s days=%s output_dir=%s",
+        "[run_pipeline] raw events loaded rows=%s clean events rows=%s days=%s output_dir=%s",
         raw_events_rows,
         clean_events_rows,
         len(clean_event_paths),
@@ -865,10 +899,10 @@ def run_mvp_pipeline(
         schemas.CLEAN_EVENTS_COLUMNS,
     )
 
-    logger.info("[run_mvp_pipeline] stream sessions and compact daily item-pair stats")
+    logger.info("[run_pipeline] stream sessions and compact daily item-pair stats")
     session_builder = SessionBuilder.from_config(config)
     pair_builder = ItemPairBuilder.from_config(config)
-    logger.info("[run_mvp_pipeline] session builder config=%s", session_builder)
+    logger.info("[run_pipeline] session builder config=%s", session_builder)
 
     daily_pairs_output_dir = _as_path(
         artifacts_config.get("daily_pairs_dir"),
@@ -892,14 +926,14 @@ def run_mvp_pipeline(
     daily_pairs_rows = daily_pair_stats_paths.raw_pair_rows
 
     logger.info(
-        "[run_mvp_pipeline] sessions rows=%s daily item pairs rows=%s days=%s output_dir=%s",
+        "[run_pipeline] sessions rows=%s daily item pairs rows=%s days=%s output_dir=%s",
         sessions_rows,
         daily_pairs_rows,
         len(daily_pair_stats_paths.count_paths),
         daily_pairs_output_dir,
     )
 
-    logger.info("[run_mvp_pipeline] aggregate pairs from compact daily stats")
+    logger.info("[run_pipeline] aggregate pairs from compact daily stats")
     pair_aggregates = PairAggregator().aggregate_window_from_daily_stats_paths(
         count_paths=daily_pair_stats_paths.count_paths,
         user_key_paths=daily_pair_stats_paths.user_key_paths,
@@ -909,7 +943,7 @@ def run_mvp_pipeline(
     )
     pair_aggregates_rows = pair_aggregates.height
     logger.info(
-        "[run_mvp_pipeline] pair aggregates rows=%s",
+        "[run_pipeline] pair aggregates rows=%s",
         pair_aggregates_rows,
     )
 
@@ -922,7 +956,7 @@ def run_mvp_pipeline(
             window_end=window_end,
         )
 
-    logger.info("[run_mvp_pipeline] build item popularity and action distribution")
+    logger.info("[run_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
     item_popularity = popularity_builder.build_item_popularity(events_clean_input)
     action_distribution = popularity_builder.build_action_type_calibration_stats(
@@ -933,7 +967,7 @@ def run_mvp_pipeline(
     item_popularity_rows = item_popularity.height
     action_distribution_rows = action_distribution.height
     logger.info(
-        "[run_mvp_pipeline] item popularity rows=%s action_distribution rows=%s",
+        "[run_pipeline] item popularity rows=%s action_distribution rows=%s",
         item_popularity_rows,
         action_distribution_rows,
     )
@@ -959,7 +993,7 @@ def run_mvp_pipeline(
             window_end=window_end,
         )
 
-    logger.info("[run_mvp_pipeline] score pairs")
+    logger.info("[run_pipeline] score pairs")
     scorer = CoVisitationScorer.from_config(config)
     if scorer.action_shares is None:
         derived_action_shares = _action_shares_from_distribution(action_distribution)
@@ -977,7 +1011,7 @@ def run_mvp_pipeline(
     del pair_aggregates
 
     logger.info(
-        "[run_mvp_pipeline] pair scores rows=%s calibration_used=%s",
+        "[run_pipeline] pair scores rows=%s calibration_used=%s",
         pair_scores_rows,
         scorer.action_shares is not None,
     )
@@ -987,7 +1021,7 @@ def run_mvp_pipeline(
         default=20,
         parameter_name="topk.top_k",
     )
-    logger.info("[run_mvp_pipeline] select top_k=%s", top_k)
+    logger.info("[run_pipeline] select top_k=%s", top_k)
     selector = TopKSelector(
         top_k=top_k,
         source=_as_non_empty_str(
@@ -1005,7 +1039,7 @@ def run_mvp_pipeline(
     fallback_config = FallbackConfig.from_config(config, top_k=top_k)
     if fallback_config.enabled:
         logger.info(
-            "[run_mvp_pipeline] apply fallback enabled=%s top_k=%s include_cold_start_items=%s",
+            "[run_pipeline] apply fallback enabled=%s top_k=%s include_cold_start_items=%s",
             fallback_config.enabled,
             fallback_config.top_k,
             fallback_config.include_cold_start_items,
@@ -1030,37 +1064,36 @@ def run_mvp_pipeline(
         .height
     )
     if recommendations_rows == 0:
-        logger.warning("[run_mvp_pipeline] recommendations empty")
+        logger.warning("[run_pipeline] recommendations empty")
     logger.info(
-        "[run_mvp_pipeline] recommendations rows=%s fallback_rows=%s",
+        "[run_pipeline] recommendations rows=%s fallback_rows=%s",
         recommendations_rows,
         fallback_rows,
     )
 
-    detailed_dir = outputs_config.get("detailed_recommendations_dir", "outputs/recommendations/detailed")
-    widget_dir = outputs_config.get("widget_recommendations_dir", "outputs/recommendations/widget")
-    latest_dir = _as_path(outputs_config.get("latest_dir"), "outputs/recommendations/latest")
-
-    detailed_base_dir = _as_path(detailed_dir, "outputs/recommendations/detailed")
-    widget_base_dir = _as_path(widget_dir, "outputs/recommendations/widget")
-    outputs_root = _common_parent([detailed_base_dir, widget_base_dir]) or latest_dir.parent
-    if outputs_root.anchor.lower() != latest_dir.parent.anchor.lower():
-        outputs_root = latest_dir.parent
-
-    detailed_subdir = _relative_or_name(detailed_base_dir, outputs_root)
-    widget_subdir = _relative_or_name(widget_base_dir, outputs_root)
-
-    run_id = _run_id(train_until_date=train_until_date, lookback_days=lookback_days)
-    run_dir = outputs_root / "runs" / run_id
+    outputs_root = _outputs_root(outputs_config)
+    latest_dir = _as_path(outputs_config.get("latest_dir"), "outputs/latest")
+    run_id = run_id or _run_id(train_until_date=train_until_date, lookback_days=lookback_days)
+    run_dir = Path(output_dir).resolve() if output_dir is not None else outputs_root / "runs" / run_id
     writer = RecommendationWriter()
 
-    logger.info("[run_mvp_pipeline] write outputs run_id=%s", run_id)
-    detailed_path = writer.save_detailed(recommendations, run_dir / detailed_subdir)
-    widget_path = writer.save_widget_format(recommendations, run_dir / widget_subdir)
+    logger.info("[run_pipeline] write outputs run_id=%s", run_id)
+    recommendations_dir = run_dir / "recommendations"
+    detailed_path = writer.save_detailed(recommendations, recommendations_dir / "detailed.parquet")
+    logger.info("[run_pipeline] load product_information for enriched recommendations")
+    products = load_products(data_config, columns=["item_id", "name"])
+    enriched_path = writer.save_enriched(
+        recommendations,
+        products,
+        recommendations_dir / "enriched.parquet",
+    )
+    widget_path = writer.save_widget_format(recommendations, recommendations_dir / "lookup.parquet")
 
     del recommendations
+    del products
 
     detailed_relative_path = detailed_path.relative_to(run_dir).as_posix()
+    enriched_relative_path = enriched_path.relative_to(run_dir).as_posix()
     widget_relative_path = widget_path.relative_to(run_dir).as_posix()
     manifest = {
         "run_id": run_id,
@@ -1075,10 +1108,14 @@ def run_mvp_pipeline(
         "fallback_enabled": fallback_config.enabled,
         "fallback_source_label": fallback_config.source_label,
         "detailed_recommendations_path": detailed_relative_path,
+        "enriched_recommendations_path": enriched_relative_path,
         "widget_recommendations_path": widget_relative_path,
+        "lookup_recommendations_path": widget_relative_path,
         "paths": {
             "detailed_recommendations_path": detailed_relative_path,
+            "enriched_recommendations_path": enriched_relative_path,
             "widget_recommendations_path": widget_relative_path,
+            "lookup_recommendations_path": widget_relative_path,
         },
         "rows": {
             "raw_events": raw_events_rows,
@@ -1092,13 +1129,23 @@ def run_mvp_pipeline(
         },
     }
     run_manifest_path = writer.save_manifest(manifest, run_dir)
-    if recommendations_rows > 0 or allow_empty_latest_update:
-        writer.update_latest_manifest(run_manifest_path, latest_dir)
+    result = PipelineRunResult(
+        run_id=run_id,
+        run_dir=run_dir,
+        manifest_path=run_manifest_path,
+        detailed_recommendations_path=detailed_path,
+        enriched_recommendations_path=enriched_path,
+        lookup_recommendations_path=widget_path,
+        manifest=manifest,
+    )
+    if update_latest and (recommendations_rows > 0 or allow_empty_latest_update):
+        publish_latest_run(result, latest_dir)
     elif recommendations_rows == 0:
         logger.warning(
-            "[run_mvp_pipeline] latest manifest not updated (empty recommendations, allow_empty_latest_update=%s)",
+            "[run_pipeline] latest manifest not updated (empty recommendations, allow_empty_latest_update=%s)",
             allow_empty_latest_update,
         )
 
     elapsed_seconds = time.perf_counter() - run_started
-    logger.info("[run_mvp_pipeline] finished in %.2fs", elapsed_seconds)
+    logger.info("[run_pipeline] finished in %.2fs", elapsed_seconds)
+    return result

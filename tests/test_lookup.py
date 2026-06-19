@@ -25,7 +25,7 @@ def _compact_recommendations() -> pl.DataFrame:
 
 def test_lookup_returns_similar_items_from_compact_parquet(tmp_path: Path) -> None:
     """Lookup should read compact output and return rank-ordered items."""
-    path = tmp_path / "similar_items.parquet"
+    path = tmp_path / "lookup.parquet"
     _compact_recommendations().write_parquet(path)
 
     lookup = SimilarItemsLookup(path)
@@ -36,7 +36,7 @@ def test_lookup_returns_similar_items_from_compact_parquet(tmp_path: Path) -> No
 
 def test_lookup_limits_result_by_top_k(tmp_path: Path) -> None:
     """Lookup should return only the requested number of similar items."""
-    path = tmp_path / "similar_items.parquet"
+    path = tmp_path / "lookup.parquet"
     _compact_recommendations().write_parquet(path)
 
     lookup = SimilarItemsLookup(path)
@@ -46,7 +46,7 @@ def test_lookup_limits_result_by_top_k(tmp_path: Path) -> None:
 
 def test_lookup_returns_empty_list_for_missing_item(tmp_path: Path) -> None:
     """Unknown item ids should not raise errors in MVP lookup."""
-    path = tmp_path / "similar_items.parquet"
+    path = tmp_path / "lookup.parquet"
     _compact_recommendations().write_parquet(path)
 
     lookup = SimilarItemsLookup(path)
@@ -55,10 +55,10 @@ def test_lookup_returns_empty_list_for_missing_item(tmp_path: Path) -> None:
 
 
 def test_lookup_accepts_directory_path(tmp_path: Path) -> None:
-    """Directory input should resolve to similar_items.parquet inside it."""
+    """Directory input should resolve to lookup.parquet inside it."""
     output_dir = tmp_path / "latest"
     output_dir.mkdir()
-    _compact_recommendations().write_parquet(output_dir / "similar_items.parquet")
+    _compact_recommendations().write_parquet(output_dir / "lookup.parquet")
 
     lookup = SimilarItemsLookup(output_dir)
 
@@ -69,12 +69,12 @@ def test_lookup_accepts_manifest_path(tmp_path: Path) -> None:
     """Manifest input should resolve the compact recommendations path."""
     output_dir = tmp_path / "run_001"
     output_dir.mkdir()
-    compact_path = output_dir / "similar_items.parquet"
+    compact_path = output_dir / "lookup.parquet"
     _compact_recommendations().write_parquet(compact_path)
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(
-        json.dumps({"widget_recommendations_path": "similar_items.parquet"}),
+        json.dumps({"widget_recommendations_path": "lookup.parquet"}),
         encoding="utf-8",
     )
 
@@ -87,12 +87,12 @@ def test_lookup_accepts_nested_manifest_paths(tmp_path: Path) -> None:
     """Manifest paths can also be stored inside a paths object."""
     output_dir = tmp_path / "latest"
     output_dir.mkdir()
-    compact_path = output_dir / "similar_items.parquet"
+    compact_path = output_dir / "lookup.parquet"
     _compact_recommendations().write_parquet(compact_path)
 
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(
-        json.dumps({"paths": {"compact_recommendations_path": "similar_items.parquet"}}),
+        json.dumps({"paths": {"compact_recommendations_path": "lookup.parquet"}}),
         encoding="utf-8",
     )
 
@@ -112,7 +112,7 @@ def test_lookup_rejects_manifest_without_compact_path(tmp_path: Path) -> None:
 
 def test_lookup_validates_compact_output_contract(tmp_path: Path) -> None:
     """Lookup should fail when compact output contract is invalid."""
-    path = tmp_path / "similar_items.parquet"
+    path = tmp_path / "lookup.parquet"
     pl.DataFrame({"item_id": [1], "wrong_column": [[10]]}).write_parquet(path)
 
     with pytest.raises(ValueError, match="missing expected columns"):
@@ -121,7 +121,7 @@ def test_lookup_validates_compact_output_contract(tmp_path: Path) -> None:
 
 def test_lookup_rejects_non_positive_top_k(tmp_path: Path) -> None:
     """top_k should be positive."""
-    path = tmp_path / "similar_items.parquet"
+    path = tmp_path / "lookup.parquet"
     _compact_recommendations().write_parquet(path)
     lookup = SimilarItemsLookup(path)
 
@@ -131,7 +131,7 @@ def test_lookup_rejects_non_positive_top_k(tmp_path: Path) -> None:
 
 def test_lookup_supports_string_item_ids_when_saved_as_strings(tmp_path: Path) -> None:
     """String item ids should work when compact output uses string ids."""
-    path = tmp_path / "similar_items.parquet"
+    path = tmp_path / "lookup.parquet"
     pl.DataFrame(
         {
             "item_id": ["sku-1"],

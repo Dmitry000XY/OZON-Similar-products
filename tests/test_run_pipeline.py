@@ -1,4 +1,4 @@
-"""Tests for MVP pipeline orchestration."""
+"""Tests for pipeline pipeline orchestration."""
 
 import logging
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ from typing import cast
 import polars as pl
 import pytest
 
-import ozon_similar_products.pipeline.run_mvp as run_mvp
+import ozon_similar_products.pipeline.run_pipeline as run_pipeline
 from ozon_similar_products.data import schemas
 from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.output.lookup import SimilarItemsLookup
@@ -17,14 +17,14 @@ from ozon_similar_products.output.lookup import SimilarItemsLookup
 
 def test_window_bounds_returns_inclusive_range() -> None:
     """Window bounds should include the train_until_date day."""
-    window_start, window_end = run_mvp._window_bounds("2026-05-10", 3)
+    window_start, window_end = run_pipeline._window_bounds("2026-05-10", 3)
 
     assert window_start == "2026-05-08"
     assert window_end == "2026-05-10"
 
 
 def test_date_range_strings_returns_inclusive_dates() -> None:
-    assert run_mvp._date_range_strings("2026-05-08", "2026-05-10") == [
+    assert run_pipeline._date_range_strings("2026-05-08", "2026-05-10") == [
         "2026-05-08",
         "2026-05-09",
         "2026-05-10",
@@ -33,11 +33,11 @@ def test_date_range_strings_returns_inclusive_dates() -> None:
 
 def test_date_range_strings_rejects_reversed_window() -> None:
     with pytest.raises(ValueError, match="less than or equal"):
-        run_mvp._date_range_strings("2026-05-10", "2026-05-08")
+        run_pipeline._date_range_strings("2026-05-10", "2026-05-08")
 
 
 def test_scan_parquet_paths_or_empty_frame_returns_empty_contract_for_no_paths() -> None:
-    frame = run_mvp._scan_parquet_paths_or_empty_frame(
+    frame = run_pipeline._scan_parquet_paths_or_empty_frame(
         [],
         schemas.CLEAN_EVENTS_COLUMNS,
     )
@@ -51,21 +51,21 @@ def test_scan_parquet_paths_or_empty_frame_returns_empty_contract_for_no_paths()
 def test_window_bounds_rejects_invalid_lookback_days(lookback_days: int) -> None:
     """lookback_days should be a positive integer, not bool/zero/negative."""
     with pytest.raises(ValueError, match="lookback_days"):
-        run_mvp._window_bounds("2026-05-10", lookback_days)
+        run_pipeline._window_bounds("2026-05-10", lookback_days)
 
 
 def test_item_action_types_accepts_string_value() -> None:
     """Single string action type should be normalized into one-item list."""
     config = {"events": {"item_action_types": "view"}}
 
-    assert run_mvp._item_action_types(config) == ["view"]
+    assert run_pipeline._item_action_types(config) == ["view"]
 
 
 def test_item_action_types_accepts_list_value() -> None:
     """List of action types should pass through unchanged."""
     config = {"events": {"item_action_types": ["view", "click"]}}
 
-    assert run_mvp._item_action_types(config) == ["view", "click"]
+    assert run_pipeline._item_action_types(config) == ["view", "click"]
 
 
 def test_partition_sessions_by_session_start_date_keeps_cross_midnight_session_together() -> None:
@@ -86,7 +86,7 @@ def test_partition_sessions_by_session_start_date_keeps_cross_midnight_session_t
         pl.col("timestamp").str.to_datetime(),
     )
 
-    partitions = run_mvp._partition_sessions_by_session_start_date(sessions)
+    partitions = run_pipeline._partition_sessions_by_session_start_date(sessions)
 
     assert len(partitions) == 1
     assert partitions[0][0] == "2026-05-10"
@@ -97,16 +97,16 @@ def test_partition_sessions_by_session_start_date_keeps_cross_midnight_session_t
 def test_item_action_types_rejects_unknown_or_invalid_values() -> None:
     """Action types must be non-empty known strings."""
     with pytest.raises(ValueError, match="Unknown action type"):
-        run_mvp._item_action_types({"events": {"item_action_types": ["view", "unknown"]}})
+        run_pipeline._item_action_types({"events": {"item_action_types": ["view", "unknown"]}})
 
     with pytest.raises(ValueError, match="non-empty strings"):
-        run_mvp._item_action_types({"events": {"item_action_types": ["view", ""]}})
+        run_pipeline._item_action_types({"events": {"item_action_types": ["view", ""]}})
 
     with pytest.raises(ValueError, match="non-empty strings"):
-        run_mvp._item_action_types({"events": {"item_action_types": ["view", 1]}})
+        run_pipeline._item_action_types({"events": {"item_action_types": ["view", 1]}})
 
 
-def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
+def test_run_pipeline_raises_on_missing_raw_events_by_default(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
 ) -> None:
@@ -119,17 +119,17 @@ def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
     def fake_load_events(**_: object) -> pl.DataFrame:
         raise FileNotFoundError("No files for selected date range")
 
-    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
-    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
-    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
 
     with pytest.raises(FileNotFoundError, match=r"date_window=\[2026-05-04\.\.2026-05-10\]"):
-        run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+        run_pipeline.run_pipeline(train_until_date="2026-05-10", lookback_days=7)
 
 
 # TODO: fix it
-# def test_run_mvp_pipeline_allows_missing_raw_events_when_configured_and_uses_calibration_shares(
+# def test_run_pipeline_allows_missing_raw_events_when_configured_and_uses_calibration_shares(
 #     monkeypatch: pytest.MonkeyPatch,
 #     tmp_path: Path,
 # ) -> None:
@@ -147,9 +147,9 @@ def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
 #             "min_unique_sessions": 4,
 #         },
 #         "outputs": {
-#             "detailed_recommendations_dir": "outputs/recommendations/detailed",
-#             "widget_recommendations_dir": "outputs/recommendations/widget",
-#             "latest_dir": "outputs/recommendations/latest",
+#             "detailed_recommendations_dir": "outputs/detailed",
+#             "widget_recommendations_dir": "outputs/widget",
+#             "latest_dir": "outputs/latest",
 #         },
 #     }
 #
@@ -262,11 +262,11 @@ def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
 #     class FakeRecommendationWriter:
 #         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
 #             captured["detailed_output_dir"] = Path(output_path)
-#             return Path(output_path) / "recommendations.parquet"
+#             return Path(output_path) / "detailed.parquet"
 #
 #         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
 #             captured["widget_output_dir"] = Path(output_path)
-#             return Path(output_path) / "similar_items.parquet"
+#             return Path(output_path) / "lookup.parquet"
 #
 #         def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
 #             captured["manifest"] = manifest
@@ -277,20 +277,20 @@ def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
 #             captured["latest_dir"] = Path(latest_dir)
 #             return Path(latest_dir) / "manifest.json"
 #
-#     monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
-#     monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
-#     monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
-#     monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
-#     monkeypatch.setattr(run_mvp, "EventCleaner", FakeEventCleaner)
-#     monkeypatch.setattr(run_mvp, "SessionBuilder", FakeSessionBuilder)
-#     monkeypatch.setattr(run_mvp, "ItemPairBuilder", FakeItemPairBuilder)
-#     monkeypatch.setattr(run_mvp, "PairAggregator", FakePairAggregator)
-#     monkeypatch.setattr(run_mvp, "ItemPopularityBuilder", FakePopularityBuilder)
-#     monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorerFactory)
-#     monkeypatch.setattr(run_mvp, "TopKSelector", FakeTopKSelector)
-#     monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeRecommendationWriter)
+#     monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+#     monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
+#     monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
+#     monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
+#     monkeypatch.setattr(run_pipeline, "EventCleaner", FakeEventCleaner)
+#     monkeypatch.setattr(run_pipeline, "SessionBuilder", FakeSessionBuilder)
+#     monkeypatch.setattr(run_pipeline, "ItemPairBuilder", FakeItemPairBuilder)
+#     monkeypatch.setattr(run_pipeline, "PairAggregator", FakePairAggregator)
+#     monkeypatch.setattr(run_pipeline, "ItemPopularityBuilder", FakePopularityBuilder)
+#     monkeypatch.setattr(run_pipeline, "CoVisitationScorer", FakeScorerFactory)
+#     monkeypatch.setattr(run_pipeline, "TopKSelector", FakeTopKSelector)
+#     monkeypatch.setattr(run_pipeline, "RecommendationWriter", FakeRecommendationWriter)
 #
-#     run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+#     run_pipeline.run_pipeline(train_until_date="2026-05-10", lookback_days=7)
 #
 #     assert captured["session_window_input_count"] == 0
 #     assert captured["pair_builder_sessions_height"] == 0
@@ -310,14 +310,14 @@ def test_run_mvp_pipeline_raises_on_missing_raw_events_by_default(
 #     assert manifest["run_id"] == "run_2026-05-10_lb7"
 #     assert manifest["calibration_used"] is True
 #     assert cast(dict[str, int], manifest["rows"])["raw_events"] == 0
-#     assert cast(dict[str, str], manifest["paths"])["detailed_recommendations_path"] == "detailed/recommendations.parquet"
-#     assert cast(dict[str, str], manifest["paths"])["widget_recommendations_path"] == "widget/similar_items.parquet"
+#     assert cast(dict[str, str], manifest["paths"])["detailed_recommendations_path"] == "detailed/detailed.parquet"
+#     assert cast(dict[str, str], manifest["paths"])["widget_recommendations_path"] == "widget/lookup.parquet"
 #
 #     assert cast(Path, captured["run_manifest_path"]).name == "manifest.json"
 #     assert "latest_dir" not in captured
 
 
-def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_allowed(
+def test_run_pipeline_updates_latest_with_empty_recommendations_only_when_allowed(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
 ) -> None:
@@ -342,8 +342,8 @@ def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_al
         def transform_day(self, _: pl.DataFrame) -> pl.DataFrame:
             return empty_contract_frame(schemas.SESSIONS_COLUMNS)
 
-        def build_daily_pair_stats(self, _: pl.DataFrame) -> run_mvp.DailyPairStats:
-            return run_mvp.DailyPairStats(
+        def build_daily_pair_stats(self, _: pl.DataFrame) -> run_pipeline.DailyPairStats:
+            return run_pipeline.DailyPairStats(
                 counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
                 user_keys=empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS),
                 session_keys=empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS),
@@ -382,28 +382,50 @@ def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_al
 
     class FakeWriter:
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
-            return Path(output_path) / "recommendations.parquet"
+            path = Path(output_path) / "detailed.parquet"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _.write_parquet(path)
+            return path
+
+        def save_enriched(
+                self,
+                _: pl.DataFrame,
+                products: pl.DataFrame,
+                output_path: str | Path,
+        ) -> Path:
+            path = Path(output_path) / "enriched.parquet"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            products.write_parquet(path)
+            return path
 
         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
-            return Path(output_path) / "similar_items.parquet"
+            path = Path(output_path) / "lookup.parquet"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pl.DataFrame({"item_id": [], "similar_items_sku_list": []}).write_parquet(path)
+            return path
 
         def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
             captured["manifest_rows"] = cast(dict[str, int], manifest["rows"])
-            return Path(output_path) / "manifest.json"
+            captured["latest_dir"] = Path(output_path)
+            path = Path(output_path) / "manifest.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+            return path
 
-        def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
-            captured["latest_dir"] = Path(latest_dir)
-            return Path(latest_dir) / "manifest.json"
-
-    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
-    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
-    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
-    monkeypatch.setattr(run_mvp, "EventCleaner", FakeEventCleaner)
-    monkeypatch.setattr(run_mvp, "SessionBuilder", EmptyTransform)
-    monkeypatch.setattr(run_mvp, "ItemPairBuilder", EmptyTransform)
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
     monkeypatch.setattr(
-        run_mvp,
+        run_pipeline,
+        "load_products",
+        lambda *_a, **_k: pl.DataFrame({"item_id": [], "name": []}),
+    )
+    monkeypatch.setattr(run_pipeline, "EventCleaner", FakeEventCleaner)
+    monkeypatch.setattr(run_pipeline, "SessionBuilder", EmptyTransform)
+    monkeypatch.setattr(run_pipeline, "ItemPairBuilder", EmptyTransform)
+    monkeypatch.setattr(
+        run_pipeline,
         "PairAggregator",
         lambda: type(
             "A",
@@ -415,23 +437,23 @@ def test_run_mvp_pipeline_updates_latest_with_empty_recommendations_only_when_al
             },
         )(),
     )
-    monkeypatch.setattr(run_mvp, "ItemPopularityBuilder", lambda item_action_types: type("P", (), {
+    monkeypatch.setattr(run_pipeline, "ItemPopularityBuilder", lambda item_action_types: type("P", (), {
         "build_item_popularity": lambda *_a, **_k: empty_contract_frame(schemas.ITEM_POPULARITY_COLUMNS),
         "build_action_type_calibration_stats": lambda *_a, **_k: empty_contract_frame(
             schemas.ACTION_TYPE_DISTRIBUTION_COLUMNS),
     })())
-    monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorer)
-    monkeypatch.setattr(run_mvp, "TopKSelector", lambda **_: type("S", (), {
+    monkeypatch.setattr(run_pipeline, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(run_pipeline, "TopKSelector", lambda **_: type("S", (), {
         "select": lambda *_a, **_k: empty_contract_frame(schemas.RECOMMENDATIONS_COLUMNS)})())
-    monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeWriter)
+    monkeypatch.setattr(run_pipeline, "RecommendationWriter", FakeWriter)
 
-    run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+    run_pipeline.run_pipeline(train_until_date="2026-05-10", lookback_days=7)
 
     assert cast(dict[str, int], captured["manifest_rows"])["recommendations"] == 0
-    assert cast(Path, captured["latest_dir"]).as_posix().endswith("outputs/recommendations/latest")
+    assert cast(Path, captured["latest_dir"]).as_posix().endswith("outputs/latest")
 
 
-def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
+def test_run_pipeline_logs_warnings_on_empty_input_and_output(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
@@ -468,8 +490,8 @@ def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
         def from_config(cls, _: dict[str, object]) -> "FakeItemPairBuilder":
             return cls()
 
-        def build_daily_pair_stats(self, _: pl.DataFrame) -> run_mvp.DailyPairStats:
-            return run_mvp.DailyPairStats(
+        def build_daily_pair_stats(self, _: pl.DataFrame) -> run_pipeline.DailyPairStats:
+            return run_pipeline.DailyPairStats(
                 counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
                 user_keys=empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS),
                 session_keys=empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS),
@@ -534,10 +556,13 @@ def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
 
     class FakeWriter:
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
-            return Path(output_path) / "recommendations.parquet"
+            return Path(output_path) / "detailed.parquet"
+
+        def save_enriched(self, _: pl.DataFrame, products: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "enriched.parquet"
 
         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
-            return Path(output_path) / "similar_items.parquet"
+            return Path(output_path) / "lookup.parquet"
 
         def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
             return Path(output_path) / "manifest.json"
@@ -545,22 +570,27 @@ def test_run_mvp_pipeline_logs_warnings_on_empty_input_and_output(
         def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
             raise AssertionError("Latest manifest should not update for empty recommendations")
 
-    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
-    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
-    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
-    monkeypatch.setattr(run_mvp, "EventCleaner", FakeEventCleaner)
-    monkeypatch.setattr(run_mvp, "SessionBuilder", FakeSessionBuilder)
-    monkeypatch.setattr(run_mvp, "ItemPairBuilder", FakeItemPairBuilder)
-    monkeypatch.setattr(run_mvp, "PairAggregator", FakePairAggregator)
-    monkeypatch.setattr(run_mvp, "ItemPopularityBuilder", FakePopularityBuilder)
-    monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorer)
-    monkeypatch.setattr(run_mvp, "TopKSelector", FakeTopKSelector)
-    monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeWriter)
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
+    monkeypatch.setattr(
+        run_pipeline,
+        "load_products",
+        lambda *_a, **_k: pl.DataFrame({"item_id": [], "name": []}),
+    )
+    monkeypatch.setattr(run_pipeline, "EventCleaner", FakeEventCleaner)
+    monkeypatch.setattr(run_pipeline, "SessionBuilder", FakeSessionBuilder)
+    monkeypatch.setattr(run_pipeline, "ItemPairBuilder", FakeItemPairBuilder)
+    monkeypatch.setattr(run_pipeline, "PairAggregator", FakePairAggregator)
+    monkeypatch.setattr(run_pipeline, "ItemPopularityBuilder", FakePopularityBuilder)
+    monkeypatch.setattr(run_pipeline, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(run_pipeline, "TopKSelector", FakeTopKSelector)
+    monkeypatch.setattr(run_pipeline, "RecommendationWriter", FakeWriter)
 
-    caplog.set_level(logging.WARNING, logger="ozon_similar_products.pipeline.run_mvp")
+    caplog.set_level(logging.WARNING, logger="ozon_similar_products.pipeline.run_pipeline")
 
-    run_mvp.run_mvp_pipeline(train_until_date="2026-05-10", lookback_days=7)
+    run_pipeline.run_pipeline(train_until_date="2026-05-10", lookback_days=7)
 
     assert "missing raw events" in caplog.text
     assert "raw events empty" in caplog.text
@@ -587,7 +617,7 @@ def _write_synthetic_action_partition(
 
 
 def _write_smoke_project_configs(project_root: Path) -> Path:
-    """Create minimal configs needed by run_mvp_pipeline inside tmp_path."""
+    """Create minimal configs needed by run_pipeline inside tmp_path."""
     _write_text(
         project_root / "configs" / "paths.yaml",
         """project:
@@ -610,7 +640,7 @@ data:
 
 outputs:
   root_dir: outputs
-  recommendations_dir: outputs/recommendations
+  recommendations_dir: outputs
   reports_dir: outputs/reports
   figures_dir: outputs/figures
 
@@ -625,7 +655,7 @@ project_dirs:
   - data/raw/product_information
   - data/raw/user_actions
   - data/processed
-  - outputs/recommendations
+  - outputs
 """,
     )
     _write_text(
@@ -727,9 +757,9 @@ artifacts:
   pair_aggregates_dir: data/processed/pair_aggregates
 
 outputs:
-  detailed_recommendations_dir: outputs/recommendations/detailed
-  widget_recommendations_dir: outputs/recommendations/widget
-  latest_dir: outputs/recommendations/latest
+  detailed_recommendations_dir: outputs/detailed
+  widget_recommendations_dir: outputs/widget
+  latest_dir: outputs/latest
 """,
     )
     return baseline_path
@@ -819,35 +849,66 @@ def _write_smoke_raw_events(project_root: Path) -> None:
     )
 
 
-def test_run_mvp_pipeline_smoke_with_synthetic_parquet_data(
+def _write_smoke_products(project_root: Path) -> None:
+    """Create product_information parquet with names for enriched recommendations."""
+    products_dir = project_root / "data" / "raw" / "product_information" / "product_information"
+    products_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "item_id": [1, 2, 10, 11, 20],
+            "name": ["Item 1", "Item 2", "Item 10", "Item 11", "Item 20"],
+            "brand": ["brand"] * 5,
+            "type": ["type"] * 5,
+            "category_id": [100] * 5,
+            "category_name": ["category"] * 5,
+        }
+    ).write_parquet(products_dir / "part-0.parquet")
+
+
+def test_run_pipeline_smoke_with_synthetic_parquet_data(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
 ) -> None:
-    """Run the real MVP pipeline on a tiny synthetic parquet dataset."""
+    """Run the real pipeline pipeline on a tiny synthetic parquet dataset."""
     baseline_path = _write_smoke_project_configs(tmp_path)
     _write_smoke_raw_events(tmp_path)
-    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
+    _write_smoke_products(tmp_path)
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
 
-    run_mvp.run_mvp_pipeline(
+    run_pipeline.run_pipeline(
         train_until_date="2026-05-10",
         lookback_days=1,
         config_path=baseline_path,
     )
 
-    latest_manifest_path = tmp_path / "outputs" / "recommendations" / "latest" / "manifest.json"
+    latest_manifest_path = tmp_path / "outputs" / "latest" / "manifest.json"
     assert latest_manifest_path.exists()
 
-    detailed_outputs = list((tmp_path / "outputs" / "recommendations" / "runs").rglob("recommendations.parquet"))
-    widget_outputs = list((tmp_path / "outputs" / "recommendations" / "runs").rglob("similar_items.parquet"))
+    detailed_outputs = list((tmp_path / "outputs" / "runs").rglob("detailed.parquet"))
+    enriched_outputs = list((tmp_path / "outputs" / "runs").rglob("enriched.parquet"))
+    widget_outputs = list((tmp_path / "outputs" / "runs").rglob("lookup.parquet"))
     assert detailed_outputs
+    assert enriched_outputs
     assert widget_outputs
 
     detailed = pl.read_parquet(detailed_outputs[0])
+    enriched = pl.read_parquet(enriched_outputs[0])
     widget = pl.read_parquet(widget_outputs[0])
     assert detailed.height > 0
+    assert enriched.height == detailed.height
     assert widget.height > 0
     assert "weight_sum" not in detailed.columns
     assert "to_cart_count" in detailed.columns
+    assert enriched.columns == [
+        "item_id",
+        "item_name",
+        "similar_item_id",
+        "similar_item_name",
+        "rank",
+        "score",
+        "source",
+    ]
+    assert (tmp_path / "outputs" / "latest" / "recommendations" / "enriched.parquet").exists()
 
     lookup = SimilarItemsLookup(latest_manifest_path)
     similar_items = lookup.get_similar_items(1, top_k=5)
@@ -865,7 +926,7 @@ def test_run_mvp_pipeline_smoke_with_synthetic_parquet_data(
         assert list((tmp_path / "data" / "processed" / artifact_dir).rglob("*.parquet"))
 
 
-def test_run_mvp_pipeline_loads_raw_events_day_by_day(
+def test_run_pipeline_loads_raw_events_day_by_day(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
 ) -> None:
@@ -873,7 +934,7 @@ def test_run_mvp_pipeline_loads_raw_events_day_by_day(
     requested_dates: list[str] = []
 
     config = {
-        "pipeline": {"allow_empty_latest_update": True},
+        "pipeline": {"allow_empty_latest_update": False},
         "events": {"item_action_types": ["view"]},
     }
 
@@ -927,10 +988,13 @@ def test_run_mvp_pipeline_loads_raw_events_day_by_day(
 
     class FakeWriter:
         def save_detailed(self, _: pl.DataFrame, output_path: str | Path) -> Path:
-            return Path(output_path) / "recommendations.parquet"
+            return Path(output_path) / "detailed.parquet"
+
+        def save_enriched(self, _: pl.DataFrame, products: pl.DataFrame, output_path: str | Path) -> Path:
+            return Path(output_path) / "enriched.parquet"
 
         def save_widget_format(self, _: pl.DataFrame, output_path: str | Path) -> Path:
-            return Path(output_path) / "similar_items.parquet"
+            return Path(output_path) / "lookup.parquet"
 
         def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
             rows = cast(dict[str, int], manifest["rows"])
@@ -941,13 +1005,18 @@ def test_run_mvp_pipeline_loads_raw_events_day_by_day(
         def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
             return Path(latest_dir) / "manifest.json"
 
-    monkeypatch.setattr(run_mvp, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(run_mvp, "load_yaml_config", lambda _: config)
-    monkeypatch.setattr(run_mvp, "load_configs", lambda project_root: {"project_root": project_root})
-    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
-    monkeypatch.setattr(run_mvp, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_pipeline, "load_yaml_config", lambda _: config)
+    monkeypatch.setattr(run_pipeline, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
     monkeypatch.setattr(
-        run_mvp,
+        run_pipeline,
+        "load_products",
+        lambda *_a, **_k: pl.DataFrame({"item_id": [], "name": []}),
+    )
+    monkeypatch.setattr(run_pipeline, "CoVisitationScorer", FakeScorer)
+    monkeypatch.setattr(
+        run_pipeline,
         "TopKSelector",
         lambda **_: type(
             "S",
@@ -961,9 +1030,9 @@ def test_run_mvp_pipeline_loads_raw_events_day_by_day(
             },
         )(),
     )
-    monkeypatch.setattr(run_mvp, "RecommendationWriter", FakeWriter)
+    monkeypatch.setattr(run_pipeline, "RecommendationWriter", FakeWriter)
 
-    run_mvp.run_mvp_pipeline(
+    run_pipeline.run_pipeline(
         train_until_date="2026-05-10",
         lookback_days=2,
     )
@@ -1013,7 +1082,7 @@ def test_scan_parquet_paths_or_empty_frame_scans_existing_paths(tmp_path: Path) 
     path = tmp_path / "date=2026-05-10.parquet"
     events_clean.write_parquet(path)
 
-    frame = run_mvp._scan_parquet_paths_or_empty_frame(
+    frame = run_pipeline._scan_parquet_paths_or_empty_frame(
         [path],
         schemas.CLEAN_EVENTS_COLUMNS,
     )
@@ -1063,11 +1132,11 @@ def test_load_clean_and_write_daily_events_skips_missing_dates(
                 .select(schemas.CLEAN_EVENTS_COLUMNS)
             )
 
-    monkeypatch.setattr(run_mvp, "load_events", fake_load_events)
+    monkeypatch.setattr(run_pipeline, "load_events", fake_load_events)
 
-    paths, raw_rows, clean_rows = run_mvp._load_clean_and_write_daily_events(
+    paths, raw_rows, clean_rows = run_pipeline._load_clean_and_write_daily_events(
         data_config={},
-        cleaner=cast(run_mvp.EventCleaner, FakeCleaner()),
+        cleaner=cast(run_pipeline.EventCleaner, FakeCleaner()),
         action_types=["view"],
         window_start="2026-05-09",
         window_end="2026-05-10",
@@ -1101,9 +1170,9 @@ def test_build_and_write_daily_pair_stats_writes_compact_artifacts(tmp_path: Pat
         pl.col("timestamp").str.to_datetime(),
     )
 
-    paths = run_mvp._build_and_write_daily_pair_stats(
+    paths = run_pipeline._build_and_write_daily_pair_stats(
         daily_sessions=[("2026-05-10", sessions)],
-        pair_builder=run_mvp.ItemPairBuilder(),
+        pair_builder=run_pipeline.ItemPairBuilder(),
         output_dir=tmp_path / "item_pairs",
     )
 
@@ -1159,10 +1228,10 @@ def test_build_streaming_sessions_and_pair_stats_keeps_cross_midnight_session(
     day1.write_parquet(day1_path)
     day2.write_parquet(day2_path)
 
-    sessions_rows, stats_paths = run_mvp._build_streaming_sessions_and_pair_stats(
+    sessions_rows, stats_paths = run_pipeline._build_streaming_sessions_and_pair_stats(
         clean_event_paths=[day1_path, day2_path],
-        session_builder=run_mvp.SessionBuilder(timeout_minutes=30),
-        pair_builder=run_mvp.ItemPairBuilder(),
+        session_builder=run_pipeline.SessionBuilder(timeout_minutes=30),
+        pair_builder=run_pipeline.ItemPairBuilder(),
         daily_pairs_output_dir=tmp_path / "item_pairs",
         sessions_output_dir=tmp_path / "sessions",
     )
@@ -1225,10 +1294,10 @@ def test_build_streaming_sessions_and_pair_stats_splits_after_timeout(
     day1.write_parquet(day1_path)
     day2.write_parquet(day2_path)
 
-    sessions_rows, stats_paths = run_mvp._build_streaming_sessions_and_pair_stats(
+    sessions_rows, stats_paths = run_pipeline._build_streaming_sessions_and_pair_stats(
         clean_event_paths=[day1_path, day2_path],
-        session_builder=run_mvp.SessionBuilder(timeout_minutes=30),
-        pair_builder=run_mvp.ItemPairBuilder(),
+        session_builder=run_pipeline.SessionBuilder(timeout_minutes=30),
+        pair_builder=run_pipeline.ItemPairBuilder(),
         daily_pairs_output_dir=tmp_path / "item_pairs",
         sessions_output_dir=tmp_path / "sessions",
     )

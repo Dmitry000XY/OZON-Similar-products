@@ -4,35 +4,91 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: What to run inside Docker
+        description: What to run
         required: true
         default: full
         type: choice
         options:
-          - pipeline
-          - lookup
-          - evaluation
           - full
+          - tune
+
       train_until_date:
-        description: Inclusive window end date, YYYY-MM-DD
+        description: Inclusive train window end date, YYYY-MM-DD
         required: true
-        default: "2024-04-30"
+        default: "2024-04-23"
         type: string
+
       lookback_days:
-        description: Rolling window size in days
+        description: Train rolling window size in days
         required: true
         default: "1"
         type: string
+
+      validation_days:
+        description: Number of days after train_until_date used for validation
+        required: true
+        default: "1"
+        type: string
+
       top_k:
-        description: Recommendation top K for pipeline config override and preview
+        description: Recommendation top K
         required: true
         default: "20"
         type: string
+
       config_path:
-        description: Pipeline config path
+        description: Config path
         required: true
-        default: configs/baseline.yaml
+        default: configs/production.yaml
         type: string
+
+      search_space_path:
+        description: Tuning search space config path
+        required: true
+        default: configs/tuning/search_space.yaml
+        type: string
+
+      max_trials:
+        description: Maximum tuning trials
+        required: true
+        default: "30"
+        type: string
+
+      tuning_strategy:
+        description: Tuning strategy
+        required: true
+        default: random
+        type: choice
+        options:
+          - grid
+          - random
+          - successive_halving
+          - simulated_annealing
+
+      halving_reduction_factor:
+        description: Successive halving reduction factor
+        required: true
+        default: "3"
+        type: string
+
+      annealing_temperature_start:
+        description: Simulated annealing starting temperature
+        required: true
+        default: "0.10"
+        type: string
+
+      annealing_temperature_end:
+        description: Simulated annealing ending temperature
+        required: true
+        default: "0.01"
+        type: string
+
+      annealing_neighbor_mutations:
+        description: Number of parameters mutated per annealing neighbor
+        required: true
+        default: "2"
+        type: string
+
       upload_artifact:
         description: Upload safe compact artifact bundle
         required: true
@@ -50,11 +106,13 @@ concurrency:
 jobs:
   local-heavy:
     name: Local heavy pipeline
-    runs-on: [self-hosted, windows, x64, ozon-local-heavy]
+    runs-on: [ self-hosted, windows, x64, ozon-local-heavy ]
     timeout-minutes: 1440
+
     defaults:
       run:
         shell: pwsh
+
     env:
       RUNNER_RUNTIME: D:\ozon-local-runner
       COMPOSE_PROJECT: ozon-local-heavy
@@ -79,7 +137,7 @@ jobs:
           }
 
       - name: Checkout selected ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           fetch-depth: 1
@@ -98,15 +156,6 @@ jobs:
           docker compose version
           docker info
           Get-PSDrive -Name C,D | Format-Table -AutoSize
-          @(
-            $env:RUNNER_RUNTIME,
-            (Join-Path $env:RUNNER_RUNTIME 'data\raw'),
-            (Join-Path $env:RUNNER_RUNTIME 'data\processed'),
-            (Join-Path $env:RUNNER_RUNTIME 'outputs'),
-            (Join-Path $env:RUNNER_RUNTIME 'artifacts')
-          ) | ForEach-Object {
-            Write-Host "path_exists=$($_): $(Test-Path -LiteralPath $_)"
-          }
 
       - name: Prepare runtime directories
         run: |
@@ -140,126 +189,111 @@ jobs:
       - name: Run selected pipeline mode
         run: |
           $ErrorActionPreference = 'Stop'
-
+          
           $runMode = '${{ inputs.run_mode }}'
           $trainUntilDate = '${{ inputs.train_until_date }}'
           $lookbackDays = '${{ inputs.lookback_days }}'
+          $validationDays = '${{ inputs.validation_days }}'
           $topK = '${{ inputs.top_k }}'
           $configPath = '${{ inputs.config_path }}'
-
-          if ([string]::IsNullOrWhiteSpace($trainUntilDate)) {
-            throw 'train_until_date must not be empty.'
+          $searchSpacePath = '${{ inputs.search_space_path }}'
+          $maxTrials = '${{ inputs.max_trials }}'
+          $tuningStrategy = '${{ inputs.tuning_strategy }}'
+          $halvingReductionFactor = '${{ inputs.halving_reduction_factor }}'
+          $annealingTemperatureStart = '${{ inputs.annealing_temperature_start }}'
+          $annealingTemperatureEnd = '${{ inputs.annealing_temperature_end }}'
+          $annealingNeighborMutations = '${{ inputs.annealing_neighbor_mutations }}'
+          
+          foreach ($value in @(
+            $trainUntilDate,
+            $lookbackDays,
+            $validationDays,
+            $topK,
+            $configPath
+          )) {
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw 'Required workflow input must not be empty.'
+            }
           }
-          if ([string]::IsNullOrWhiteSpace($lookbackDays)) {
-            throw 'lookback_days must not be empty.'
+          
+          if ($runMode -eq 'tune') {
+            foreach ($value in @(
+              $searchSpacePath,
+              $maxTrials,
+              $tuningStrategy,
+              $halvingReductionFactor,
+              $annealingTemperatureStart,
+              $annealingTemperatureEnd,
+              $annealingNeighborMutations
+            )) {
+              if ([string]::IsNullOrWhiteSpace($value)) {
+                throw 'Required tuning workflow input must not be empty.'
+              }
+            }
           }
-          if ([string]::IsNullOrWhiteSpace($topK)) {
-            throw 'top_k must not be empty.'
-          }
-          if ([string]::IsNullOrWhiteSpace($configPath)) {
-            throw 'config_path must not be empty.'
-          }
-
+          
           $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
           $logRoot = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"
           New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
-
+          
           $composeArgs = @(
             'compose',
             '-p', $env:COMPOSE_PROJECT,
             '-f', 'docker-compose.yml',
             '-f', 'docker-compose.local-runner.yml'
           )
-
+          
           function Invoke-PipelineContainer {
             param(
               [Parameter(Mandatory = $true)][string]$StepName,
               [Parameter(Mandatory = $true)][string[]]$ContainerArgs
             )
-
+          
             $logFile = Join-Path $logRoot "$StepName.log"
             Write-Host "Running $StepName"
             & docker @composeArgs run --rm pipeline @ContainerArgs 2>&1 |
               Tee-Object -FilePath $logFile
-
+          
             if ($LASTEXITCODE -ne 0) {
               throw "$StepName failed with exit code $LASTEXITCODE. See $logFile"
             }
           }
-
-          function Invoke-RecommendationPipeline {
+          
+          if ($runMode -eq 'full') {
             Invoke-PipelineContainer `
-              -StepName 'pipeline' `
+              -StepName 'full' `
               -ContainerArgs @(
-                'uv', 'run', '--no-dev', 'python', 'scripts/run_mvp_pipeline.py',
+                'uv', 'run', '--no-dev', 'python', 'scripts/run_full.py',
                 $trainUntilDate,
                 '--lookback-days', $lookbackDays,
+                '--validation-days', $validationDays,
+                '--top-k', $topK,
                 '--config-path', $configPath,
-                '--top-k', $topK
+                '--run-name', $runLabel
               )
+          } elseif ($runMode -eq 'tune') {
+            Invoke-PipelineContainer `
+              -StepName 'tune' `
+              -ContainerArgs @(
+                'uv', 'run', '--no-dev', 'python', 'scripts/run_tune.py',
+                $trainUntilDate,
+                '--lookback-days', $lookbackDays,
+                '--validation-days', $validationDays,
+                '--top-k', $topK,
+                '--config-path', $configPath,
+                '--search-space-path', $searchSpacePath,
+                '--max-trials', $maxTrials,
+                '--tuning-strategy', $tuningStrategy,
+                '--halving-reduction-factor', $halvingReductionFactor,
+                '--annealing-temperature-start', $annealingTemperatureStart,
+                '--annealing-temperature-end', $annealingTemperatureEnd,
+                '--annealing-neighbor-mutations', $annealingNeighborMutations,
+                '--sweep-name', $runLabel
+              )
+          } else {
+            throw "Unsupported run_mode: $runMode"
           }
-
-          function Invoke-LookupPreview {
-            if (Test-Path -LiteralPath 'scripts/preview_latest_recommendations.py') {
-              Invoke-PipelineContainer `
-                -StepName 'lookup-preview' `
-                -ContainerArgs @(
-                  'uv', 'run', '--no-dev', 'python', 'scripts/preview_latest_recommendations.py',
-                  '--top-k', $topK,
-                  '--head', '20'
-                )
-            } else {
-              Write-Host 'scripts/preview_latest_recommendations.py is missing; skipping lookup preview.'
-            }
-
-            if (Test-Path -LiteralPath 'scripts/export_recommendation_preview.py') {
-              Invoke-PipelineContainer `
-                -StepName 'export-preview' `
-                -ContainerArgs @(
-                  'uv', 'run', '--no-dev', 'python', 'scripts/export_recommendation_preview.py',
-                  '--top-k', $topK,
-                  '--max-items', '25',
-                  '--output-dir', 'outputs/demo'
-                )
-            } else {
-              Write-Host 'scripts/export_recommendation_preview.py is missing; skipping demo export.'
-            }
-          }
-
-          function Invoke-Evaluation {
-            if (Test-Path -LiteralPath 'scripts/run_evaluation.py') {
-              Invoke-PipelineContainer `
-                -StepName 'evaluation' `
-                -ContainerArgs @('uv', 'run', '--no-dev', 'python', 'scripts/run_evaluation.py')
-            } else {
-              $evaluationDir = Join-Path $env:RUNNER_RUNTIME 'outputs\evaluation'
-              New-Item -ItemType Directory -Path $evaluationDir -Force | Out-Null
-              'No evaluation script exists in this branch.' |
-                Set-Content -LiteralPath (Join-Path $evaluationDir 'README.txt') -Encoding utf8
-              Write-Host 'No evaluation script exists in this branch; wrote outputs/evaluation/README.txt.'
-            }
-          }
-
-          switch ($runMode) {
-            'pipeline' {
-              Invoke-RecommendationPipeline
-            }
-            'lookup' {
-              Invoke-LookupPreview
-            }
-            'evaluation' {
-              Invoke-Evaluation
-            }
-            'full' {
-              Invoke-RecommendationPipeline
-              Invoke-LookupPreview
-              Invoke-Evaluation
-            }
-            default {
-              throw "Unsupported run_mode: $runMode"
-            }
-          }
-
+          
           $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
           if (Test-Path -LiteralPath $outputsRoot) {
             Get-ChildItem -LiteralPath $outputsRoot -Recurse -File |
@@ -273,65 +307,48 @@ jobs:
         if: ${{ inputs.upload_artifact }}
         run: |
           $ErrorActionPreference = 'Stop'
-
+          
           $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
           $bundle = Join-Path $env:RUNNER_RUNTIME "artifacts\github\$runLabel"
           if (Test-Path -LiteralPath $bundle) {
             Remove-Item -LiteralPath $bundle -Recurse -Force
           }
           New-Item -ItemType Directory -Path $bundle -Force | Out-Null
-
+          
           $limitBytes = [int64]$env:ARTIFACT_FILE_LIMIT_BYTES
           $copied = New-Object System.Collections.Generic.List[object]
           $skipped = New-Object System.Collections.Generic.List[object]
-
+          
           $sources = @(
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\recommendations\latest'
-              Prefix = 'outputs\recommendations\latest'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\recommendations\runs'
-              Prefix = 'outputs\recommendations\runs'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\demo'
-              Prefix = 'outputs\demo'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\evaluation'
-              Prefix = 'outputs\evaluation'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"
-              Prefix = 'logs'
-            }
+            @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\runs'; Prefix = 'outputs\runs' },
+            @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\latest'; Prefix = 'outputs\latest' },
+            @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\tuning'; Prefix = 'outputs\tuning' },
+            @{ Root = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"; Prefix = 'logs' }
           )
-
+          
           foreach ($source in $sources) {
             $root = $source.Root
             if (-not (Test-Path -LiteralPath $root)) {
               continue
             }
-
+          
             Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
               $file = $_
               $fullName = $file.FullName
               $reason = $null
-
-                if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
-                  $reason = 'raw-or-processed-data-path'
-                } elseif ($file.Extension -eq '.parquet') {
-                  # Allow parquet files only for recommendation outputs (latest and runs)
-                  if ($fullName -match '[\\/]outputs[\\/]recommendations[\\/]') {
-                    $reason = $null
-                  } else {
-                    $reason = 'parquet-skipped'
-                  }
-                } elseif ($file.Length -gt $limitBytes) {
-                  $reason = 'over-100mb'
+          
+              if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
+                $reason = 'raw-or-processed-data-path'
+              } elseif ($file.Extension -eq '.parquet') {
+                $isRunRecommendation = $fullName -match '[\\/]outputs[\\/]runs[\\/][^\\/]+[\\/]recommendations[\\/]'
+                $isLatestRecommendation = $fullName -match '[\\/]outputs[\\/]latest[\\/]recommendations[\\/]'
+                if (-not ($isRunRecommendation -or $isLatestRecommendation)) {
+                  $reason = 'parquet-skipped'
                 }
-
+              } elseif ($file.Length -gt $limitBytes) {
+                $reason = 'over-100mb'
+              }
+          
               if ($reason) {
                 $skipped.Add([ordered]@{
                   path = $fullName
@@ -340,7 +357,7 @@ jobs:
                 })
                 return
               }
-
+          
               $relative = [System.IO.Path]::GetRelativePath($root, $fullName)
               $targetDir = Join-Path $bundle $source.Prefix
               $target = Join-Path $targetDir $relative
@@ -353,7 +370,7 @@ jobs:
               })
             }
           }
-
+          
           $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
           if (Test-Path -LiteralPath $outputsRoot) {
             Get-ChildItem -LiteralPath $outputsRoot -Recurse -File |
@@ -361,7 +378,7 @@ jobs:
               ConvertTo-Json -Depth 4 |
               Set-Content -LiteralPath (Join-Path $bundle 'outputs_file_index.json') -Encoding utf8
           }
-
+          
           $manifest = [ordered]@{
             repository = '${{ github.repository }}'
             actor = '${{ github.actor }}'
@@ -375,26 +392,34 @@ jobs:
               run_mode = '${{ inputs.run_mode }}'
               train_until_date = '${{ inputs.train_until_date }}'
               lookback_days = '${{ inputs.lookback_days }}'
+              validation_days = '${{ inputs.validation_days }}'
               top_k = '${{ inputs.top_k }}'
               config_path = '${{ inputs.config_path }}'
+              search_space_path = '${{ inputs.search_space_path }}'
+              max_trials = '${{ inputs.max_trials }}'
+              tuning_strategy = '${{ inputs.tuning_strategy }}'
+              halving_reduction_factor = '${{ inputs.halving_reduction_factor }}'
+              annealing_temperature_start = '${{ inputs.annealing_temperature_start }}'
+              annealing_temperature_end = '${{ inputs.annealing_temperature_end }}'
+              annealing_neighbor_mutations = '${{ inputs.annealing_neighbor_mutations }}'
             }
             copied_files = $copied
             skipped_files = $skipped
           }
-
+          
           $manifest |
             ConvertTo-Json -Depth 8 |
             Set-Content -LiteralPath (Join-Path $bundle 'manifest.json') -Encoding utf8
-
+          
           Get-ChildItem -LiteralPath $bundle -Recurse -File |
             Select-Object FullName, Length |
             Format-Table -AutoSize
-
+          
           "bundle_path=$bundle" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload safe artifact bundle
         if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: local-heavy-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.bundle.outputs.bundle_path }}

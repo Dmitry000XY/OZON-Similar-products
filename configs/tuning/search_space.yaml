@@ -1,0 +1,103 @@
+objective:
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - ndcg_at_k
+    - recall_at_k
+    - mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.0
+
+parameters:
+  pipeline.lookback_days:
+    type: choice
+    values: [1]
+
+  topk.top_k:
+    type: choice
+    values: [10, 20, 50]
+
+  scoring.business_weights.view:
+    type: float_range
+    min: 0.0
+    max: 2.0
+    step: 0.25
+
+  scoring.business_weights.click:
+    type: float_range
+    min: 0.0
+    max: 8.0
+    step: 0.5
+
+  scoring.business_weights.favorite:
+    type: float_range
+    min: 0.0
+    max: 12.0
+    step: 0.5
+
+  scoring.business_weights.to_cart:
+    type: float_range
+    min: 0.0
+    max: 20.0
+    step: 1.0
+
+  scoring.beta:
+    type: float_range
+    min: 0.0
+    max: 1.0
+    step: 0.25
+
+  scoring.min_pair_count:
+    type: int_range
+    min: 1
+    max: 3
+    step: 1
+
+  scoring.min_unique_users:
+    type: int_range
+    min: 1
+    max: 3
+    step: 1
+
+  scoring.min_unique_sessions:
+    type: int_range
+    min: 1
+    max: 3
+    step: 1
+
+  scoring.normalize_by_item_popularity:
+    type: choice
+    values: [false, true]
+
+  scoring.popularity_normalization.power:
+    type: float_range
+    min: 0.0
+    max: 1.0
+    step: 0.25
+
+  scoring.popularity_normalization.smoothing:
+    type: choice
+    values: [0.1, 1.0, 10.0]
+
+  business.fallback.enabled:
+    type: choice
+    values: [false, true]
+
+  business.fallback.candidate_pool_size:
+    type: choice
+    values: [100, 200, 500]
+
+  business.fallback.min_item_events:
+    type: int_range
+    min: 1
+    max: 5
+    step: 1
+
+  pipeline.session_timeout_minutes:
+    type: int_range
+    min: 10
+    max: 30
+    step: 5

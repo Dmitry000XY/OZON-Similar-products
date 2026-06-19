@@ -14,4 +14,4 @@ COPY src ./src
 
 RUN uv sync --frozen --no-dev
 
-CMD ["uv", "run", "--no-dev", "python", "scripts/run_mvp_pipeline.py", "2024-04-30", "--lookback-days", "1"]
+CMD ["uv", "run", "--no-dev", "python", "scripts/run_pipeline.py", "2024-04-30", "--lookback-days", "1"]

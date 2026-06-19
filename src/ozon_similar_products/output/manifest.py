@@ -16,11 +16,14 @@ COMPACT_RECOMMENDATIONS_PATH_KEYS = (
     "compact_recommendations_path",
     "similar_items_path",
     "widget_path",
+    "lookup_recommendations_path",
+    "lookup_path",
     "recommendations_path",
 )
 
 RECOMMENDATION_ARTIFACT_PATH_KEYS = (
     "detailed_recommendations_path",
+    "enriched_recommendations_path",
     *COMPACT_RECOMMENDATIONS_PATH_KEYS,
 )
 

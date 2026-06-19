@@ -11,6 +11,7 @@ import polars as pl
 
 from ozon_similar_products.data import schemas
 from ozon_similar_products.data.validation import (
+    validate_frame_has_columns,
     validate_recommendations,
     validate_widget_output,
 )
@@ -23,8 +24,18 @@ from ozon_similar_products.output.manifest import (
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
-DEFAULT_DETAILED_FILENAME = "recommendations.parquet"
-DEFAULT_WIDGET_FILENAME = "similar_items.parquet"
+DEFAULT_DETAILED_FILENAME = "detailed.parquet"
+DEFAULT_WIDGET_FILENAME = "lookup.parquet"
+DEFAULT_ENRICHED_FILENAME = "enriched.parquet"
+ENRICHED_COLUMNS = [
+    "item_id",
+    "item_name",
+    "similar_item_id",
+    "similar_item_name",
+    "rank",
+    "score",
+    "source",
+]
 
 
 class RecommendationWriter:
@@ -46,7 +57,7 @@ class RecommendationWriter:
             recommendations: Recommendations DataFrame or LazyFrame following
                 the recommendations contract.
             output_path: Output parquet path or a directory. If a directory path
-                is passed, ``recommendations.parquet`` is used as the file name.
+                is passed, ``detailed.parquet`` is used as the file name.
 
         Returns:
             Path to the written parquet file.
@@ -73,7 +84,7 @@ class RecommendationWriter:
                 The input must follow the recommendations contract and contain
                 ranked item-to-item rows.
             output_path: Output parquet path or a directory. If a directory path
-                is passed, ``similar_items.parquet`` is used as the file name.
+                is passed, ``lookup.parquet`` is used as the file name.
 
         Returns:
             Path to the written parquet file.
@@ -85,6 +96,54 @@ class RecommendationWriter:
         )
 
         widget_output.write_parquet(resolved_path)
+        return resolved_path
+
+    def save_enriched(
+        self,
+        recommendations: FrameLike,
+        products: FrameLike,
+        output_path: str | Path,
+    ) -> Path:
+        """Save full recommendations with human-readable product names."""
+        validate_recommendations(recommendations)
+        validate_frame_has_columns(
+            products,
+            ["item_id", "name"],
+            dataset_name="product_information",
+        )
+        resolved_path = _resolve_output_path(
+            output_path=output_path,
+            default_filename=DEFAULT_ENRICHED_FILENAME,
+        )
+
+        product_names = (
+            _as_lazy(products)
+            .select("item_id", "name")
+            .unique(subset=["item_id"], keep="first")
+        )
+        enriched = (
+            _as_lazy(recommendations)
+            .join(
+                product_names.rename({"name": "item_name"}),
+                on="item_id",
+                how="left",
+            )
+            .join(
+                product_names.rename(
+                    {
+                        "item_id": "similar_item_id",
+                        "name": "similar_item_name",
+                    }
+                ),
+                on="similar_item_id",
+                how="left",
+            )
+            .sort(["item_id", "rank", "similar_item_id"])
+            .select(ENRICHED_COLUMNS)
+            .collect()
+        )
+
+        enriched.write_parquet(resolved_path)
         return resolved_path
 
     def to_widget_format(self, recommendations: FrameLike) -> pl.DataFrame:
