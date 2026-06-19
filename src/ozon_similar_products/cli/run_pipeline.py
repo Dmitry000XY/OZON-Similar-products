@@ -1,4 +1,4 @@
-"""CLI entrypoint for the MVP recommendation pipeline."""
+"""CLI entrypoint for the recommendation pipeline."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from ozon_similar_products.config import load_yaml_config
-from ozon_similar_products.pipeline.run_mvp import run_mvp_pipeline
+from ozon_similar_products.pipeline.run_pipeline import run_pipeline
 
 
 def _config_with_top_k_override(
@@ -41,9 +41,9 @@ def _config_with_top_k_override(
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the MVP pipeline run."""
+    """Parse command-line arguments for the recommendation pipeline run."""
     parser = argparse.ArgumentParser(
-        description="Run the MVP similar-products pipeline over a rolling window.",
+        description="Run the similar-products recommendation pipeline over a rolling window.",
     )
     parser.add_argument(
         "train_until_date",
@@ -71,13 +71,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Run the MVP pipeline from CLI arguments."""
+    """Run the recommendation pipeline from CLI arguments."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     args = parse_args()
     logger = logging.getLogger(__name__)
     logger.info(
-        "[run_mvp_pipeline] start train_until_date=%s lookback_days=%s config=%s",
+        "[run_pipeline] start train_until_date=%s lookback_days=%s config=%s",
         args.train_until_date,
         args.lookback_days,
         args.config_path,
@@ -88,25 +88,25 @@ def main() -> int:
         config = _config_with_top_k_override(config, args.top_k)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "run_mvp.override.yaml"
+            config_path = Path(temp_dir) / "run_pipeline.override.yaml"
             config_path.write_text(
                 yaml.safe_dump(config, sort_keys=False),
                 encoding="utf-8",
             )
 
-            run_mvp_pipeline(
+            run_pipeline(
                 train_until_date=args.train_until_date,
                 lookback_days=args.lookback_days,
                 config_path=config_path,
             )
     except Exception:
         logger.exception(
-            "[run_mvp_pipeline] failed train_until_date=%s lookback_days=%s config=%s",
+            "[run_pipeline] failed train_until_date=%s lookback_days=%s config=%s",
             args.train_until_date,
             args.lookback_days,
             args.config_path,
         )
         return 1
 
-    logger.info("[run_mvp_pipeline] done")
+    logger.info("[run_pipeline] done")
     return 0

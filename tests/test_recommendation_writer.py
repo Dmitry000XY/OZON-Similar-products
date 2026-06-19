@@ -51,7 +51,7 @@ def _recommendations_out_of_rank_order() -> pl.DataFrame:
 def test_save_detailed_writes_parquet_to_explicit_file_path(tmp_path: Path) -> None:
     """Detailed writer should save recommendations to a concrete parquet path."""
     recommendations = _recommendations()
-    output_path = tmp_path / "nested" / "recommendations.parquet"
+    output_path = tmp_path / "nested" / "detailed.parquet"
 
     written_path = RecommendationWriter().save_detailed(recommendations, output_path)
 
@@ -70,7 +70,7 @@ def test_save_detailed_accepts_directory_path(tmp_path: Path) -> None:
 
     written_path = RecommendationWriter().save_detailed(recommendations, output_dir)
 
-    output_path = output_dir / "recommendations.parquet"
+    output_path = output_dir / "detailed.parquet"
     assert written_path == output_path
     assert output_path.is_file()
     saved = pl.read_parquet(output_path)
@@ -81,7 +81,7 @@ def test_save_detailed_accepts_directory_path(tmp_path: Path) -> None:
 def test_save_detailed_accepts_lazy_frame(tmp_path: Path) -> None:
     """Detailed writer should accept both DataFrame and LazyFrame inputs."""
     recommendations = _recommendations()
-    output_path = tmp_path / "recommendations.parquet"
+    output_path = tmp_path / "detailed.parquet"
 
     RecommendationWriter().save_detailed(recommendations.lazy(), output_path)
 
@@ -92,7 +92,7 @@ def test_save_detailed_accepts_lazy_frame(tmp_path: Path) -> None:
 def test_save_detailed_preserves_channel_diagnostic_columns(tmp_path: Path) -> None:
     """Extra channel diagnostic columns should remain in detailed output."""
     recommendations = _recommendations()
-    output_path = tmp_path / "recommendations.parquet"
+    output_path = tmp_path / "detailed.parquet"
 
     RecommendationWriter().save_detailed(recommendations, output_path)
 
@@ -118,7 +118,7 @@ def test_save_detailed_validates_recommendations_contract(
 ) -> None:
     """Detailed writer should fail when required recommendation columns are absent."""
     invalid_recommendations = _recommendations().drop(missing_column)
-    output_path = tmp_path / "recommendations.parquet"
+    output_path = tmp_path / "detailed.parquet"
 
     with pytest.raises(ValueError, match="missing expected columns"):
         RecommendationWriter().save_detailed(invalid_recommendations, output_path)
@@ -179,7 +179,7 @@ def test_to_widget_format_drops_null_item_candidates_and_ranks() -> None:
 def test_save_widget_format_writes_parquet_to_explicit_file_path(tmp_path: Path) -> None:
     """Widget writer should save compact recommendations to a concrete parquet path."""
     recommendations = _recommendations_out_of_rank_order()
-    output_path = tmp_path / "nested" / "similar_items.parquet"
+    output_path = tmp_path / "nested" / "lookup.parquet"
 
     written_path = RecommendationWriter().save_widget_format(recommendations, output_path)
 
@@ -201,7 +201,7 @@ def test_save_widget_format_accepts_directory_path(tmp_path: Path) -> None:
 
     written_path = RecommendationWriter().save_widget_format(recommendations, output_dir)
 
-    output_path = output_dir / "similar_items.parquet"
+    output_path = output_dir / "lookup.parquet"
     assert written_path == output_path
     assert output_path.is_file()
 
@@ -209,7 +209,7 @@ def test_save_widget_format_accepts_directory_path(tmp_path: Path) -> None:
 def test_save_widget_format_accepts_lazy_frame(tmp_path: Path) -> None:
     """Widget writer should accept both DataFrame and LazyFrame inputs."""
     recommendations = _recommendations_out_of_rank_order()
-    output_path = tmp_path / "similar_items.parquet"
+    output_path = tmp_path / "lookup.parquet"
 
     RecommendationWriter().save_widget_format(recommendations.lazy(), output_path)
 
@@ -230,7 +230,7 @@ def test_save_widget_format_validates_recommendations_contract(
 ) -> None:
     """Widget writer should fail when required recommendation columns are absent."""
     invalid_recommendations = _recommendations().drop(missing_column)
-    output_path = tmp_path / "similar_items.parquet"
+    output_path = tmp_path / "lookup.parquet"
 
     with pytest.raises(ValueError, match="missing expected columns"):
         RecommendationWriter().save_widget_format(invalid_recommendations, output_path)

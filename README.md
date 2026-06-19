@@ -32,10 +32,10 @@ full-window item pairs и full-window sessions.
 На выходе создаются:
 
 ```text
-outputs/recommendations/runs/.../recommendations.parquet
-outputs/recommendations/runs/.../similar_items.parquet
-outputs/recommendations/runs/.../manifest.json
-outputs/recommendations/latest/manifest.json
+outputs/runs/.../recommendations/detailed.parquet
+outputs/runs/.../recommendations/lookup.parquet
+outputs/runs/.../manifest.json
+outputs/latest/manifest.json
 ```
 
 `latest/manifest.json` указывает на актуальную версию рекомендаций.
@@ -100,38 +100,43 @@ uv run python scripts/check_project_structure.py
 
 ---
 
-## Запуск baseline pipeline
+## Запуски
 
-Запуск полного MVP pipeline:
-
-```bash
-uv run python scripts/run_mvp_pipeline.py 2026-04-30 --lookback-days 1
-```
-
-или через package CLI
+Построить только рекомендации на train window:
 
 ```bash
-uv run ozon-run-mvp 2024-04-30 --lookback-days 1
+uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
-Где:
+Полный запуск для demo/защиты: рекомендации строятся на train window, затем validation window вычисляется автоматически
+как следующие `validation_days` дней после `train_until_date`, после чего считаются offline metrics.
+
+```bash
+uv run python scripts/run_full.py 2024-04-23 --lookback-days 7 --validation-days 7 --top-k 20 --config-path configs/production.yaml
+```
+
+Для примера выше train window будет `2024-04-17 .. 2024-04-23`, а validation window:
+`2024-04-24 .. 2024-04-30`.
+
+Запуск tuning по явному search space:
+
+```bash
+uv run python scripts/run_tune.py 2024-04-23 --lookback-days 7 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
+```
+
+Основные outputs:
 
 ```text
-2024-04-30      # последняя дата train window
---lookback-days # размер rolling window в днях
+data/processed/                 # reusable intermediate pipeline tables
+outputs/runs/<run_id>/          # one full run: config, manifest, recommendations, evaluation
+outputs/latest/                 # latest full run snapshot
+outputs/tuning/<sweep_id>/      # tuning results, best_config.yaml, best_metrics.json
 ```
 
-По умолчанию используется config:
+`configs/production.yaml` изначально совпадает с baseline. После tuning выбранный `outputs/tuning/<sweep_id>/best_config.yaml`
+можно перенести в `configs/production.yaml` отдельным осознанным изменением.
 
-```text
-configs/baseline.yaml
-```
-
-Можно передать другой config:
-
-```bash
-uv run python scripts/run_mvp_pipeline.py 2026-04-30 --lookback-days 1 --config-path configs/baseline.yaml
-```
+В GitHub Actions доступны только режимы `full` и `tune`.
 
 ---
 
@@ -170,7 +175,7 @@ uv run python scripts/preview_latest_recommendations.py --item-id 113
 Использовать другой manifest:
 
 ```bash
-uv run python scripts/preview_latest_recommendations.py --manifest-path outputs/recommendations/latest/manifest.json
+uv run python scripts/preview_latest_recommendations.py --manifest-path outputs/latest/manifest.json
 ```
 
 Успешный запуск должен показать, что в manifest `recommendations > 0`, а lookup возвращает список `similar_items`.
@@ -210,7 +215,7 @@ uv run pytest
 Проверить pipeline runner:
 
 ```bash
-uv run pytest tests/test_run_mvp.py
+uv run pytest tests/test_run_pipeline.py tests/test_run_full.py tests/test_run_tune.py
 ```
 
 Проверить retrieval layer:
@@ -243,7 +248,11 @@ uv run pyrefly check src scripts tests
 
 ```text
 configs/baseline.yaml                         # параметры baseline
-scripts/run_mvp_pipeline.py                   # запуск полного pipeline
+configs/production.yaml                       # параметры production full run
+configs/tuning/search_space.yaml              # явное пространство tuning
+scripts/run_pipeline.py                       # построение рекомендаций
+scripts/run_full.py                           # рекомендации + offline evaluation
+scripts/run_tune.py                           # подбор параметров
 scripts/preview_latest_recommendations.py     # просмотр результата и lookup
 src/ozon_similar_products/preprocessing/      # clean events и session builder
 src/ozon_similar_products/features/           # item popularity и calibration stats
@@ -260,7 +269,7 @@ tests/                                        # unit и integration tests
 
 ## Текущий статус
 
-Реализован MVP baseline:
+Реализован offline baseline:
 
 - подготовка и чтение данных;
 - очистка событий по дневным partition-ам;

@@ -19,7 +19,7 @@ data:
 
 outputs:
   root_dir: outputs
-  recommendations_dir: outputs/recommendations
+  recommendations_dir: outputs
   reports_dir: outputs/reports
   figures_dir: outputs/figures
 
@@ -65,7 +65,9 @@ source:
     - src/ozon_similar_products/serving/lookup.py
     - src/ozon_similar_products/output/lookup.py
     - src/ozon_similar_products/cli/__init__.py
-    - src/ozon_similar_products/cli/run_mvp.py
+    - src/ozon_similar_products/cli/run_pipeline.py
+    - src/ozon_similar_products/cli/run_full.py
+    - src/ozon_similar_products/cli/run_tune.py
     - src/ozon_similar_products/cli/preview_recommendations.py
 
 project_dirs:
@@ -78,7 +80,7 @@ project_dirs:
   - data/samples
   - docs
   - notebooks
-  - outputs/recommendations
+  - outputs
   - outputs/reports
   - outputs/figures
   - scripts

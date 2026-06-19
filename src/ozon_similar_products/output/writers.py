@@ -23,8 +23,8 @@ from ozon_similar_products.output.manifest import (
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
-DEFAULT_DETAILED_FILENAME = "recommendations.parquet"
-DEFAULT_WIDGET_FILENAME = "similar_items.parquet"
+DEFAULT_DETAILED_FILENAME = "detailed.parquet"
+DEFAULT_WIDGET_FILENAME = "lookup.parquet"
 
 
 class RecommendationWriter:
@@ -46,7 +46,7 @@ class RecommendationWriter:
             recommendations: Recommendations DataFrame or LazyFrame following
                 the recommendations contract.
             output_path: Output parquet path or a directory. If a directory path
-                is passed, ``recommendations.parquet`` is used as the file name.
+                is passed, ``detailed.parquet`` is used as the file name.
 
         Returns:
             Path to the written parquet file.
@@ -73,7 +73,7 @@ class RecommendationWriter:
                 The input must follow the recommendations contract and contain
                 ranked item-to-item rows.
             output_path: Output parquet path or a directory. If a directory path
-                is passed, ``similar_items.parquet`` is used as the file name.
+                is passed, ``lookup.parquet`` is used as the file name.
 
         Returns:
             Path to the written parquet file.

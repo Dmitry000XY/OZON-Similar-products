@@ -4,35 +4,57 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: What to run inside Docker
+        description: What to run
         required: true
         default: full
         type: choice
         options:
-          - pipeline
-          - lookup
-          - evaluation
           - full
+          - tune
       train_until_date:
-        description: Inclusive window end date, YYYY-MM-DD
+        description: Inclusive train window end date, YYYY-MM-DD
         required: true
-        default: "2024-04-30"
+        default: "2024-04-23"
         type: string
       lookback_days:
-        description: Rolling window size in days
+        description: Train rolling window size in days
+        required: true
+        default: "7"
+        type: string
+      validation_days:
+        description: Number of days after train_until_date used for validation
         required: true
         default: "1"
         type: string
       top_k:
-        description: Recommendation top K for pipeline config override and preview
+        description: Recommendation top K
         required: true
         default: "20"
         type: string
       config_path:
-        description: Pipeline config path
+        description: Config path
         required: true
-        default: configs/baseline.yaml
+        default: configs/production.yaml
         type: string
+      search_space_path:
+        description: Tuning search space config path
+        required: true
+        default: configs/tuning/search_space.yaml
+        type: string
+      max_trials:
+        description: Maximum tuning trials
+        required: true
+        default: "30"
+        type: string
+      tuning_strategy:
+        description: Tuning strategy
+        required: true
+        default: random
+        type: choice
+        options:
+          - grid
+          - random
+          - successive_halving
       upload_artifact:
         description: Upload safe compact artifact bundle
         required: true
@@ -79,7 +101,7 @@ jobs:
           }
 
       - name: Checkout selected ref
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           fetch-depth: 1
@@ -98,15 +120,6 @@ jobs:
           docker compose version
           docker info
           Get-PSDrive -Name C,D | Format-Table -AutoSize
-          @(
-            $env:RUNNER_RUNTIME,
-            (Join-Path $env:RUNNER_RUNTIME 'data\raw'),
-            (Join-Path $env:RUNNER_RUNTIME 'data\processed'),
-            (Join-Path $env:RUNNER_RUNTIME 'outputs'),
-            (Join-Path $env:RUNNER_RUNTIME 'artifacts')
-          ) | ForEach-Object {
-            Write-Host "path_exists=$($_): $(Test-Path -LiteralPath $_)"
-          }
 
       - name: Prepare runtime directories
         run: |
@@ -144,20 +157,17 @@ jobs:
           $runMode = '${{ inputs.run_mode }}'
           $trainUntilDate = '${{ inputs.train_until_date }}'
           $lookbackDays = '${{ inputs.lookback_days }}'
+          $validationDays = '${{ inputs.validation_days }}'
           $topK = '${{ inputs.top_k }}'
           $configPath = '${{ inputs.config_path }}'
+          $searchSpacePath = '${{ inputs.search_space_path }}'
+          $maxTrials = '${{ inputs.max_trials }}'
+          $tuningStrategy = '${{ inputs.tuning_strategy }}'
 
-          if ([string]::IsNullOrWhiteSpace($trainUntilDate)) {
-            throw 'train_until_date must not be empty.'
-          }
-          if ([string]::IsNullOrWhiteSpace($lookbackDays)) {
-            throw 'lookback_days must not be empty.'
-          }
-          if ([string]::IsNullOrWhiteSpace($topK)) {
-            throw 'top_k must not be empty.'
-          }
-          if ([string]::IsNullOrWhiteSpace($configPath)) {
-            throw 'config_path must not be empty.'
+          foreach ($value in @($trainUntilDate, $lookbackDays, $validationDays, $topK, $configPath)) {
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw 'Required workflow input must not be empty.'
+            }
           }
 
           $runLabel = "run-$env:GITHUB_RUN_ID-attempt-$env:GITHUB_RUN_ATTEMPT"
@@ -187,77 +197,35 @@ jobs:
             }
           }
 
-          function Invoke-RecommendationPipeline {
+          if ($runMode -eq 'full') {
             Invoke-PipelineContainer `
-              -StepName 'pipeline' `
+              -StepName 'full' `
               -ContainerArgs @(
-                'uv', 'run', '--no-dev', 'python', 'scripts/run_mvp_pipeline.py',
+                'uv', 'run', '--no-dev', 'python', 'scripts/run_full.py',
                 $trainUntilDate,
                 '--lookback-days', $lookbackDays,
+                '--validation-days', $validationDays,
+                '--top-k', $topK,
                 '--config-path', $configPath,
-                '--top-k', $topK
+                '--run-name', $runLabel
               )
-          }
-
-          function Invoke-LookupPreview {
-            if (Test-Path -LiteralPath 'scripts/preview_latest_recommendations.py') {
-              Invoke-PipelineContainer `
-                -StepName 'lookup-preview' `
-                -ContainerArgs @(
-                  'uv', 'run', '--no-dev', 'python', 'scripts/preview_latest_recommendations.py',
-                  '--top-k', $topK,
-                  '--head', '20'
-                )
-            } else {
-              Write-Host 'scripts/preview_latest_recommendations.py is missing; skipping lookup preview.'
-            }
-
-            if (Test-Path -LiteralPath 'scripts/export_recommendation_preview.py') {
-              Invoke-PipelineContainer `
-                -StepName 'export-preview' `
-                -ContainerArgs @(
-                  'uv', 'run', '--no-dev', 'python', 'scripts/export_recommendation_preview.py',
-                  '--top-k', $topK,
-                  '--max-items', '25',
-                  '--output-dir', 'outputs/demo'
-                )
-            } else {
-              Write-Host 'scripts/export_recommendation_preview.py is missing; skipping demo export.'
-            }
-          }
-
-          function Invoke-Evaluation {
-            if (Test-Path -LiteralPath 'scripts/run_evaluation.py') {
-              Invoke-PipelineContainer `
-                -StepName 'evaluation' `
-                -ContainerArgs @('uv', 'run', '--no-dev', 'python', 'scripts/run_evaluation.py')
-            } else {
-              $evaluationDir = Join-Path $env:RUNNER_RUNTIME 'outputs\evaluation'
-              New-Item -ItemType Directory -Path $evaluationDir -Force | Out-Null
-              'No evaluation script exists in this branch.' |
-                Set-Content -LiteralPath (Join-Path $evaluationDir 'README.txt') -Encoding utf8
-              Write-Host 'No evaluation script exists in this branch; wrote outputs/evaluation/README.txt.'
-            }
-          }
-
-          switch ($runMode) {
-            'pipeline' {
-              Invoke-RecommendationPipeline
-            }
-            'lookup' {
-              Invoke-LookupPreview
-            }
-            'evaluation' {
-              Invoke-Evaluation
-            }
-            'full' {
-              Invoke-RecommendationPipeline
-              Invoke-LookupPreview
-              Invoke-Evaluation
-            }
-            default {
-              throw "Unsupported run_mode: $runMode"
-            }
+          } elseif ($runMode -eq 'tune') {
+            Invoke-PipelineContainer `
+              -StepName 'tune' `
+              -ContainerArgs @(
+                'uv', 'run', '--no-dev', 'python', 'scripts/run_tune.py',
+                $trainUntilDate,
+                '--lookback-days', $lookbackDays,
+                '--validation-days', $validationDays,
+                '--top-k', $topK,
+                '--config-path', $configPath,
+                '--search-space-path', $searchSpacePath,
+                '--max-trials', $maxTrials,
+                '--tuning-strategy', $tuningStrategy,
+                '--sweep-name', $runLabel
+              )
+          } else {
+            throw "Unsupported run_mode: $runMode"
           }
 
           $outputsRoot = Join-Path $env:RUNNER_RUNTIME 'outputs'
@@ -286,26 +254,10 @@ jobs:
           $skipped = New-Object System.Collections.Generic.List[object]
 
           $sources = @(
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\recommendations\latest'
-              Prefix = 'outputs\recommendations\latest'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\recommendations\runs'
-              Prefix = 'outputs\recommendations\runs'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\demo'
-              Prefix = 'outputs\demo'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME 'outputs\evaluation'
-              Prefix = 'outputs\evaluation'
-            },
-            @{
-              Root = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"
-              Prefix = 'logs'
-            }
+            @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\runs'; Prefix = 'outputs\runs' },
+            @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\latest'; Prefix = 'outputs\latest' },
+            @{ Root = Join-Path $env:RUNNER_RUNTIME 'outputs\tuning'; Prefix = 'outputs\tuning' },
+            @{ Root = Join-Path $env:RUNNER_RUNTIME "artifacts\logs\$runLabel"; Prefix = 'logs' }
           )
 
           foreach ($source in $sources) {
@@ -319,18 +271,17 @@ jobs:
               $fullName = $file.FullName
               $reason = $null
 
-                if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
-                  $reason = 'raw-or-processed-data-path'
-                } elseif ($file.Extension -eq '.parquet') {
-                  # Allow parquet files only for recommendation outputs (latest and runs)
-                  if ($fullName -match '[\\/]outputs[\\/]recommendations[\\/]') {
-                    $reason = $null
-                  } else {
-                    $reason = 'parquet-skipped'
-                  }
-                } elseif ($file.Length -gt $limitBytes) {
-                  $reason = 'over-100mb'
+              if ($fullName -match '[\\/]data[\\/]raw[\\/]' -or $fullName -match '[\\/]data[\\/]processed[\\/]') {
+                $reason = 'raw-or-processed-data-path'
+              } elseif ($file.Extension -eq '.parquet') {
+                $isRunRecommendation = $fullName -match '[\\/]outputs[\\/]runs[\\/][^\\/]+[\\/]recommendations[\\/]'
+                $isLatestRecommendation = $fullName -match '[\\/]outputs[\\/]latest[\\/]recommendations[\\/]'
+                if (-not ($isRunRecommendation -or $isLatestRecommendation)) {
+                  $reason = 'parquet-skipped'
                 }
+              } elseif ($file.Length -gt $limitBytes) {
+                $reason = 'over-100mb'
+              }
 
               if ($reason) {
                 $skipped.Add([ordered]@{
@@ -375,8 +326,12 @@ jobs:
               run_mode = '${{ inputs.run_mode }}'
               train_until_date = '${{ inputs.train_until_date }}'
               lookback_days = '${{ inputs.lookback_days }}'
+              validation_days = '${{ inputs.validation_days }}'
               top_k = '${{ inputs.top_k }}'
               config_path = '${{ inputs.config_path }}'
+              search_space_path = '${{ inputs.search_space_path }}'
+              max_trials = '${{ inputs.max_trials }}'
+              tuning_strategy = '${{ inputs.tuning_strategy }}'
             }
             copied_files = $copied
             skipped_files = $skipped
@@ -394,7 +349,7 @@ jobs:
 
       - name: Upload safe artifact bundle
         if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: local-heavy-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.bundle.outputs.bundle_path }}

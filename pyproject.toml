@@ -11,9 +11,10 @@ dependencies = [
 ]
 
 [project.scripts]
-ozon-run-mvp = "ozon_similar_products.cli.run_mvp:main"
+ozon-run-pipeline = "ozon_similar_products.cli.run_pipeline:main"
+ozon-run-full = "ozon_similar_products.cli.run_full:main"
+ozon-run-tune = "ozon_similar_products.cli.run_tune:main"
 ozon-preview-recommendations = "ozon_similar_products.cli.preview_recommendations:main"
-ozon-run-experiment = "ozon_similar_products.cli.run_experiment:main"
 
 [dependency-groups]
 dev = [

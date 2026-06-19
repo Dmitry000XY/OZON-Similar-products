@@ -1,4 +1,4 @@
-"""Compare offline recommendation experiments."""
+"""Compare tuning trial results."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ import polars as pl
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare saved experiment metrics.",
+        description="Compare saved tuning trial metrics.",
     )
     parser.add_argument(
-        "--index-path",
+        "--results-path",
         type=Path,
-        default=Path("outputs/experiments/index.csv"),
-        help="Path to experiment index CSV.",
+        default=None,
+        help="Path to a tuning results.csv. Defaults to the newest outputs/tuning/*/results.csv.",
     )
     parser.add_argument(
         "--sort-by",
@@ -41,26 +41,27 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    if not args.index_path.exists():
-        raise FileNotFoundError(f"Experiment index not found: {args.index_path}")
+    results_path = args.results_path
+    if results_path is None:
+        candidates = sorted(Path("outputs/tuning").glob("*/results.csv"))
+        if not candidates:
+            raise FileNotFoundError("No tuning results found under outputs/tuning")
+        results_path = candidates[-1]
 
-    experiments = pl.read_csv(args.index_path)
+    if not results_path.exists():
+        raise FileNotFoundError(f"Tuning results not found: {results_path}")
 
-    if args.sort_by not in experiments.columns:
+    trials = pl.read_csv(results_path)
+
+    if args.sort_by not in trials.columns:
         raise ValueError(
             f"Unknown sort column: {args.sort_by}. "
-            f"Available columns: {experiments.columns}"
+            f"Available columns: {trials.columns}"
         )
 
     columns = [
         column for column in [
-            "experiment_id",
-            "experiment_name",
-            "train_until_date",
-            "lookback_days",
-            "validation_start_date",
-            "validation_end_date",
-            "top_k",
+            "trial_id",
             "hit_rate_at_k",
             "weighted_recall_at_k",
             "to_cart_hit_rate_at_k",
@@ -72,11 +73,11 @@ def main() -> int:
             "popularity_bias_at_k",
             "elapsed_seconds",
         ]
-        if column in experiments.columns
+        if column in trials.columns
     ]
 
     print(
-        experiments
+        trials
         .sort(args.sort_by, descending=args.descending)
         .select(columns)
         .head(args.top_n)
