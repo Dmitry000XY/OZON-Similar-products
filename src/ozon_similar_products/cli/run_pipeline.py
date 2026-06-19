@@ -20,7 +20,7 @@ def _config_with_top_k_override(
     config: Mapping[str, Any],
     top_k: int | None,
 ) -> dict[str, Any]:
-    """Return a config copy with ``top_k`` applied to pipeline selection settings."""
+    """Return a config copy with ``top_k`` applied to all top-K selectors."""
     overridden = deepcopy(dict(config))
     if top_k is None:
         return overridden
@@ -36,6 +36,16 @@ def _config_with_top_k_override(
         section_copy = dict(section)
         section_copy["top_k"] = top_k
         overridden[section_name] = section_copy
+
+    business = overridden.get("business")
+    if isinstance(business, Mapping):
+        business_copy = dict(business)
+        fallback = business_copy.get("fallback")
+        if isinstance(fallback, Mapping):
+            fallback_copy = dict(fallback)
+            fallback_copy["top_k"] = top_k
+            business_copy["fallback"] = fallback_copy
+            overridden["business"] = business_copy
 
     return overridden
 
@@ -86,27 +96,20 @@ def main() -> int:
     try:
         config = load_yaml_config(args.config_path)
         config = _config_with_top_k_override(config, args.top_k)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "run_pipeline.override.yaml"
-            config_path.write_text(
-                yaml.safe_dump(config, sort_keys=False),
-                encoding="utf-8",
-            )
-
-            run_pipeline(
-                train_until_date=args.train_until_date,
-                lookback_days=args.lookback_days,
-                config_path=config_path,
-            )
-    except Exception:
-        logger.exception(
-            "[run_pipeline] failed train_until_date=%s lookback_days=%s config=%s",
-            args.train_until_date,
-            args.lookback_days,
-            args.config_path,
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as file:
+            yaml.safe_dump(config, file, sort_keys=False, allow_unicode=True)
+            config_path = Path(file.name)
+        run_pipeline(
+            train_until_date=args.train_until_date,
+            lookback_days=args.lookback_days,
+            config_path=config_path,
         )
+    except Exception:
+        logger.exception("[run_pipeline] failed")
         return 1
-
     logger.info("[run_pipeline] done")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
