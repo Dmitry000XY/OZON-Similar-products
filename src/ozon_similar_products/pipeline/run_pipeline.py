@@ -533,6 +533,47 @@ def _write_daily_pair_stats(
     return count_path, user_key_path, session_key_path
 
 
+def _build_daily_pair_stats_in_memory(
+        *,
+        daily_sessions: Sequence[tuple[str, pl.DataFrame]],
+        pair_builder: ItemPairBuilder,
+        session_batch_size: int = 10_000,
+) -> DailyPairStats:
+    """Build compact daily pair stats from sessions without writing artifacts."""
+    batch_stats: list[DailyPairStats] = []
+
+    for partition_date, sessions in daily_sessions:
+        session_batches = _iter_session_batches(
+            sessions=sessions,
+            batch_size=session_batch_size,
+        )
+
+        for batch_index, session_batch in enumerate(session_batches, start=1):
+            logging.getLogger(__name__).info(
+                "[run_pipeline] pair stats batch start date=%s batch=%s/%s rows=%s",
+                partition_date,
+                batch_index,
+                len(session_batches),
+                session_batch.height,
+            )
+            _log_memory(logging.getLogger(__name__), "before_pair_stats_batch")
+
+            stats = pair_builder.build_daily_pair_stats(session_batch)
+
+            logging.getLogger(__name__).info(
+                "[run_pipeline] pair stats batch done date=%s batch=%s/%s raw_pair_rows=%s",
+                partition_date,
+                batch_index,
+                len(session_batches),
+                stats.raw_pair_rows,
+            )
+            _log_memory(logging.getLogger(__name__), "after_pair_stats_batch")
+
+            batch_stats.append(stats)
+
+    return _combine_daily_pair_stats(batch_stats)
+
+
 def _build_and_write_daily_pair_stats(
         *,
         daily_sessions: Sequence[tuple[str, pl.DataFrame]],
@@ -820,6 +861,7 @@ def _build_streaming_sessions_and_pair_stats(
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
     sessions_rows = 0
+    daily_stats_by_partition: dict[str, list[DailyPairStats]] = {}
 
     active_clean_events = empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
     active_sessions = empty_contract_frame(schemas.SESSIONS_COLUMNS)
@@ -903,17 +945,18 @@ def _build_streaming_sessions_and_pair_stats(
                 daily_sessions_for_pairs = _partition_sessions_by_session_start_date(
                     completed_sessions
                 )
-                daily_pair_stats_paths = _build_and_write_daily_pair_stats(
-                    daily_sessions=daily_sessions_for_pairs,
-                    pair_builder=pair_builder,
-                    output_dir=daily_pairs_output_dir,
-                    session_batch_size=session_batch_size,
-                )
 
-                count_paths.extend(daily_pair_stats_paths.count_paths)
-                user_key_paths.extend(daily_pair_stats_paths.user_key_paths)
-                session_key_paths.extend(daily_pair_stats_paths.session_key_paths)
-                raw_pair_rows += daily_pair_stats_paths.raw_pair_rows
+                for stats_partition_date, partition_sessions in daily_sessions_for_pairs:
+                    daily_stats = _build_daily_pair_stats_in_memory(
+                        daily_sessions=[(stats_partition_date, partition_sessions)],
+                        pair_builder=pair_builder,
+                        session_batch_size=session_batch_size,
+                    )
+
+                    if daily_stats.raw_pair_rows > 0 or not daily_stats.counts.is_empty():
+                        daily_stats_by_partition.setdefault(stats_partition_date, []).append(daily_stats)
+                        raw_pair_rows += daily_stats.raw_pair_rows
+
                 sessions_rows += completed_sessions.height
 
             if not active_sessions_bucket.is_empty():
@@ -936,6 +979,27 @@ def _build_streaming_sessions_and_pair_stats(
             else empty_contract_frame(schemas.SESSIONS_COLUMNS)
         )
         active_clean_events = _sessions_to_clean_events(active_sessions)
+
+    for partition_date, stats_list in sorted(daily_stats_by_partition.items()):
+        logging.getLogger(__name__).info(
+            "[run_pipeline] write combined daily pair stats date=%s parts=%s",
+            partition_date,
+            len(stats_list),
+        )
+        _log_memory(logging.getLogger(__name__), "before_write_combined_daily_pair_stats")
+
+        combined_stats = _combine_daily_pair_stats(stats_list)
+        count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+            stats=combined_stats,
+            partition_date=partition_date,
+            output_dir=daily_pairs_output_dir,
+        )
+
+        count_paths.append(count_path)
+        user_key_paths.append(user_key_path)
+        session_key_paths.append(session_key_path)
+
+        _log_memory(logging.getLogger(__name__), "after_write_combined_daily_pair_stats")
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),
