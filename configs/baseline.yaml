@@ -3,6 +3,7 @@ pipeline:
   max_items_per_session: 50
   top_k: 20
   lookback_days: 30
+  session_batch_size: 10000
 
 events:
   item_action_types:

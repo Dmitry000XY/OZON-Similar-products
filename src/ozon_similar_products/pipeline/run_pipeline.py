@@ -393,6 +393,39 @@ def _merge_daily_pair_keys(
     )
 
 
+def _iter_session_batches(
+        sessions: pl.DataFrame,
+        batch_size: int,
+) -> list[pl.DataFrame]:
+    """Split session rows into batches without splitting individual sessions."""
+    if batch_size <= 0:
+        raise ValueError("session batch_size must be a positive integer")
+
+    if sessions.is_empty():
+        return []
+
+    session_keys = (
+        sessions
+        .select(["user_id", "session_index"])
+        .unique()
+        .sort(["user_id", "session_index"])
+    )
+
+    batches: list[pl.DataFrame] = []
+    session_count = session_keys.height
+
+    for start in range(0, session_count, batch_size):
+        batch_keys = session_keys.slice(start, batch_size)
+        batch = sessions.join(
+            batch_keys,
+            on=["user_id", "session_index"],
+            how="inner",
+        )
+        batches.append(batch)
+
+    return batches
+
+
 def _write_daily_pair_stats(
         *,
         stats: DailyPairStats,
@@ -447,6 +480,7 @@ def _build_and_write_daily_pair_stats(
         daily_sessions: Sequence[tuple[str, pl.DataFrame]],
         pair_builder: ItemPairBuilder,
         output_dir: Path,
+        session_batch_size: int = 10000,
 ) -> DailyPairStatsPaths:
     """Build compact daily pair stats for each sessions partition and write them."""
     count_paths: list[Path] = []
@@ -457,18 +491,22 @@ def _build_and_write_daily_pair_stats(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for partition_date, sessions in daily_sessions:
-        stats = pair_builder.build_daily_pair_stats(sessions)
-        raw_pair_rows += stats.raw_pair_rows
+        for session_batch in _iter_session_batches(
+                sessions=sessions,
+                batch_size=session_batch_size,
+        ):
+            stats = pair_builder.build_daily_pair_stats(session_batch)
+            raw_pair_rows += stats.raw_pair_rows
 
-        count_path, user_key_path, session_key_path = _write_daily_pair_stats(
-            stats=stats,
-            partition_date=partition_date,
-            output_dir=output_dir,
-        )
+            count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+                stats=stats,
+                partition_date=partition_date,
+                output_dir=output_dir,
+            )
 
-        count_paths.append(count_path)
-        user_key_paths.append(user_key_path)
-        session_key_paths.append(session_key_path)
+            count_paths.append(count_path)
+            user_key_paths.append(user_key_path)
+            session_key_paths.append(session_key_path)
 
     return DailyPairStatsPaths(
         count_paths=count_paths,
@@ -671,6 +709,7 @@ def _build_streaming_sessions_and_pair_stats(
         pair_builder: ItemPairBuilder,
         daily_pairs_output_dir: Path,
         sessions_output_dir: Path | None,
+        session_batch_size: int = 10000,
 ) -> tuple[int, DailyPairStatsPaths]:
     """Stream clean-event partitions into sessions and compact pair stats.
 
@@ -746,6 +785,7 @@ def _build_streaming_sessions_and_pair_stats(
             daily_sessions=daily_sessions_for_pairs,
             pair_builder=pair_builder,
             output_dir=daily_pairs_output_dir,
+            session_batch_size=session_batch_size,
         )
 
         count_paths.extend(daily_pair_stats_paths.count_paths)
@@ -944,12 +984,20 @@ def run_pipeline(
         else None
     )
 
+    session_batch_size = _as_positive_int(
+        value=pipeline_config.get("session_batch_size"),
+        default=10_000,
+        parameter_name="pipeline.session_batch_size",
+    )
+    logger.info("[run_pipeline] session batch size=%s", session_batch_size)
+
     sessions_rows, daily_pair_stats_paths = _build_streaming_sessions_and_pair_stats(
         clean_event_paths=clean_event_paths,
         session_builder=session_builder,
         pair_builder=pair_builder,
         daily_pairs_output_dir=daily_pairs_output_dir,
         sessions_output_dir=sessions_output_dir,
+        session_batch_size=session_batch_size,
     )
     daily_pairs_rows = daily_pair_stats_paths.raw_pair_rows
 
@@ -1097,7 +1145,7 @@ def run_pipeline(
         recommendations_rows,
         fallback_rows,
     )
-    _log_memory(logger, "after_scoring")
+    _log_memory(logger, "after_recommendations")
 
     outputs_root = _outputs_root(outputs_config)
     latest_dir = _as_path(outputs_config.get("latest_dir"), "outputs/latest")
