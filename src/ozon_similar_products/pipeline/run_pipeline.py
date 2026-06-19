@@ -13,7 +13,11 @@ from typing import Any
 
 import polars as pl
 
-from ozon_similar_products.business.fallback import FallbackConfig, FallbackLayer
+from ozon_similar_products.business.fallback import (
+    FALLBACK_SOURCE_LABELS,
+    FallbackConfig,
+    FallbackLayer,
+)
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.data import load_configs, load_events, load_products, schemas
 from ozon_similar_products.data.frames import empty_contract_frame
@@ -1040,17 +1044,23 @@ def run_pipeline(
             fallback_config.top_k,
             fallback_config.include_cold_start_items,
         )
+        product_information = load_products(
+            data_config,
+            columns=schemas.PRODUCT_INFORMATION_COLUMNS,
+        )
         recommendations = FallbackLayer(config=fallback_config).apply(
             recommendations,
             item_popularity=item_popularity,
+            product_information=product_information,
         )
+        del product_information
 
     del item_popularity
 
     recommendations_rows = recommendations.height
     fallback_rows = (
         recommendations
-        .filter(pl.col("source") == fallback_config.source_label)
+        .filter(pl.col("source").is_in(FALLBACK_SOURCE_LABELS))
         .height
     )
     if recommendations_rows == 0:
