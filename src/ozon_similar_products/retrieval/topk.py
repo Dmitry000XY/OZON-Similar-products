@@ -70,6 +70,7 @@ class TopKSelector:
     min_pair_count: int | None = None
     min_unique_users: int | None = None
     min_unique_sessions: int | None = None
+    deduplicate: bool = True
 
     def __post_init__(self) -> None:
         if self.top_k <= 0:
@@ -106,7 +107,8 @@ class TopKSelector:
             .filter(pl.col("item_id") != pl.col("similar_item_id"))
         )
         ranked = self._apply_thresholds(ranked)
-        ranked = self._deduplicate_pairs(ranked)
+        if self.deduplicate:
+            ranked = self._deduplicate_pairs(ranked)
         ranked = self._rank_candidates(ranked)
 
         recommendations = ranked.select(_output_columns(pair_scores)).collect()

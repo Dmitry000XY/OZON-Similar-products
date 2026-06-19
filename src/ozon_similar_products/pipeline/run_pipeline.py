@@ -1028,6 +1028,7 @@ def run_pipeline(
         min_pair_count=_as_optional_int(topk_config.get("min_pair_count")),
         min_unique_users=_as_optional_int(topk_config.get("min_unique_users")),
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
+        deduplicate=False,
     )
     recommendations = selector.select(pair_scores)
     del pair_scores
