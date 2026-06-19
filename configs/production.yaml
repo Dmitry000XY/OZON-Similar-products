@@ -58,6 +58,14 @@ outputs:
   root_dir: outputs
   latest_dir: outputs/latest
 
+evaluation:
+  relevance_mode: binary
+  relevance_weights:
+    view: 0.1
+    click: 0.3
+    favorite: 0.6
+    to_cart: 1.0
+
 business:
   fallback:
     enabled: false

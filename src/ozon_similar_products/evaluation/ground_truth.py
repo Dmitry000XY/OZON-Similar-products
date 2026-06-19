@@ -17,6 +17,10 @@ GROUND_TRUTH_COLUMNS = [
     "relevance",
     "target_action_type",
     "evidence_count",
+    "view_count",
+    "click_count",
+    "favorite_count",
+    "to_cart_count",
 ]
 
 DEFAULT_ACTION_RELEVANCE_WEIGHTS: dict[str, float] = {
@@ -57,6 +61,10 @@ def _weighted_relevance_expr(action_weights: Mapping[str, float]) -> pl.Expr:
     ).alias("relevance")
 
 
+def _binary_relevance_expr() -> pl.Expr:
+    return pl.lit(1.0).alias("relevance")
+
+
 def _target_action_type_expr() -> pl.Expr:
     """Return the strongest observed validation action for the target item."""
 
@@ -77,6 +85,7 @@ def _target_action_type_expr() -> pl.Expr:
 def build_ground_truth_from_daily_pair_counts(
     daily_pair_counts: FrameLike,
     *,
+    relevance_mode: str = "binary",
     action_weights: Mapping[str, float] | None = None,
     min_relevance: float = 0.0,
 ) -> pl.DataFrame:
@@ -92,8 +101,11 @@ def build_ground_truth_from_daily_pair_counts(
     if min_relevance < 0.0:
         raise ValueError("min_relevance must be >= 0")
 
+    if relevance_mode not in {"binary", "graded"}:
+        raise ValueError("relevance_mode must be either 'binary' or 'graded'")
+
     weights = dict(action_weights or DEFAULT_ACTION_RELEVANCE_WEIGHTS)
-    if not weights:
+    if relevance_mode == "graded" and not weights:
         raise ValueError("action_weights must not be empty")
 
     pair_counts = _collect_if_lazy(daily_pair_counts)
@@ -113,7 +125,9 @@ def build_ground_truth_from_daily_pair_counts(
             pl.col("to_cart_count").sum().alias("to_cart_count"),
         )
         .with_columns(
-            _weighted_relevance_expr(weights),
+            _binary_relevance_expr()
+            if relevance_mode == "binary"
+            else _weighted_relevance_expr(weights),
             _target_action_type_expr(),
         )
         .filter(pl.col("relevance") > min_relevance)
@@ -123,6 +137,10 @@ def build_ground_truth_from_daily_pair_counts(
             pl.col("relevance"),
             pl.col("target_action_type"),
             pl.col("evidence_count"),
+            pl.col("view_count"),
+            pl.col("click_count"),
+            pl.col("favorite_count"),
+            pl.col("to_cart_count"),
         )
         .sort(["item_id", "relevance", "relevant_item_id"], descending=[False, True, False])
     )

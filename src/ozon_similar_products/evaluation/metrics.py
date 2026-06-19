@@ -20,13 +20,18 @@ class OfflineMetrics:
     """Container for key offline metrics."""
 
     hit_rate_at_k: float | None = None
-    weighted_recall_at_k: float | None = None
+    recall_at_k: float | None = None
     ndcg_at_k: float | None = None
     mrr_at_k: float | None = None
     coverage_at_k: float | None = None
     popularity_bias_at_k: float | None = None
     fallback_share_at_k: float | None = None
-    metadata_gap_share_at_k: float | None = None
+    view_hit_rate_at_k: float | None = None
+    view_recall_at_k: float | None = None
+    click_hit_rate_at_k: float | None = None
+    click_recall_at_k: float | None = None
+    favorite_hit_rate_at_k: float | None = None
+    favorite_recall_at_k: float | None = None
     to_cart_hit_rate_at_k: float | None = None
     to_cart_recall_at_k: float | None = None
     evaluated_items: int = 0
@@ -92,6 +97,18 @@ def _build_recommendations_by_item(
         item_id = row["item_id"]
         recommendations_by_item.setdefault(item_id, []).append(row)
     return recommendations_by_item
+
+
+def _action_relevant_items(
+    truth_rows: list[dict[str, Any]],
+    action_type: str,
+) -> set[Any]:
+    count_column = f"{action_type}_count"
+    return {
+        row["relevant_item_id"]
+        for row in truth_rows
+        if float(row.get(count_column) or 0.0) > 0.0
+    }
 
 
 def _fallback_share(recommendations: pl.DataFrame, top_k: int) -> float | None:
@@ -189,24 +206,31 @@ def compute_offline_metrics(
     recall_values: list[float] = []
     mrr_values: list[float] = []
     ndcg_values: list[float] = []
-    to_cart_hit_values: list[float] = []
-    to_cart_recall_values: list[float] = []
+    action_hit_values: dict[str, list[float]] = {
+        "view": [],
+        "click": [],
+        "favorite": [],
+        "to_cart": [],
+    }
+    action_recall_values: dict[str, list[float]] = {
+        "view": [],
+        "click": [],
+        "favorite": [],
+        "to_cart": [],
+    }
 
     for item_id, truth_rows in truth_by_item.items():
         relevance_by_item = {row["relevant_item_id"]: float(row["relevance"]) for row in truth_rows}
-        action_by_item = {row["relevant_item_id"]: row["target_action_type"] for row in truth_rows}
-
         total_relevance = sum(relevance_by_item.values())
-        to_cart_items = {
-            relevant_item_id
-            for relevant_item_id, action_type in action_by_item.items()
-            if action_type == "to_cart"
+        action_items = {
+            action_type: _action_relevant_items(truth_rows, action_type)
+            for action_type in action_hit_values
         }
 
         recommendations_for_item = recommendations_by_item.get(item_id, [])
 
         weighted_hits: list[tuple[int, float]] = []
-        to_cart_hits = 0
+        action_hits = {action_type: 0 for action_type in action_hit_values}
 
         for row in recommendations_for_item:
             candidate = row["similar_item_id"]
@@ -217,8 +241,9 @@ def compute_offline_metrics(
                 continue
 
             weighted_hits.append((rank, relevance))
-            if candidate in to_cart_items:
-                to_cart_hits += 1
+            for action_type, relevant_items in action_items.items():
+                if candidate in relevant_items:
+                    action_hits[action_type] += 1
 
         hit_values.append(1.0 if weighted_hits else 0.0)
         recall_values.append(
@@ -241,10 +266,12 @@ def compute_offline_metrics(
         )
         ndcg_values.append(_safe_divide(dcg, ideal_dcg))
 
-        if to_cart_items:
-            to_cart_hit_values.append(1.0 if to_cart_hits > 0 else 0.0)
-            to_cart_recall_values.append(
-                _safe_divide(float(to_cart_hits), float(len(to_cart_items)))
+        for action_type, relevant_items in action_items.items():
+            if not relevant_items:
+                continue
+            action_hit_values[action_type].append(1.0 if action_hits[action_type] > 0 else 0.0)
+            action_recall_values[action_type].append(
+                _safe_divide(float(action_hits[action_type]), float(len(relevant_items)))
             )
 
     evaluated_items = len(truth_by_item)
@@ -252,15 +279,34 @@ def compute_offline_metrics(
 
     return OfflineMetrics(
         hit_rate_at_k=_mean(hit_values),
-        weighted_recall_at_k=_mean(recall_values),
+        recall_at_k=_mean(recall_values),
         ndcg_at_k=_mean(ndcg_values),
         mrr_at_k=_mean(mrr_values),
         coverage_at_k=_safe_divide(float(recommended_items), float(evaluated_items)),
         popularity_bias_at_k=_popularity_bias(recommendations_frame, top_k, context),
         fallback_share_at_k=_fallback_share(recommendations_frame, top_k),
-        metadata_gap_share_at_k=None,
-        to_cart_hit_rate_at_k=_mean(to_cart_hit_values) if to_cart_hit_values else None,
-        to_cart_recall_at_k=_mean(to_cart_recall_values) if to_cart_recall_values else None,
+        view_hit_rate_at_k=_mean(action_hit_values["view"]) if action_hit_values["view"] else None,
+        view_recall_at_k=_mean(action_recall_values["view"])
+        if action_recall_values["view"]
+        else None,
+        click_hit_rate_at_k=_mean(action_hit_values["click"])
+        if action_hit_values["click"]
+        else None,
+        click_recall_at_k=_mean(action_recall_values["click"])
+        if action_recall_values["click"]
+        else None,
+        favorite_hit_rate_at_k=_mean(action_hit_values["favorite"])
+        if action_hit_values["favorite"]
+        else None,
+        favorite_recall_at_k=_mean(action_recall_values["favorite"])
+        if action_recall_values["favorite"]
+        else None,
+        to_cart_hit_rate_at_k=_mean(action_hit_values["to_cart"])
+        if action_hit_values["to_cart"]
+        else None,
+        to_cart_recall_at_k=_mean(action_recall_values["to_cart"])
+        if action_recall_values["to_cart"]
+        else None,
         evaluated_items=evaluated_items,
         recommended_items=recommended_items,
         ground_truth_pairs=ground_truth_frame.height,

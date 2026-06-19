@@ -71,6 +71,21 @@ def test_publish_latest_full_run_uses_flat_latest_layout(tmp_path: Path) -> None
     )
 
 
+def test_find_item_popularity_artifact_requires_exact_window(tmp_path: Path) -> None:
+    artifacts_dir = tmp_path / "item_popularity"
+    artifacts_dir.mkdir()
+    stale_path = artifacts_dir / "window_start=2024-04-20_window_end=2024-04-20.parquet"
+    stale_path.write_text("stale", encoding="utf-8")
+
+    actual = run_full._find_item_popularity_artifact(
+        {"artifacts": {"item_popularity_dir": artifacts_dir.as_posix()}},
+        "2024-04-21",
+        "2024-04-21",
+    )
+
+    assert actual is None
+
+
 def test_execute_full_run_writes_debug_artifacts_only_when_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -133,7 +148,7 @@ def test_execute_full_run_writes_debug_artifacts_only_when_requested(
     monkeypatch.setattr(
         run_full,
         "compute_offline_metrics",
-        lambda **_: OfflineMetrics(to_cart_hit_rate_at_k=1.0),
+        lambda **_: OfflineMetrics(to_cart_hit_rate_at_k=1.0, recall_at_k=1.0),
     )
 
     result = run_full.execute_full_run(

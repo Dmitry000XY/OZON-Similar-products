@@ -194,9 +194,13 @@ def test_split_and_metrics_compute_real_values() -> None:
         {
             "item_id": [1, 1, 2],
             "relevant_item_id": [11, 12, 20],
-            "relevance": [1.0, 0.5, 1.0],
+            "relevance": [1.0, 1.0, 1.0],
             "target_action_type": ["to_cart", "click", "to_cart"],
             "evidence_count": [1, 1, 1],
+            "view_count": [1, 1, 0],
+            "click_count": [0, 1, 0],
+            "favorite_count": [0, 0, 0],
+            "to_cart_count": [1, 0, 1],
         }
     )
 
@@ -209,6 +213,12 @@ def test_split_and_metrics_compute_real_values() -> None:
     assert metrics.evaluated_items == 2
     assert metrics.ground_truth_pairs == 3
     assert metrics.hit_rate_at_k == 1.0
+    assert metrics.recall_at_k == pytest.approx(0.75)
+    assert metrics.click_hit_rate_at_k == 0.0
+    assert metrics.click_recall_at_k == 0.0
+    assert metrics.view_hit_rate_at_k == 1.0
+    assert metrics.view_recall_at_k == pytest.approx(0.5)
     assert metrics.to_cart_hit_rate_at_k == 1.0
+    assert metrics.to_cart_recall_at_k == 1.0
     assert metrics.coverage_at_k == 1.0
     assert metrics.fallback_share_at_k == pytest.approx(1 / 3)

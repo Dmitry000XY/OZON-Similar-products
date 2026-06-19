@@ -287,13 +287,9 @@ def _find_item_popularity_artifact(
         "data/processed/item_popularity",
     )
     expected = item_popularity_dir / f"window_start={window_start}_window_end={window_end}.parquet"
-    if expected.exists():
-        return expected
-
-    candidates = sorted(item_popularity_dir.glob("*.parquet"))
-    if not candidates:
+    if not expected.exists():
         return None
-    return candidates[-1]
+    return expected
 
 
 def _publish_latest_full_run(run_dir: Path, latest_dir: Path, full_manifest: Mapping[str, Any]) -> None:
@@ -362,6 +358,13 @@ def execute_full_run(
     config = load_yaml_config(config_path)
     resolved_top_k = _top_k_from_config(config, top_k)
     config = _config_with_top_k_override(config, resolved_top_k)
+    evaluation_config = config.get("evaluation", {})
+    if not isinstance(evaluation_config, Mapping):
+        evaluation_config = {}
+    relevance_mode = str(evaluation_config.get("relevance_mode", "binary"))
+    relevance_weights = evaluation_config.get("relevance_weights")
+    if not isinstance(relevance_weights, Mapping):
+        relevance_weights = None
 
     resolved_run_id = run_id or make_run_id(
         train_until_date=train_until_date,
@@ -399,7 +402,11 @@ def execute_full_run(
     )
 
     logger.info("[run_full] build validation ground truth")
-    ground_truth = build_ground_truth_from_daily_pair_counts(validation_pair_counts)
+    ground_truth = build_ground_truth_from_daily_pair_counts(
+        validation_pair_counts,
+        relevance_mode=relevance_mode,
+        action_weights=relevance_weights,
+    )
 
     evaluation_dir = resolved_run_dir / "evaluation"
     debug_dir = evaluation_dir / "debug"
