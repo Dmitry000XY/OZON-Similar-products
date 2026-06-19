@@ -52,7 +52,7 @@ scoring:
 
 artifacts:
   events_clean_dir: data/processed/events_clean
-  sessions_dir: data/processed/sessions
+  sessions_dir: null
   item_popularity_dir: data/processed/item_popularity
   action_type_distribution_dir: data/processed/action_type_distribution
   daily_pairs_dir: data/processed/item_pairs
