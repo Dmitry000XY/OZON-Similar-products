@@ -68,9 +68,16 @@ evaluation:
 
 business:
   fallback:
-    enabled: false
+    enabled: true
     top_k: 20
-    source_label: fallback
     candidate_pool_size: 200
-    include_cold_start_items: true
+    global_candidate_pool_size: 200
+    metadata_candidate_pool_size: 200
     min_item_events: 1
+    enable_category_type: true
+    enable_category: true
+    enable_type: true
+    enable_brand: false
+    enable_global: true
+    include_cold_start_items: true
+    include_catalog_only_sources: false

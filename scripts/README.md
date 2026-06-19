@@ -9,3 +9,6 @@
 - `run_tune.py` — tuning по `configs/tuning/search_space.yaml` (`grid`, `random`, `successive_halving`, `simulated_annealing`).
 - `compare_tuning.py` — просмотр `outputs/tuning/*/results.csv`.
 - `preview_latest_recommendations.py` — thin wrapper над package CLI `ozon_similar_products.cli.preview_recommendations`.
+
+Fallback-метрики, параметры тюнинга и целевая функция описаны в
+`docs/fallback_tuning_evaluation.md`.

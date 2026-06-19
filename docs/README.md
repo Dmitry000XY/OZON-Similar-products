@@ -10,6 +10,7 @@
 - [ItemPairBuilder](item_pair_builder.md) — как из сессий строятся directed item-item pairs, почему `signal_type` равен target action type, и почему приоритеты сигналов живут в config.
 - [PairAggregator](aggregate_pairs.md) — как дневные пары агрегируются за rolling window и почему агрегатор считает только channel counts, без весов и score.
 - [ItemPopularityBuilder](item_popularity_builder.md) — как считаются факты популярности товаров и статистика action type для будущей калибровки scorer-а.
+- [Тюнинг и оценка fallback](fallback_tuning_evaluation.md) — fallback-метрики, пространство перебора параметров и логика целевой функции.
 - [Работа с данными](data_io.md) — как распаковать архивы и читать parquet через data readers.
 - [Архив EDA](archive/README.md) — где хранится legacy EDA-код и почему он не должен попадать в runtime.
 

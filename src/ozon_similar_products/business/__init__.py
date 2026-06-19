@@ -3,6 +3,8 @@
 from ozon_similar_products.business.fallback import (
     FallbackCandidateBuilder,
     FallbackConfig,
+    FallbackIndex,
+    FallbackIndexBuilder,
     FallbackLayer,
     FallbackMerger,
     merge_fallback_candidates,
@@ -11,6 +13,8 @@ from ozon_similar_products.business.fallback import (
 __all__ = [
     "FallbackCandidateBuilder",
     "FallbackConfig",
+    "FallbackIndex",
+    "FallbackIndexBuilder",
     "FallbackLayer",
     "FallbackMerger",
     "merge_fallback_candidates",

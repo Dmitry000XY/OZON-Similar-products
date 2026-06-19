@@ -111,6 +111,34 @@ def test_best_trial_row_prefers_eligible_balanced_objective() -> None:
     assert best["trial_id"] == "trial_0001"
 
 
+def test_best_trial_row_applies_fallback_global_share_penalty() -> None:
+    search_space = {
+        "objective": {
+            "primary_metric": "to_cart_hit_rate_at_k",
+            "supporting_metrics": ["fallback_hit_rate_at_k"],
+            "penalty_metrics": ["fallback_global_share_at_k"],
+        }
+    }
+    rows = [
+        {
+            "trial_id": "trial_low_global",
+            "to_cart_hit_rate_at_k": 0.6,
+            "fallback_hit_rate_at_k": 0.8,
+            "fallback_global_share_at_k": 0.1,
+        },
+        {
+            "trial_id": "trial_high_global",
+            "to_cart_hit_rate_at_k": 0.6,
+            "fallback_hit_rate_at_k": 0.8,
+            "fallback_global_share_at_k": 0.9,
+        },
+    ]
+
+    best = run_tune.best_trial_row(rows, search_space)
+
+    assert best["trial_id"] == "trial_low_global"
+
+
 def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Path) -> None:
     metrics = metrics_to_flat_dict(
         OfflineMetrics(
@@ -121,6 +149,15 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
             coverage_at_k=1.0,
             popularity_bias_at_k=0.2,
             fallback_share_at_k=0.1,
+            fallback_category_type_share_at_k=0.01,
+            fallback_category_share_at_k=0.02,
+            fallback_type_share_at_k=0.03,
+            fallback_brand_share_at_k=0.04,
+            fallback_global_share_at_k=0.05,
+            fallback_hit_rate_at_k=0.6,
+            fallback_recall_at_k=0.5,
+            fallback_to_cart_hit_rate_at_k=0.4,
+            fallback_to_cart_recall_at_k=0.3,
             view_hit_rate_at_k=1.0,
             view_recall_at_k=0.8,
             click_hit_rate_at_k=0.7,
@@ -142,6 +179,15 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
         "coverage_at_k",
         "popularity_bias_at_k",
         "fallback_share_at_k",
+        "fallback_category_type_share_at_k",
+        "fallback_category_share_at_k",
+        "fallback_type_share_at_k",
+        "fallback_brand_share_at_k",
+        "fallback_global_share_at_k",
+        "fallback_hit_rate_at_k",
+        "fallback_recall_at_k",
+        "fallback_to_cart_hit_rate_at_k",
+        "fallback_to_cart_recall_at_k",
         "view_hit_rate_at_k",
         "view_recall_at_k",
         "click_hit_rate_at_k",
