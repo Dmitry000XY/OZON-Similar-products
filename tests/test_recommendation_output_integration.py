@@ -59,22 +59,22 @@ def test_recommendation_output_layer_end_to_end(tmp_path: Path) -> None:
             "min_unique_users": None,
             "min_unique_sessions": None,
             "paths": {
-                "detailed_recommendations_path": "detailed/recommendations.parquet",
-                "widget_recommendations_path": "widget/similar_items.parquet",
+                "detailed_recommendations_path": "detailed/detailed.parquet",
+                "widget_recommendations_path": "widget/lookup.parquet",
             },
         },
         run_dir,
     )
     latest_manifest_path = writer.update_latest_manifest(manifest_path, latest_dir)
 
-    assert detailed_path == run_dir / "detailed" / "recommendations.parquet"
-    assert widget_path == run_dir / "widget" / "similar_items.parquet"
+    assert detailed_path == run_dir / "detailed" / "detailed.parquet"
+    assert widget_path == run_dir / "widget" / "lookup.parquet"
     assert manifest_path == run_dir / "manifest.json"
     assert latest_manifest_path == latest_dir / "manifest.json"
 
     latest_manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
     assert latest_manifest["paths"]["widget_recommendations_path"] == (
-        "../runs/run_001/widget/similar_items.parquet"
+        "../runs/run_001/widget/lookup.parquet"
     )
 
     lookup = SimilarItemsLookup(latest_manifest_path)

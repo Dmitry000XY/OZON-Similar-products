@@ -230,7 +230,7 @@ D:\ozon-local-runner\outputs
 GitHub artifact получает только компактный bundle:
 
 - `manifest.json` workflow bundle;
-- `outputs/recommendations/latest/manifest.json`;
+- `outputs/latest/manifest.json`;
 - `outputs/demo/preview_recommendations.csv`;
 - `outputs/demo/preview_recommendations.json`;
 - `outputs/demo/preview_metadata.json`;
@@ -269,7 +269,7 @@ OOM:
 
 Artifact empty:
 
-- проверьте `outputs/recommendations/latest/manifest.json`;
+- проверьте `outputs/latest/manifest.json`;
 - проверьте `outputs/demo`;
 - проверьте logs step `Build safe artifact bundle`.
 

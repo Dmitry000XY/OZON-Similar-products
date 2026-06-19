@@ -17,7 +17,7 @@ services:
       - run
       - --no-dev
       - python
-      - scripts/run_mvp_pipeline.py
+      - scripts/run_pipeline.py
       - "2024-04-30"
       - --lookback-days
       - "1"

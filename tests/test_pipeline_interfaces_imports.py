@@ -3,7 +3,7 @@ from ozon_similar_products.evaluation.metrics import OfflineMetrics
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 from ozon_similar_products.output.lookup import SimilarItemsLookup
 from ozon_similar_products.output.writers import RecommendationWriter
-from ozon_similar_products.pipeline.run_mvp import run_mvp_pipeline
+from ozon_similar_products.pipeline.run_pipeline import run_pipeline
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
 from ozon_similar_products.preprocessing.clean_events import EventCleaner
 from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
@@ -14,7 +14,7 @@ from ozon_similar_products.retrieval.update_strategy import FullRetrainStrategy
 from ozon_similar_products.serving.lookup import SimilarItemsLookup as ServingSimilarItemsLookup
 
 
-def test_mvp_interfaces_importable() -> None:
+def test_pipeline_interfaces_importable() -> None:
     assert EventCleaner is not None
     assert FallbackLayer is not None
     assert SessionBuilder is not None
@@ -28,4 +28,4 @@ def test_mvp_interfaces_importable() -> None:
     assert RecommendationWriter is not None
     assert SimilarItemsLookup is not None
     assert ServingSimilarItemsLookup is not None
-    assert run_mvp_pipeline is not None
+    assert run_pipeline is not None

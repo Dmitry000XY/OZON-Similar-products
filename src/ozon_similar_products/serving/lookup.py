@@ -14,7 +14,7 @@ from ozon_similar_products.output.manifest import (
     load_manifest,
 )
 
-DEFAULT_LOOKUP_FILENAME = "similar_items.parquet"
+DEFAULT_LOOKUP_FILENAME = "lookup.parquet"
 
 
 class SimilarItemsLookup:
