@@ -268,7 +268,6 @@ class CoVisitationScorer:
 
         scores = (
             scored.select(schemas.PAIR_SCORES_COLUMNS)
-            .sort(["item_id", "score", "similar_item_id"], descending=[False, True, False])
         )
 
         validate_pair_scores(scores)
