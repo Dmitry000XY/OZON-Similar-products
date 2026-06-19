@@ -2,6 +2,7 @@
 
 import csv
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -150,14 +151,14 @@ def test_run_tuning_uses_trial_overrides_and_isolated_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    base_config = {
+    base_config: dict[str, Any] = {
         "pipeline": {"lookback_days": 30, "top_k": 20},
         "artifacts": {
             "events_clean_dir": "data/processed/events_clean",
             "daily_pairs_dir": "data/processed/item_pairs",
         },
     }
-    search_space = {
+    search_space: dict[str, Any] = {
         "objective": {"primary_metric": "to_cart_hit_rate_at_k"},
         "parameters": {
             "pipeline.lookback_days": {"type": "choice", "values": [7]},
@@ -166,7 +167,7 @@ def test_run_tuning_uses_trial_overrides_and_isolated_artifacts(
     }
     captured: dict[str, object] = {}
 
-    def fake_load_yaml_config(path: Path) -> dict[str, object]:
+    def fake_load_yaml_config(path: Path) -> dict[str, Any]:
         return search_space if path.name == "search_space.yaml" else base_config
 
     class FakeFullRunResult:
@@ -184,8 +185,9 @@ def test_run_tuning_uses_trial_overrides_and_isolated_artifacts(
         captured["lookback_days"] = kwargs["lookback_days"]
         captured["top_k"] = kwargs["top_k"]
         captured["trial_dir"] = trial_dir
+        config_path = cast(Path, kwargs["config_path"])
         captured["trial_config"] = yaml.safe_load(
-            Path(kwargs["config_path"]).read_text(encoding="utf-8")
+            config_path.read_text(encoding="utf-8")
         )
         return FakeFullRunResult(trial_dir)
 
