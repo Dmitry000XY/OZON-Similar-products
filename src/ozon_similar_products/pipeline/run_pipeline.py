@@ -215,6 +215,36 @@ def _write_window_artifact(
     return output_path
 
 
+def _current_rss_mb() -> float | None:
+    """Return current process RSS in MiB when supported."""
+    try:
+        import os
+        import psutil
+
+        return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    except ImportError:
+        pass
+
+    try:
+        import resource
+
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss_kb = usage.ru_maxrss
+        return rss_kb / 1024
+    except (ImportError, AttributeError):
+        return None
+
+
+def _log_memory(logger: logging.Logger, stage: str) -> None:
+    """Log current memory usage without adding a hard dependency."""
+    rss_mb = _current_rss_mb()
+    if rss_mb is None:
+        logger.info("[memory] stage=%s rss_mb=unavailable", stage)
+        return
+
+    logger.info("[memory] stage=%s rss_mb=%.1f", stage, rss_mb)
+
+
 def _scan_parquet_paths_or_empty_frame(
         paths: Sequence[Path],
         contract_columns: Sequence[str],
@@ -629,6 +659,7 @@ def _append_daily_session_partitions(
 
         frame_to_write.write_parquet(output_path)
 
+
 def _unique_paths(paths: Sequence[Path]) -> list[Path]:
     return list(dict.fromkeys(paths))
 
@@ -889,6 +920,7 @@ def run_pipeline(
         len(clean_event_paths),
         events_clean_output_dir,
     )
+    _log_memory(logger, "after_clean_events")
 
     events_clean_input = _scan_parquet_paths_or_empty_frame(
         clean_event_paths,
@@ -928,6 +960,7 @@ def run_pipeline(
         len(daily_pair_stats_paths.count_paths),
         daily_pairs_output_dir,
     )
+    _log_memory(logger, "after_sessions_and_daily_pairs")
 
     logger.info("[run_pipeline] aggregate pairs from compact daily stats")
     pair_aggregates = PairAggregator().aggregate_window_from_daily_stats_paths(
@@ -943,6 +976,7 @@ def run_pipeline(
         pair_aggregates_rows,
     )
 
+    _log_memory(logger, "after_pair_aggregation")
     pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
     if isinstance(pair_aggregates_dir, str | Path):
         _write_window_artifact(
@@ -967,6 +1001,7 @@ def run_pipeline(
         item_popularity_rows,
         action_distribution_rows,
     )
+    _log_memory(logger, "after_item_popularity")
 
     item_popularity_dir = artifacts_config.get("item_popularity_dir")
     if isinstance(item_popularity_dir, str | Path):
@@ -1011,6 +1046,7 @@ def run_pipeline(
         pair_scores_rows,
         scorer.action_shares is not None,
     )
+    _log_memory(logger, "after_scoring")
 
     top_k = _as_positive_int(
         value=topk_config.get("top_k", pipeline_config.get("top_k")),
@@ -1061,6 +1097,7 @@ def run_pipeline(
         recommendations_rows,
         fallback_rows,
     )
+    _log_memory(logger, "after_scoring")
 
     outputs_root = _outputs_root(outputs_config)
     latest_dir = _as_path(outputs_config.get("latest_dir"), "outputs/latest")
