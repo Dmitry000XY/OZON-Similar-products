@@ -188,6 +188,62 @@ def _grid_trial_count(search_space: Mapping[str, Any]) -> int:
     return len(generate_grid_trials(search_space))
 
 
+def _as_positive_int(value: Any, parameter_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{parameter_name} must be a positive integer")
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{parameter_name} must be a positive integer")
+    return parsed
+
+
+def _effective_trial_lookback_days(
+    overrides: Mapping[str, Any],
+    default_lookback_days: int,
+) -> int:
+    if "pipeline.lookback_days" in overrides:
+        return _as_positive_int(overrides["pipeline.lookback_days"], "pipeline.lookback_days")
+    return _as_positive_int(default_lookback_days, "lookback_days")
+
+
+def _effective_trial_top_k(
+    config: Mapping[str, Any],
+    overrides: Mapping[str, Any],
+    default_top_k: int | None,
+) -> int | None:
+    for override_key in ("topk.top_k", "pipeline.top_k"):
+        if override_key in overrides:
+            return _as_positive_int(overrides[override_key], override_key)
+
+    if default_top_k is not None:
+        return _as_positive_int(default_top_k, "top_k")
+
+    for section_name in ("topk", "pipeline"):
+        section = config.get(section_name)
+        if isinstance(section, Mapping) and section.get("top_k") is not None:
+            return _as_positive_int(section["top_k"], f"{section_name}.top_k")
+
+    return None
+
+
+def _with_trial_artifact_dirs(config: Mapping[str, Any], trial_dir: Path) -> dict[str, Any]:
+    updated = deepcopy(dict(config))
+    artifacts = updated.get("artifacts")
+    artifact_config = dict(artifacts) if isinstance(artifacts, Mapping) else {}
+    artifact_root = trial_dir / "artifacts"
+    for key in (
+        "events_clean_dir",
+        "sessions_dir",
+        "item_popularity_dir",
+        "action_type_distribution_dir",
+        "daily_pairs_dir",
+        "pair_aggregates_dir",
+    ):
+        artifact_config[key] = (artifact_root / key.removesuffix("_dir")).as_posix()
+    updated["artifacts"] = artifact_config
+    return updated
+
+
 def _write_yaml(path: Path, payload: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -287,23 +343,36 @@ def run_tuning(
         trial_id = f"trial_{index:04d}"
         trial_dir = sweep_dir / "trials" / trial_id
         trial_started = time.perf_counter()
+        trial_config = apply_overrides(base_config, overrides)
+        trial_config = _with_trial_artifact_dirs(trial_config, trial_dir)
+        trial_lookback_days = _effective_trial_lookback_days(
+            overrides,
+            default_lookback_days=lookback_days,
+        )
+        trial_top_k = _effective_trial_top_k(
+            trial_config,
+            overrides,
+            default_top_k=top_k,
+        )
         logger.info(
-            "[run_tune] trial %s/%s trial_id=%s overrides=%s output_dir=%s",
+            "[run_tune] trial %s/%s trial_id=%s overrides=%s "
+            "effective_lookback_days=%s effective_top_k=%s output_dir=%s",
             index,
             len(trial_overrides),
             trial_id,
             overrides,
+            trial_lookback_days,
+            trial_top_k,
             trial_dir,
         )
-        trial_config = apply_overrides(base_config, overrides)
         trial_configs[trial_id] = trial_config
 
         trial_config_path = _write_yaml(trial_dir / "config.yaml", trial_config)
         result = execute_full_run(
             train_until_date=train_until_date,
-            lookback_days=lookback_days,
+            lookback_days=trial_lookback_days,
             validation_days=validation_days,
-            top_k=top_k,
+            top_k=trial_top_k,
             config_path=trial_config_path,
             run_id=trial_id,
             run_dir=trial_dir,

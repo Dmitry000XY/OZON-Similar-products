@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ozon_similar_products.cli import run_tune
 from ozon_similar_products.evaluation import metrics_to_flat_dict
@@ -143,3 +144,81 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
     with results_path.open(encoding="utf-8", newline="") as file:
         reader = csv.DictReader(file)
         assert reader.fieldnames == ["trial_id", "run_dir", *expected_metric_names]
+
+
+def test_run_tuning_uses_trial_overrides_and_isolated_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_config = {
+        "pipeline": {"lookback_days": 30, "top_k": 20},
+        "artifacts": {
+            "events_clean_dir": "data/processed/events_clean",
+            "daily_pairs_dir": "data/processed/item_pairs",
+        },
+    }
+    search_space = {
+        "objective": {"primary_metric": "to_cart_hit_rate_at_k"},
+        "parameters": {
+            "pipeline.lookback_days": {"type": "choice", "values": [7]},
+            "topk.top_k": {"type": "choice", "values": [10]},
+        },
+    }
+    captured: dict[str, object] = {}
+
+    def fake_load_yaml_config(path: Path) -> dict[str, object]:
+        return search_space if path.name == "search_space.yaml" else base_config
+
+    class FakeFullRunResult:
+        def __init__(self, trial_dir: Path) -> None:
+            self.metrics = OfflineMetrics(to_cart_hit_rate_at_k=0.5)
+            self.metrics_path = trial_dir / "evaluation" / "metrics.json"
+            self.manifest_path = trial_dir / "manifest.json"
+            self.metrics_path.parent.mkdir(parents=True)
+            self.metrics_path.write_text("{}", encoding="utf-8")
+            self.manifest_path.write_text("{}", encoding="utf-8")
+
+    def fake_execute_full_run(**kwargs: object) -> FakeFullRunResult:
+        trial_dir = kwargs["run_dir"]
+        assert isinstance(trial_dir, Path)
+        captured["lookback_days"] = kwargs["lookback_days"]
+        captured["top_k"] = kwargs["top_k"]
+        captured["trial_dir"] = trial_dir
+        captured["trial_config"] = yaml.safe_load(
+            Path(kwargs["config_path"]).read_text(encoding="utf-8")
+        )
+        return FakeFullRunResult(trial_dir)
+
+    monkeypatch.setattr(run_tune, "load_yaml_config", fake_load_yaml_config)
+    monkeypatch.setattr(run_tune, "execute_full_run", fake_execute_full_run)
+
+    sweep_dir = run_tune.run_tuning(
+        train_until_date=run_tune._parse_iso_date("2024-03-23"),
+        lookback_days=1,
+        validation_days=1,
+        top_k=5,
+        config_path=tmp_path / "base.yaml",
+        search_space_path=tmp_path / "search_space.yaml",
+        max_trials=1,
+        tuning_strategy="grid",
+        output_dir=tmp_path / "tuning",
+        sweep_name="unit",
+    )
+
+    assert captured["lookback_days"] == 7
+    assert captured["top_k"] == 10
+    trial_dir = captured["trial_dir"]
+    assert isinstance(trial_dir, Path)
+    trial_config = captured["trial_config"]
+    assert isinstance(trial_config, dict)
+    artifacts = trial_config["artifacts"]
+    assert isinstance(artifacts, dict)
+    assert artifacts["events_clean_dir"] == (
+        trial_dir / "artifacts" / "events_clean"
+    ).as_posix()
+    assert artifacts["daily_pairs_dir"] == (
+        trial_dir / "artifacts" / "daily_pairs"
+    ).as_posix()
+    assert (trial_dir / "manifest.json").exists()
+    assert (trial_dir / "metrics.json").exists()
+    assert (sweep_dir / "results.csv").exists()
