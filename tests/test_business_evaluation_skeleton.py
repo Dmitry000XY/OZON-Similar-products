@@ -579,3 +579,168 @@ def test_offline_metrics_report_fallback_layer_shares_and_quality() -> None:
     assert metrics.fallback_recall_at_k == pytest.approx(0.75)
     assert metrics.fallback_to_cart_hit_rate_at_k == pytest.approx(0.5)
     assert metrics.fallback_to_cart_recall_at_k == pytest.approx(0.5)
+
+
+def test_offline_metrics_keep_shares_and_popularity_bias_without_ground_truth() -> None:
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [1, 1],
+            "similar_item_id": [10, 11],
+            "score": [1.0, 0.0],
+            "rank": [1, 2],
+            "source": ["behavioral", "fallback_global_popular"],
+        }
+    )
+    ground_truth = pl.DataFrame(
+        schema={
+            "item_id": pl.Int64,
+            "relevant_item_id": pl.Int64,
+            "relevance": pl.Float64,
+            "target_action_type": pl.String,
+            "evidence_count": pl.Int64,
+            "view_count": pl.Int64,
+            "click_count": pl.Int64,
+            "favorite_count": pl.Int64,
+            "to_cart_count": pl.Int64,
+        }
+    )
+    item_popularity = pl.DataFrame(
+        {
+            "item_id": [10, 11, 12],
+            "events_count": [100, 50, 200],
+            "unique_users": [10, 5, 20],
+            "views_count": [100, 50, 200],
+            "clicks_count": [10, 5, 20],
+            "favorites_count": [1, 1, 2],
+            "to_cart_count": [1, 1, 2],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=2,
+        context={"item_popularity": item_popularity},
+    )
+
+    assert metrics.hit_rate_at_k is None
+    assert metrics.fallback_share_at_k == pytest.approx(0.5)
+    assert metrics.fallback_global_share_at_k == pytest.approx(0.5)
+    assert metrics.popularity_bias_at_k == pytest.approx(0.375)
+
+
+def test_offline_metrics_empty_recommendations_return_zero_quality_and_no_shares() -> None:
+    recommendations = pl.DataFrame(
+        schema={
+            "item_id": pl.Int64,
+            "similar_item_id": pl.Int64,
+            "score": pl.Float64,
+            "rank": pl.Int64,
+            "source": pl.String,
+        }
+    )
+    ground_truth = pl.DataFrame(
+        {
+            "item_id": [1],
+            "relevant_item_id": [10],
+            "relevance": [1.0],
+            "target_action_type": ["to_cart"],
+            "evidence_count": [1],
+            "view_count": [0],
+            "click_count": [0],
+            "favorite_count": [0],
+            "to_cart_count": [1],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=2,
+    )
+
+    assert metrics.hit_rate_at_k == 0.0
+    assert metrics.recall_at_k == 0.0
+    assert metrics.ndcg_at_k == 0.0
+    assert metrics.coverage_at_k == 0.0
+    assert metrics.fallback_share_at_k is None
+    assert metrics.fallback_global_share_at_k is None
+    assert metrics.fallback_hit_rate_at_k == 0.0
+    assert metrics.fallback_to_cart_hit_rate_at_k == 0.0
+
+
+def test_offline_metrics_preserve_duplicate_recommendation_semantics() -> None:
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [1, 1, 1, 1],
+            "similar_item_id": [10, 10, 11, 11],
+            "score": [1.0, 0.9, 0.0, 0.0],
+            "rank": [1, 2, 3, 4],
+            "source": [
+                "behavioral",
+                "behavioral",
+                "fallback_global_popular",
+                "fallback_global_popular",
+            ],
+        }
+    )
+    ground_truth = pl.DataFrame(
+        {
+            "item_id": [1, 1],
+            "relevant_item_id": [10, 11],
+            "relevance": [1.0, 1.0],
+            "target_action_type": ["view", "to_cart"],
+            "evidence_count": [1, 1],
+            "view_count": [1, 0],
+            "click_count": [0, 0],
+            "favorite_count": [0, 0],
+            "to_cart_count": [0, 1],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=4,
+    )
+
+    assert metrics.hit_rate_at_k == 1.0
+    assert metrics.recall_at_k == 2.0
+    assert metrics.view_recall_at_k == 2.0
+    assert metrics.to_cart_recall_at_k == 2.0
+    assert metrics.fallback_recall_at_k == 1.0
+    assert metrics.fallback_to_cart_recall_at_k == 1.0
+
+
+def test_offline_metrics_accept_lazy_frames() -> None:
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [1],
+            "similar_item_id": [10],
+            "score": [1.0],
+            "rank": [1],
+            "source": ["behavioral"],
+        }
+    )
+    ground_truth = pl.DataFrame(
+        {
+            "item_id": [1],
+            "relevant_item_id": [10],
+            "relevance": [1.0],
+            "target_action_type": ["to_cart"],
+            "evidence_count": [1],
+            "view_count": [0],
+            "click_count": [0],
+            "favorite_count": [0],
+            "to_cart_count": [1],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations.lazy(),
+        ground_truth=ground_truth.lazy(),
+        top_k=1,
+    )
+
+    assert metrics.hit_rate_at_k == 1.0
+    assert metrics.to_cart_hit_rate_at_k == 1.0
