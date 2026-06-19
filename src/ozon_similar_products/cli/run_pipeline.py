@@ -96,16 +96,24 @@ def main() -> int:
     try:
         config = load_yaml_config(args.config_path)
         config = _config_with_top_k_override(config, args.top_k)
-        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as file:
-            yaml.safe_dump(config, file, sort_keys=False, allow_unicode=True)
-            config_path = Path(file.name)
-        run_pipeline(
-            train_until_date=args.train_until_date,
-            lookback_days=args.lookback_days,
-            config_path=config_path,
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "run_pipeline.override.yaml"
+            config_path.write_text(
+                yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+            run_pipeline(
+                train_until_date=args.train_until_date,
+                lookback_days=args.lookback_days,
+                config_path=config_path,
+            )
     except Exception:
-        logger.exception("[run_pipeline] failed")
+        logger.exception(
+            "[run_pipeline] failed train_until_date=%s lookback_days=%s config=%s",
+            args.train_until_date,
+            args.lookback_days,
+            args.config_path,
+        )
         return 1
     logger.info("[run_pipeline] done")
     return 0
