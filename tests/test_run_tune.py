@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 from typing import Any, cast
 
+import polars as pl
 import pytest
 import yaml
 
@@ -305,6 +306,184 @@ def test_run_tuning_uses_trial_overrides_and_best_config_without_scratch_artifac
     best_metrics = yaml.safe_load((sweep_dir / "best_metrics.json").read_text(encoding="utf-8"))
     assert "objective_score" in best_metrics
     assert best_metrics["objective_primary_metric"] == "to_cart_hit_rate_at_k"
+
+
+def test_fast_scoring_only_rejects_unsafe_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_config = {"pipeline": {"top_k": 20}}
+    search_space = {
+        "parameters": {
+            "pipeline.lookback_days": {"type": "choice", "values": [1]},
+        }
+    }
+
+    def fake_load_yaml_config(path: Path) -> dict[str, Any]:
+        return search_space if path.name == "search_space.yaml" else base_config
+
+    monkeypatch.setattr(run_tune, "load_yaml_config", fake_load_yaml_config)
+
+    with pytest.raises(ValueError, match="Unsafe parameters"):
+        run_tune.run_tuning(
+            train_until_date=run_tune._parse_iso_date("2024-03-23"),
+            lookback_days=1,
+            validation_days=1,
+            top_k=5,
+            config_path=tmp_path / "base.yaml",
+            search_space_path=tmp_path / "search_space.yaml",
+            max_trials=1,
+            tuning_strategy="grid",
+            output_dir=tmp_path / "tuning",
+            sweep_name="unsafe",
+            fast_scoring_only=True,
+        )
+
+
+def test_fast_scoring_only_runs_safe_trial_without_full_trial_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_config = {
+        "pipeline": {"top_k": 20},
+        "outputs": {"root_dir": (tmp_path / "outputs").as_posix()},
+        "artifacts": {},
+    }
+    search_space = {
+        "objective": {"primary_metric": "to_cart_hit_rate_at_k"},
+        "parameters": {
+            "topk.top_k": {"type": "choice", "values": [10]},
+        },
+    }
+    calls = {"train": 0, "scoring": 0}
+
+    def fake_load_yaml_config(path: Path) -> dict[str, Any]:
+        return search_space if path.name == "search_space.yaml" else base_config
+
+    class FakeTrainResult:
+        def __init__(self, run_dir: Path) -> None:
+            self.run_id = "scoring_only_base"
+            self.run_dir = run_dir
+            self.manifest_path = run_dir / "manifest.json"
+            self.detailed_recommendations_path = run_dir / "recommendations" / "detailed.parquet"
+            self.enriched_recommendations_path = run_dir / "recommendations" / "enriched.parquet"
+            self.lookup_recommendations_path = run_dir / "recommendations" / "lookup.parquet"
+            self.manifest = {
+                "window_start": "2024-03-23",
+                "window_end": "2024-03-23",
+                "paths": {
+                    "detailed_recommendations_path": "recommendations/detailed.parquet",
+                    "widget_recommendations_path": "recommendations/lookup.parquet",
+                },
+                "rows": {"pair_aggregates": 1},
+            }
+
+    def fake_run_pipeline(**kwargs: object) -> FakeTrainResult:
+        calls["train"] += 1
+        config_path = cast(Path, kwargs["config_path"])
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        artifacts = config["artifacts"]
+        for key in (
+            "pair_aggregates_dir",
+            "item_popularity_dir",
+            "action_type_distribution_dir",
+        ):
+            output_dir = Path(artifacts[key])
+            output_dir.mkdir(parents=True, exist_ok=True)
+            pl.DataFrame({"item_id": [1]}).write_parquet(
+                output_dir / "window_start=2024-03-23_window_end=2024-03-23.parquet"
+            )
+        result = FakeTrainResult(cast(Path, kwargs["output_dir"]))
+        result.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        result.manifest_path.write_text("{}", encoding="utf-8")
+        return result
+
+    class FakeValidationCache:
+        cache_key = "cache"
+        cache_dir = tmp_path / "cache"
+        cache_hit = True
+        ground_truth = pl.DataFrame(
+            {
+                "item_id": [1],
+                "relevant_item_id": [2],
+                "relevance": [1.0],
+                "target_action_type": ["to_cart"],
+                "evidence_count": [1],
+                "view_count": [0],
+                "click_count": [0],
+                "favorite_count": [0],
+                "to_cart_count": [1],
+            }
+        )
+
+    class FakeScoringResult:
+        def __init__(self, trial_dir: Path) -> None:
+            self.run_id = "trial_0001"
+            self.run_dir = trial_dir
+            self.manifest_path = trial_dir / "manifest.json"
+            self.detailed_recommendations_path = trial_dir / "recommendations" / "detailed.parquet"
+            self.enriched_recommendations_path = trial_dir / "recommendations" / "enriched.parquet"
+            self.lookup_recommendations_path = trial_dir / "recommendations" / "lookup.parquet"
+            self.manifest = {
+                "paths": {
+                    "detailed_recommendations_path": "recommendations/detailed.parquet",
+                    "widget_recommendations_path": "recommendations/lookup.parquet",
+                }
+            }
+
+    def fake_scoring_output(**kwargs: object) -> FakeScoringResult:
+        calls["scoring"] += 1
+        trial_dir = cast(Path, kwargs["output_dir"])
+        result = FakeScoringResult(trial_dir)
+        result.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        result.manifest_path.write_text("{}", encoding="utf-8")
+        result.detailed_recommendations_path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "item_id": [1],
+                "similar_item_id": [2],
+                "score": [1.0],
+                "rank": [1],
+                "source": ["behavioral"],
+            }
+        ).write_parquet(result.detailed_recommendations_path)
+        return result
+
+    def fake_write_eval(**kwargs: object):
+        trial_dir = cast(Path, kwargs["trial_dir"])
+        metrics_path = trial_dir / "evaluation" / "metrics.json"
+        manifest_path = trial_dir / "evaluation" / "evaluation_manifest.json"
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text("{}", encoding="utf-8")
+        manifest_path.write_text("{}", encoding="utf-8")
+        return {"to_cart_hit_rate_at_k": 1.0, "coverage_at_k": 1.0}, metrics_path, manifest_path
+
+    monkeypatch.setattr(run_tune, "load_yaml_config", fake_load_yaml_config)
+    monkeypatch.setattr(run_tune, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(run_tune, "load_or_build_validation_cache", lambda **_: FakeValidationCache())
+    monkeypatch.setattr(run_tune, "run_scoring_output_from_artifacts", fake_scoring_output)
+    monkeypatch.setattr(run_tune, "_write_scoring_only_evaluation", fake_write_eval)
+
+    sweep_dir = run_tune.run_tuning(
+        train_until_date=run_tune._parse_iso_date("2024-03-23"),
+        lookback_days=1,
+        validation_days=1,
+        top_k=5,
+        config_path=tmp_path / "base.yaml",
+        search_space_path=tmp_path / "search_space.yaml",
+        max_trials=1,
+        tuning_strategy="grid",
+        output_dir=tmp_path / "tuning",
+        sweep_name="fast",
+        fast_scoring_only=True,
+    )
+
+    rows = list(csv.DictReader((sweep_dir / "results.csv").open(encoding="utf-8")))
+    summary = yaml.safe_load((sweep_dir / "summary.json").read_text(encoding="utf-8"))
+    assert calls == {"train": 1, "scoring": 1}
+    assert rows[0]["used_scoring_only_mode"] == "True"
+    assert summary["fast_scoring_only"] is True
+    assert summary["validation_cache_hits"] == 1
 
 
 def test_run_tuning_successive_halving_writes_stage_columns(

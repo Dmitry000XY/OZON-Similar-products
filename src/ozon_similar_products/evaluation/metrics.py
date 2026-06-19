@@ -14,6 +14,16 @@ from ozon_similar_products.evaluation.ground_truth import validate_ground_truth
 FrameLike = pl.DataFrame | pl.LazyFrame
 
 ACTION_TYPES = ("view", "click", "favorite", "to_cart")
+RECOMMENDATION_METRIC_COLUMNS = ["item_id", "similar_item_id", "rank", "score", "source"]
+GROUND_TRUTH_METRIC_COLUMNS = [
+    "item_id",
+    "relevant_item_id",
+    "relevance",
+    "view_count",
+    "click_count",
+    "favorite_count",
+    "to_cart_count",
+]
 FALLBACK_LAYER_SOURCES = {
     "fallback_category_type_popular": "fallback_category_type_share_at_k",
     "fallback_category_popular": "fallback_category_share_at_k",
@@ -421,8 +431,8 @@ def compute_offline_metrics(
     validate_recommendations(recommendations)
     validate_ground_truth(ground_truth)
 
-    recommendations_frame = _collect_if_lazy(recommendations)
-    ground_truth_frame = _collect_if_lazy(ground_truth)
+    recommendations_frame = _collect_if_lazy(recommendations).select(RECOMMENDATION_METRIC_COLUMNS)
+    ground_truth_frame = _collect_if_lazy(ground_truth).select(GROUND_TRUTH_METRIC_COLUMNS)
     top_recommendations = recommendations_frame.filter(pl.col("rank") <= top_k)
     fallback_shares = _fallback_shares(top_recommendations)
     popularity_bias = _popularity_bias(top_recommendations, context)

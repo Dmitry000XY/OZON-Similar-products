@@ -16,11 +16,31 @@ from itertools import islice, product
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 import yaml
 
-from ozon_similar_products.cli.run_full import execute_full_run, validation_window
+from ozon_similar_products.cli.run_full import (
+    _config_with_top_k_override,
+    _git_sha,
+    execute_full_run,
+    load_or_build_validation_cache,
+    validation_window,
+)
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
-from ozon_similar_products.evaluation import metrics_to_flat_dict, write_json
+from ozon_similar_products.evaluation import (
+    build_scorecard,
+    compute_offline_metrics,
+    metrics_to_flat_dict,
+    write_json,
+)
+from ozon_similar_products.output.writers import RecommendationWriter
+from ozon_similar_products.pipeline.run_pipeline import (
+    PipelineRunResult,
+    run_pipeline,
+    run_scoring_output_from_artifacts,
+)
+
+SAFE_SCORING_ONLY_PREFIXES = ("scoring.", "topk.", "business.fallback.")
 
 
 def _parse_iso_date(value: str) -> date:
@@ -444,6 +464,159 @@ def _effective_trial_top_k(
     return None
 
 
+def _is_scoring_only_override(dot_path: str) -> bool:
+    return dot_path.startswith(SAFE_SCORING_ONLY_PREFIXES)
+
+
+def _validate_scoring_only_search_space(search_space: Mapping[str, Any]) -> None:
+    parameters = search_space.get("parameters", {})
+    if not isinstance(parameters, Mapping):
+        return
+    unsafe = sorted(str(name) for name in parameters if not _is_scoring_only_override(str(name)))
+    if unsafe:
+        raise ValueError(
+            "--fast-scoring-only only supports scoring/topK/fallback overrides. "
+            f"Unsafe parameters: {unsafe}"
+        )
+
+
+def _evaluation_settings(config: Mapping[str, Any]) -> tuple[str, Mapping[str, Any] | None]:
+    evaluation_config = config.get("evaluation", {})
+    if not isinstance(evaluation_config, Mapping):
+        return "binary", None
+    relevance_weights = evaluation_config.get("relevance_weights")
+    return (
+        str(evaluation_config.get("relevance_mode", "binary")),
+        relevance_weights if isinstance(relevance_weights, Mapping) else None,
+    )
+
+
+def _window_artifact_path(config: Mapping[str, Any], artifact_key: str, default_dir: str, manifest: Mapping[str, Any]) -> Path:
+    artifacts = config.get("artifacts", {})
+    artifact_dir = default_dir
+    if isinstance(artifacts, Mapping):
+        artifact_dir = str(artifacts.get(artifact_key, artifact_dir))
+    window_start = str(manifest["window_start"])
+    window_end = str(manifest["window_end"])
+    return _resolve_project_path(Path(artifact_dir)) / f"window_start={window_start}_window_end={window_end}.parquet"
+
+
+def _write_scoring_only_evaluation(
+    *,
+    trial_dir: Path,
+    trial_id: str,
+    train_until_date: date,
+    lookback_days: int,
+    validation_days: int,
+    top_k: int,
+    config_path: Path,
+    pipeline_result: PipelineRunResult,
+    ground_truth: pl.DataFrame,
+    item_popularity: pl.DataFrame,
+    validation_cache_key: str,
+    validation_cache_dir: Path,
+    validation_cache_hit: bool,
+) -> tuple[dict[str, Any], Path, Path]:
+    evaluation_dir = trial_dir / "evaluation"
+    evaluation_dir.mkdir(parents=True, exist_ok=True)
+    recommendations = pl.read_parquet(pipeline_result.detailed_recommendations_path)
+    metrics_started = time.perf_counter()
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=top_k,
+        context={"item_popularity": item_popularity, "popularity_column": "events_count"},
+    )
+    metrics_seconds = time.perf_counter() - metrics_started
+    metrics_path = write_json(evaluation_dir / "metrics.json", metrics_to_flat_dict(metrics))
+    validation_start_date, validation_end_date = validation_window(train_until_date, validation_days)
+    scorecard = build_scorecard(
+        experiment_id=trial_id,
+        train_until_date=train_until_date.isoformat(),
+        lookback_days=lookback_days,
+        top_k=top_k,
+        metrics=metrics,
+        metadata={
+            "validation_start_date": validation_start_date.isoformat(),
+            "validation_end_date": validation_end_date.isoformat(),
+            "validation_days": validation_days,
+            "git_sha": _git_sha(),
+            "config_path": config_path,
+            "recommendations_path": pipeline_result.detailed_recommendations_path,
+            "used_validation_cache": True,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": True,
+        },
+    )
+    write_json(
+        evaluation_dir / "scorecard.json",
+        {
+            "run_id": scorecard.experiment_id,
+            "train_until_date": scorecard.train_until_date,
+            "lookback_days": scorecard.lookback_days,
+            "top_k": scorecard.top_k,
+            "metrics": metrics_to_flat_dict(scorecard.metrics),
+            "notes": scorecard.notes,
+            "metadata": scorecard.metadata,
+        },
+    )
+    evaluation_manifest_path = write_json(
+        evaluation_dir / "evaluation_manifest.json",
+        {
+            "run_id": trial_id,
+            "created_at": datetime.now(UTC),
+            "git_sha": _git_sha(),
+            "train_until_date": train_until_date.isoformat(),
+            "lookback_days": lookback_days,
+            "validation_start_date": validation_start_date.isoformat(),
+            "validation_end_date": validation_end_date.isoformat(),
+            "validation_days": validation_days,
+            "top_k": top_k,
+            "recommendations_path": "recommendations/detailed.parquet",
+            "metrics_path": "evaluation/metrics.json",
+            "scorecard_path": "evaluation/scorecard.json",
+            "debug_artifacts_kept": False,
+            "validation_pair_counts_seconds": 0.0,
+            "ground_truth_seconds": 0.0,
+            "metrics_seconds": metrics_seconds,
+            "used_validation_cache": True,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": True,
+        },
+    )
+    manifest = dict(pipeline_result.manifest)
+    manifest.update(
+        {
+            "run_id": trial_id,
+            "run_type": "scoring_only_tuning",
+            "git_sha": _git_sha(),
+            "validation_start_date": validation_start_date.isoformat(),
+            "validation_end_date": validation_end_date.isoformat(),
+            "validation_days": validation_days,
+            "metrics_path": "evaluation/metrics.json",
+            "scorecard_path": "evaluation/scorecard.json",
+            "evaluation_manifest_path": "evaluation/evaluation_manifest.json",
+            "used_validation_cache": True,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": True,
+            "paths": {
+                **dict(pipeline_result.manifest["paths"]),
+                "metrics_path": "evaluation/metrics.json",
+                "scorecard_path": "evaluation/scorecard.json",
+                "evaluation_manifest_path": "evaluation/evaluation_manifest.json",
+            },
+        }
+    )
+    RecommendationWriter().save_manifest(manifest, trial_dir)
+    return metrics_to_flat_dict(metrics), metrics_path, evaluation_manifest_path
+
+
 def _with_trial_artifact_dirs(config: Mapping[str, Any], trial_dir: Path) -> dict[str, Any]:
     updated = deepcopy(dict(config))
     artifacts = dict(updated.get("artifacts", {})) if isinstance(updated.get("artifacts"), Mapping) else {}
@@ -544,17 +717,117 @@ def _run_trial(
     _copy_if_different(result.metrics_path, trial_dir / "metrics.json")
     _copy_if_different(result.manifest_path, trial_dir / "manifest.json")
     _strip_trial_recommendation_parquets(trial_dir)
-    row = {"trial_id": trial_id, "run_dir": trial_dir.as_posix(), **strategy_columns, **overrides, **metrics}
+    elapsed = time.perf_counter() - started
+    row = {
+        "trial_id": trial_id,
+        "run_dir": trial_dir.as_posix(),
+        **strategy_columns,
+        **overrides,
+        **metrics,
+        "trial_elapsed_seconds": _normalize_number(elapsed),
+        "used_scoring_only_mode": False,
+    }
     logger.info(
         "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f "
         "to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
         trial_id,
         stage_value,
-        time.perf_counter() - started,
+        elapsed,
         metrics.get("to_cart_hit_rate_at_k"),
         metrics.get("ndcg_at_k"),
         metrics.get("recall_at_k"),
         metrics.get("coverage_at_k"),
+    )
+    return row, trial_config
+
+
+def _run_scoring_only_trial(
+    *,
+    logger: logging.Logger,
+    base_config: Mapping[str, Any],
+    sweep_dir: Path,
+    trial_id: str,
+    overrides: Mapping[str, Any],
+    strategy_columns: Mapping[str, Any],
+    train_until_date: date,
+    lookback_days: int,
+    validation_days: int,
+    default_top_k: int | None,
+    pair_aggregates: pl.DataFrame,
+    item_popularity: pl.DataFrame,
+    action_distribution: pl.DataFrame,
+    train_manifest: Mapping[str, Any],
+    validation_cache_key: str,
+    validation_cache_dir: Path,
+    validation_cache_hit: bool,
+    ground_truth: pl.DataFrame,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    stage = strategy_columns.get("stage")
+    stage_value = int(stage) if stage is not None else None
+    trial_dir = _trial_dir(sweep_dir, trial_id, stage_value)
+    started = time.perf_counter()
+    trial_config = apply_overrides(base_config, overrides)
+    trial_top_k = _effective_trial_top_k(trial_config, overrides, default_top_k)
+    trial_run_config = _config_with_top_k_override(trial_config, trial_top_k)
+    logger.info(
+        "[run_tune] scoring_only trial_id=%s stage=%s overrides=%s effective_top_k=%s output_dir=%s",
+        trial_id,
+        stage_value,
+        overrides,
+        trial_top_k,
+        trial_dir,
+    )
+    trial_config_path = _write_yaml(trial_dir / "config.yaml", trial_run_config)
+    run_id = _trial_run_id(trial_id, stage_value)
+    pipeline_result = run_scoring_output_from_artifacts(
+        config=trial_run_config,
+        pair_aggregates=pair_aggregates,
+        item_popularity=item_popularity,
+        action_distribution=action_distribution,
+        train_until_date=train_until_date.isoformat(),
+        lookback_days=lookback_days,
+        window_start=str(train_manifest["window_start"]),
+        window_end=str(train_manifest["window_end"]),
+        output_dir=trial_dir,
+        run_id=run_id,
+        update_latest=False,
+        row_counts=train_manifest.get("rows") if isinstance(train_manifest.get("rows"), Mapping) else None,
+    )
+    metrics, metrics_path, _ = _write_scoring_only_evaluation(
+        trial_dir=trial_dir,
+        trial_id=run_id,
+        train_until_date=train_until_date,
+        lookback_days=lookback_days,
+        validation_days=validation_days,
+        top_k=trial_top_k or 20,
+        config_path=trial_config_path,
+        pipeline_result=pipeline_result,
+        ground_truth=ground_truth,
+        item_popularity=item_popularity,
+        validation_cache_key=validation_cache_key,
+        validation_cache_dir=validation_cache_dir,
+        validation_cache_hit=validation_cache_hit,
+    )
+    _copy_if_different(metrics_path, trial_dir / "metrics.json")
+    _copy_if_different(pipeline_result.manifest_path, trial_dir / "manifest.json")
+    _strip_trial_recommendation_parquets(trial_dir)
+    elapsed = time.perf_counter() - started
+    row = {
+        "trial_id": trial_id,
+        "run_dir": trial_dir.as_posix(),
+        **strategy_columns,
+        **overrides,
+        **metrics,
+        "trial_elapsed_seconds": _normalize_number(elapsed),
+        "used_scoring_only_mode": True,
+        "used_validation_cache": True,
+        "validation_cache_hit": validation_cache_hit,
+    }
+    logger.info(
+        "[run_tune] scoring_only trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f",
+        trial_id,
+        stage_value,
+        elapsed,
     )
     return row, trial_config
 
@@ -592,11 +865,13 @@ def run_tuning(
     annealing_temperature_start: float = 0.10,
     annealing_temperature_end: float = 0.01,
     annealing_neighbor_mutations: int = 2,
+    fast_scoring_only: bool = False,
 ) -> Path:
     logger = logging.getLogger(__name__)
+    sweep_started = time.perf_counter()
     logger.info(
         "[run_tune] initializing tuning_strategy=%s max_trials=%s config_path=%s "
-        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s",
+        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s fast_scoring_only=%s",
         tuning_strategy,
         max_trials,
         config_path,
@@ -605,6 +880,7 @@ def run_tuning(
         lookback_days,
         validation_days,
         top_k,
+        fast_scoring_only,
     )
     validation_window(train_until_date, validation_days)
     if max_trials <= 0:
@@ -620,6 +896,8 @@ def run_tuning(
 
     base_config = load_yaml_config(config_path)
     search_space = load_yaml_config(search_space_path)
+    if fast_scoring_only:
+        _validate_scoring_only_search_space(search_space)
     sweep_id = _safe_sweep_id(sweep_name)
     parameter_section = search_space.get("parameters", {})
     parameter_names = [str(name) for name in parameter_section] if isinstance(parameter_section, Mapping) else []
@@ -654,6 +932,68 @@ def run_tuning(
     trial_configs: dict[str, dict[str, Any]] = {}
     trial_overrides_by_id: dict[str, dict[str, Any]] = {}
     rng = _new_rng()
+    validation_cache_hits = 0
+    validation_cache_misses = 0
+    fast_context: dict[str, Any] | None = None
+
+    if fast_scoring_only:
+        base_train_dir = sweep_dir / "scoring_only_base"
+        base_train_config = _config_with_top_k_override(
+            _with_trial_artifact_dirs(base_config, base_train_dir),
+            top_k,
+        )
+        base_train_config_path = _write_yaml(base_train_dir / "config.yaml", base_train_config)
+        logger.info("[run_tune] build scoring-only base train artifacts dir=%s", base_train_dir)
+        train_result = run_pipeline(
+            train_until_date=train_until_date.isoformat(),
+            lookback_days=lookback_days,
+            config_path=base_train_config_path,
+            output_dir=base_train_dir,
+            run_id="scoring_only_base",
+            update_latest=False,
+        )
+        relevance_mode, relevance_weights = _evaluation_settings(base_config)
+        validation_start_date, validation_end_date = validation_window(train_until_date, validation_days)
+        validation_cache = load_or_build_validation_cache(
+            config=base_config,
+            validation_start_date=validation_start_date,
+            validation_end_date=validation_end_date,
+            relevance_mode=relevance_mode,
+            relevance_weights=relevance_weights,
+            logger=logger,
+        )
+        if validation_cache.cache_hit:
+            validation_cache_hits += 1
+        else:
+            validation_cache_misses += 1
+        fast_context = {
+            "pair_aggregates": pl.read_parquet(
+                _window_artifact_path(
+                    base_train_config,
+                    "pair_aggregates_dir",
+                    "data/processed/pair_aggregates",
+                    train_result.manifest,
+                )
+            ),
+            "item_popularity": pl.read_parquet(
+                _window_artifact_path(
+                    base_train_config,
+                    "item_popularity_dir",
+                    "data/processed/item_popularity",
+                    train_result.manifest,
+                )
+            ),
+            "action_distribution": pl.read_parquet(
+                _window_artifact_path(
+                    base_train_config,
+                    "action_type_distribution_dir",
+                    "data/processed/action_type_distribution",
+                    train_result.manifest,
+                )
+            ),
+            "train_manifest": train_result.manifest,
+            "validation_cache": validation_cache,
+        }
 
     if tuning_strategy in {"grid", "random"}:
         trial_overrides = select_trials(search_space, strategy=tuning_strategy, max_trials=max_trials)
@@ -661,21 +1001,45 @@ def run_tuning(
             trial_id = f"trial_{index:04d}"
             trial_overrides_by_id[trial_id] = dict(overrides)
             trial_lookback_days = _effective_trial_lookback_days(overrides, lookback_days)
-            row, trial_config = _run_trial(
-                logger=logger,
-                base_config=base_config,
-                sweep_dir=sweep_dir,
-                trial_id=trial_id,
-                overrides=overrides,
-                strategy_columns={
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                },
-                train_until_date=train_until_date,
-                lookback_days=trial_lookback_days,
-                validation_days=validation_days,
-                default_top_k=top_k,
-            )
+            strategy_columns = {
+                "resource_lookback_days": trial_lookback_days,
+                "resource_validation_days": validation_days,
+            }
+            if fast_context is None:
+                row, trial_config = _run_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=trial_lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                )
+            else:
+                validation_cache = fast_context["validation_cache"]
+                row, trial_config = _run_scoring_only_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                    pair_aggregates=fast_context["pair_aggregates"],
+                    item_popularity=fast_context["item_popularity"],
+                    action_distribution=fast_context["action_distribution"],
+                    train_manifest=fast_context["train_manifest"],
+                    validation_cache_key=validation_cache.cache_key,
+                    validation_cache_dir=validation_cache.cache_dir,
+                    validation_cache_hit=validation_cache.cache_hit,
+                    ground_truth=validation_cache.ground_truth,
+                )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
             best_id, best_primary = _current_best_log(rows, search_space)
@@ -693,18 +1057,42 @@ def run_tuning(
         for index, overrides in enumerate(stage_one_candidates, start=1):
             trial_id = f"trial_{index:04d}"
             trial_overrides_by_id[trial_id] = dict(overrides)
-            row, trial_config = _run_trial(
-                logger=logger,
-                base_config=base_config,
-                sweep_dir=sweep_dir,
-                trial_id=trial_id,
-                overrides=overrides,
-                strategy_columns={"stage": 1, "resource_lookback_days": 1, "resource_validation_days": 1},
-                train_until_date=train_until_date,
-                lookback_days=1,
-                validation_days=1,
-                default_top_k=top_k,
-            )
+            strategy_columns = {"stage": 1, "resource_lookback_days": 1, "resource_validation_days": 1}
+            if fast_context is None:
+                row, trial_config = _run_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=1,
+                    validation_days=1,
+                    default_top_k=top_k,
+                )
+            else:
+                validation_cache = fast_context["validation_cache"]
+                row, trial_config = _run_scoring_only_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                    pair_aggregates=fast_context["pair_aggregates"],
+                    item_popularity=fast_context["item_popularity"],
+                    action_distribution=fast_context["action_distribution"],
+                    train_manifest=fast_context["train_manifest"],
+                    validation_cache_key=validation_cache.cache_key,
+                    validation_cache_dir=validation_cache.cache_dir,
+                    validation_cache_hit=validation_cache.cache_hit,
+                    ground_truth=validation_cache.ground_truth,
+                )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
         stage_one_rows = [row for row in rows if row.get("stage") == 1]
@@ -719,22 +1107,46 @@ def run_tuning(
         for trial_id in survivor_ids:
             overrides = trial_overrides_by_id[trial_id]
             trial_lookback_days = _effective_trial_lookback_days(overrides, lookback_days)
-            row, trial_config = _run_trial(
-                logger=logger,
-                base_config=base_config,
-                sweep_dir=sweep_dir,
-                trial_id=trial_id,
-                overrides=overrides,
-                strategy_columns={
-                    "stage": 2,
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                },
-                train_until_date=train_until_date,
-                lookback_days=trial_lookback_days,
-                validation_days=validation_days,
-                default_top_k=top_k,
-            )
+            strategy_columns = {
+                "stage": 2,
+                "resource_lookback_days": trial_lookback_days,
+                "resource_validation_days": validation_days,
+            }
+            if fast_context is None:
+                row, trial_config = _run_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=trial_lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                )
+            else:
+                validation_cache = fast_context["validation_cache"]
+                row, trial_config = _run_scoring_only_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                    pair_aggregates=fast_context["pair_aggregates"],
+                    item_popularity=fast_context["item_popularity"],
+                    action_distribution=fast_context["action_distribution"],
+                    train_manifest=fast_context["train_manifest"],
+                    validation_cache_key=validation_cache.cache_key,
+                    validation_cache_dir=validation_cache.cache_dir,
+                    validation_cache_hit=validation_cache.cache_hit,
+                    ground_truth=validation_cache.ground_truth,
+                )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
 
@@ -751,23 +1163,47 @@ def run_tuning(
             )
             trial_overrides_by_id[trial_id] = dict(candidate)
             trial_lookback_days = _effective_trial_lookback_days(candidate, lookback_days)
-            row, trial_config = _run_trial(
-                logger=logger,
-                base_config=base_config,
-                sweep_dir=sweep_dir,
-                trial_id=trial_id,
-                overrides=candidate,
-                strategy_columns={
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                    "accepted": False,
-                    "temperature": _normalize_number(temperature),
-                },
-                train_until_date=train_until_date,
-                lookback_days=trial_lookback_days,
-                validation_days=validation_days,
-                default_top_k=top_k,
-            )
+            strategy_columns = {
+                "resource_lookback_days": trial_lookback_days,
+                "resource_validation_days": validation_days,
+                "accepted": False,
+                "temperature": _normalize_number(temperature),
+            }
+            if fast_context is None:
+                row, trial_config = _run_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=candidate,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=trial_lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                )
+            else:
+                validation_cache = fast_context["validation_cache"]
+                row, trial_config = _run_scoring_only_trial(
+                    logger=logger,
+                    base_config=base_config,
+                    sweep_dir=sweep_dir,
+                    trial_id=trial_id,
+                    overrides=candidate,
+                    strategy_columns=strategy_columns,
+                    train_until_date=train_until_date,
+                    lookback_days=lookback_days,
+                    validation_days=validation_days,
+                    default_top_k=top_k,
+                    pair_aggregates=fast_context["pair_aggregates"],
+                    item_popularity=fast_context["item_popularity"],
+                    action_distribution=fast_context["action_distribution"],
+                    train_manifest=fast_context["train_manifest"],
+                    validation_cache_key=validation_cache.cache_key,
+                    validation_cache_dir=validation_cache.cache_dir,
+                    validation_cache_hit=validation_cache.cache_hit,
+                    ground_truth=validation_cache.ground_truth,
+                )
             trial_configs[trial_id] = trial_config
             candidate_score = _objective_fields(row, search_space)[1]
             if index == 0 or candidate_score >= current_score:
@@ -799,6 +1235,7 @@ def run_tuning(
     }
     _write_yaml(sweep_dir / "best_config.yaml", best_config)
     write_json(sweep_dir / "best_metrics.json", best_metrics)
+    total_elapsed_seconds = time.perf_counter() - sweep_started
     write_json(
         sweep_dir / "summary.json",
         {
@@ -815,6 +1252,15 @@ def run_tuning(
             "lookback_days": lookback_days,
             "validation_days": validation_days,
             "top_k": top_k,
+            "fast_scoring_only": fast_scoring_only,
+            "total_elapsed_seconds": total_elapsed_seconds,
+            "average_trial_elapsed_seconds": (
+                sum(float(row.get("trial_elapsed_seconds") or 0.0) for row in rows) / len(rows)
+                if rows
+                else 0.0
+            ),
+            "validation_cache_hits": validation_cache_hits,
+            "validation_cache_misses": validation_cache_misses,
             "halving_reduction_factor": halving_reduction_factor,
             "annealing_temperature_start": annealing_temperature_start,
             "annealing_temperature_end": annealing_temperature_end,
@@ -851,6 +1297,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--annealing-temperature-start", type=float, default=0.10)
     parser.add_argument("--annealing-temperature-end", type=float, default=0.01)
     parser.add_argument("--annealing-neighbor-mutations", type=int, default=2)
+    parser.add_argument("--fast-scoring-only", action="store_true")
     return parser.parse_args()
 
 
@@ -874,6 +1321,7 @@ def main() -> int:
             annealing_temperature_start=args.annealing_temperature_start,
             annealing_temperature_end=args.annealing_temperature_end,
             annealing_neighbor_mutations=args.annealing_neighbor_mutations,
+            fast_scoring_only=args.fast_scoring_only,
         )
     except Exception:
         logger.exception("[run_tune] failed")
