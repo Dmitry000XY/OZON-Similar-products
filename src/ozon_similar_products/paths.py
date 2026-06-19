@@ -31,9 +31,7 @@ class ProjectPaths:
     raw_archives_dir: Path
     product_information_dir: Path
     user_actions_dir: Path
-    interim_data_dir: Path
     processed_data_dir: Path
-    samples_data_dir: Path
     outputs_dir: Path
     recommendations_dir: Path
 
@@ -48,9 +46,7 @@ def _build_project_paths(paths_config: dict[str, Any]) -> ProjectPaths:
         raw_archives_dir=project_path(data_config["raw_archives_dir"]),
         product_information_dir=project_path(data_config["product_information_dir"]),
         user_actions_dir=project_path(data_config["user_actions_dir"]),
-        interim_data_dir=project_path(data_config["interim_dir"]),
         processed_data_dir=project_path(data_config["processed_dir"]),
-        samples_data_dir=project_path(data_config["samples_dir"]),
         outputs_dir=project_path(outputs_config["root_dir"]),
         recommendations_dir=project_path(outputs_config["recommendations_dir"]),
     )
@@ -68,7 +64,7 @@ def get_project_paths(*, force_reload: bool = False) -> ProjectPaths:
 
 
 def __getattr__(name: str) -> Any:
-    """Backward-compatible access to legacy module-level path constants."""
+    """Backward-compatible access to module-level path constants."""
     paths = get_project_paths()
     compatibility_map = {
         "CONFIGS_DIR": paths.configs_dir,
@@ -77,9 +73,7 @@ def __getattr__(name: str) -> Any:
         "RAW_ARCHIVES_DIR": paths.raw_archives_dir,
         "PRODUCT_INFORMATION_DIR": paths.product_information_dir,
         "USER_ACTIONS_DIR": paths.user_actions_dir,
-        "INTERIM_DATA_DIR": paths.interim_data_dir,
         "PROCESSED_DATA_DIR": paths.processed_data_dir,
-        "SAMPLES_DATA_DIR": paths.samples_data_dir,
         "OUTPUTS_DIR": paths.outputs_dir,
         "RECOMMENDATIONS_DIR": paths.recommendations_dir,
     }

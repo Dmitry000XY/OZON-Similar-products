@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
-import subprocess
 import time
 from collections.abc import Mapping
 from copy import deepcopy
@@ -78,19 +77,11 @@ def _date_range_strings(start_date: date, end_date: date) -> list[str]:
 
 
 def _git_sha() -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-c", f"safe.directory={PROJECT_ROOT.as_posix()}", "rev-parse", "HEAD"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
+    return None
 
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+
+def _timestamp_slug() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%SZ")
 
 
 def _safe_label(value: str | None) -> str:
@@ -111,15 +102,18 @@ def make_run_id(
     top_k: int,
     run_name: str | None,
 ) -> str:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    base = (
-        f"{timestamp}_train-{train_until_date.isoformat()}"
-        f"_lb{lookback_days}_val{validation_days}_top{top_k}"
-    )
+    parts = [
+        "run",
+        _timestamp_slug(),
+        f"train-{train_until_date.isoformat()}",
+        f"lookback-{lookback_days}d",
+        f"validation-{validation_days}d",
+        f"top-{top_k}",
+    ]
     label = _safe_label(run_name)
     if label:
-        return f"{base}_{label}"
-    return base
+        parts.append(label)
+    return "_".join(parts)
 
 
 def _config_with_top_k_override(

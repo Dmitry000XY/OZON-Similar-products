@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TextIO
 
 LOGGER = logging.getLogger(__name__)
+GITKEEP_FILENAME = ".gitkeep"
 
 
 @dataclass(frozen=True)
@@ -47,11 +48,11 @@ class ExtractionProgress:
     """
 
     def __init__(
-            self,
-            total: int,
-            label: str = "[prepare] Extracting",
-            stream: TextIO = sys.stderr,
-            width: int = 32,
+        self,
+        total: int,
+        label: str = "[prepare] Extracting",
+        stream: TextIO = sys.stderr,
+        width: int = 32,
     ) -> None:
         """Create a progress reporter.
 
@@ -131,15 +132,20 @@ def format_path_for_manifest(path: Path, project_root: Path) -> str:
         return str(resolved_path)
 
 
+def ensure_gitkeep(path: Path) -> Path:
+    """Create a `.gitkeep` marker in a directory and return its path."""
+    path.mkdir(parents=True, exist_ok=True)
+    gitkeep = path / GITKEEP_FILENAME
+    gitkeep.touch(exist_ok=True)
+    return gitkeep
+
+
 def is_safe_member(base_dir: Path, target_path: Path) -> bool:
     """Check that a tar member stays inside the extraction directory."""
     resolved_base_dir = base_dir.resolve()
     resolved_target_path = target_path.resolve()
 
-    return (
-            resolved_target_path == resolved_base_dir
-            or resolved_base_dir in resolved_target_path.parents
-    )
+    return resolved_target_path == resolved_base_dir or resolved_base_dir in resolved_target_path.parents
 
 
 def path_has_parquet(path: Path, parquet_glob: str) -> bool:
@@ -182,9 +188,9 @@ def remove_path(path: Path) -> None:
 
 
 def find_payload_dir(
-        base_dir: Path,
-        payload_root_names: list[str],
-        parquet_glob: str,
+    base_dir: Path,
+    payload_root_names: list[str],
+    parquet_glob: str,
 ) -> Path:
     """Find the directory that contains extracted parquet files."""
     candidates = [base_dir / root_name for root_name in payload_root_names]
@@ -242,10 +248,10 @@ def remove_success_files(path: Path) -> int:
 
 
 def write_manifest(
-        spec: ArchiveSpec,
-        parquet_files_count: int,
-        removed_success_files_count: int,
-        project_root: Path,
+    spec: ArchiveSpec,
+    parquet_files_count: int,
+    removed_success_files_count: int,
+    project_root: Path,
 ) -> None:
     """Write `.prepared.json` for a successfully prepared dataset."""
     manifest = {
@@ -266,16 +272,20 @@ def write_manifest(
 
 
 def safe_extract_tar_gz(
-        spec: ArchiveSpec,
-        project_root: Path,
-        *,
-        force: bool = False,
+    spec: ArchiveSpec,
+    project_root: Path,
+    *,
+    force: bool = False,
 ) -> Path:
     """Prepare one dataset from a `.tar.gz` archive."""
+    ensure_gitkeep(spec.archive_path.parent)
+    ensure_gitkeep(spec.extract_to)
+
     if not spec.archive_path.exists():
         raise FileNotFoundError(f"Archive not found: {spec.archive_path}")
 
     if is_dataset_prepared(spec) and not force:
+        ensure_gitkeep(spec.target_dir)
         LOGGER.info("[prepare] Skip %s: already prepared", spec.dataset_name)
         LOGGER.info("[prepare] Target: %s", spec.target_dir)
         LOGGER.info("[prepare] Use --force to extract again.")
@@ -321,6 +331,7 @@ def safe_extract_tar_gz(
                 f"Prepared dataset has no parquet files: {spec.target_dir}"
             )
 
+        ensure_gitkeep(spec.target_dir)
         write_manifest(
             spec=spec,
             parquet_files_count=parquet_files_count,
@@ -335,6 +346,7 @@ def safe_extract_tar_gz(
     LOGGER.info("[prepare] Parquet files:     %s", parquet_files_count)
     LOGGER.info("[prepare] Removed _SUCCESS:  %s", removed_success_files_count)
     LOGGER.info("[prepare] Marker:            %s", marker_path(spec))
+    LOGGER.info("[prepare] Gitkeep:           %s", spec.target_dir / GITKEEP_FILENAME)
 
     return spec.target_dir
 

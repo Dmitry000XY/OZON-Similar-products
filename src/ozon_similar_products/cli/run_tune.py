@@ -34,15 +34,44 @@ def _resolve_project_path(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
-def _safe_sweep_id(name: str | None = None) -> str:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    if not name:
-        return f"sweep_{timestamp}"
-    normalized = "".join(
+def _timestamp_slug() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%SZ")
+
+
+def _safe_label(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(
         character if character.isalnum() or character in {"-", "_"} else "_"
-        for character in name.strip()
+        for character in value.strip()
     ).strip("_")
-    return f"{timestamp}_{normalized}" if normalized else f"sweep_{timestamp}"
+
+
+def _safe_sweep_id(
+    name: str | None = None,
+    *,
+    strategy: str | None = None,
+    train_until_date: date | None = None,
+    lookback_days: int | None = None,
+    validation_days: int | None = None,
+    top_k: int | None = None,
+) -> str:
+    parts = ["sweep", _timestamp_slug()]
+    strategy_label = _safe_label(strategy)
+    if strategy_label:
+        parts.append(strategy_label)
+    if train_until_date is not None:
+        parts.append(f"train-{train_until_date.isoformat()}")
+    if lookback_days is not None:
+        parts.append(f"lookback-{lookback_days}d")
+    if validation_days is not None:
+        parts.append(f"validation-{validation_days}d")
+    if top_k is not None:
+        parts.append(f"top-{top_k}")
+    name_label = _safe_label(name)
+    if name_label:
+        parts.append(name_label)
+    return "_".join(parts)
 
 
 def set_by_dot_path(config: Mapping[str, Any], dot_path: str, value: Any) -> dict[str, Any]:
@@ -363,9 +392,7 @@ def _objective_sort_key(row: Mapping[str, Any], search_space: Mapping[str, Any])
     )
 
 
-def _annotate_objective_rows(
-    rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any]
-) -> list[dict[str, Any]]:
+def _annotate_objective_rows(rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any]) -> list[dict[str, Any]]:
     annotated = [dict(row) for row in rows]
     primary_metric = _primary_metric_name(search_space)
     for row in annotated:
@@ -374,22 +401,13 @@ def _annotate_objective_rows(
         row["objective_eligible"] = eligible
         row["objective_rank"] = None
         row["objective_primary_metric"] = primary_metric
-    eligible = sorted(
-        (row for row in annotated if row["objective_eligible"]),
-        key=lambda row: _objective_sort_key(row, search_space),
-        reverse=True,
-    )
+    eligible = sorted((row for row in annotated if row["objective_eligible"]), key=lambda row: _objective_sort_key(row, search_space), reverse=True)
     for rank, row in enumerate(eligible, start=1):
         row["objective_rank"] = rank
     return annotated
 
 
-def best_trial_row(
-    rows: Iterable[Mapping[str, Any]],
-    search_space: Mapping[str, Any],
-    *,
-    preferred_stage: int | None = None,
-) -> Mapping[str, Any]:
+def best_trial_row(rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None) -> Mapping[str, Any]:
     annotated = _annotate_objective_rows(rows, search_space)
     if not annotated:
         raise ValueError("Cannot select best trial from an empty result set")
@@ -429,9 +447,7 @@ def _effective_trial_lookback_days(overrides: Mapping[str, Any], default_lookbac
     return _as_positive_int(overrides.get("pipeline.lookback_days", default_lookback_days), "lookback_days")
 
 
-def _effective_trial_top_k(
-    config: Mapping[str, Any], overrides: Mapping[str, Any], default_top_k: int | None
-) -> int | None:
+def _effective_trial_top_k(config: Mapping[str, Any], overrides: Mapping[str, Any], default_top_k: int | None) -> int | None:
     for key in ("topk.top_k", "pipeline.top_k"):
         if key in overrides:
             return _as_positive_int(overrides[key], key)
@@ -518,8 +534,7 @@ def _run_trial(
     trial_run_config = _with_trial_artifact_dirs(trial_config, trial_dir)
     trial_top_k = _effective_trial_top_k(trial_config, overrides, default_top_k)
     logger.info(
-        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s "
-        "resource_validation_days=%s effective_top_k=%s output_dir=%s",
+        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s resource_validation_days=%s effective_top_k=%s output_dir=%s",
         trial_id,
         stage_value,
         overrides,
@@ -546,8 +561,7 @@ def _run_trial(
     _strip_trial_recommendation_parquets(trial_dir)
     row = {"trial_id": trial_id, "run_dir": trial_dir.as_posix(), **strategy_columns, **overrides, **metrics}
     logger.info(
-        "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f "
-        "to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
+        "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
         trial_id,
         stage_value,
         time.perf_counter() - started,
@@ -559,15 +573,11 @@ def _run_trial(
     return row, trial_config
 
 
-def _current_best_log(
-    rows: Sequence[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None
-) -> tuple[str | None, float | None]:
+def _current_best_log(rows: Sequence[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None) -> tuple[str | None, float | None]:
     if not rows:
         return None, None
     best = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
-    return str(best.get("trial_id")), _metric_value(
-        best, _primary_metric_name(search_space), default=float("-inf")
-    )
+    return str(best.get("trial_id")), _metric_value(best, _primary_metric_name(search_space), default=float("-inf"))
 
 
 def _annealing_temperature(index: int, total_trials: int, *, start: float, end: float) -> float:
@@ -594,18 +604,6 @@ def run_tuning(
     annealing_neighbor_mutations: int = 2,
 ) -> Path:
     logger = logging.getLogger(__name__)
-    logger.info(
-        "[run_tune] initializing tuning_strategy=%s max_trials=%s config_path=%s "
-        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s",
-        tuning_strategy,
-        max_trials,
-        config_path,
-        search_space_path,
-        train_until_date.isoformat(),
-        lookback_days,
-        validation_days,
-        top_k,
-    )
     validation_window(train_until_date, validation_days)
     if max_trials <= 0:
         raise ValueError("max_trials must be a positive integer")
@@ -620,32 +618,26 @@ def run_tuning(
 
     base_config = load_yaml_config(config_path)
     search_space = load_yaml_config(search_space_path)
-    sweep_id = _safe_sweep_id(sweep_name)
+    sweep_id = _safe_sweep_id(
+        sweep_name,
+        strategy=tuning_strategy,
+        train_until_date=train_until_date,
+        lookback_days=lookback_days,
+        validation_days=validation_days,
+        top_k=top_k,
+    )
     parameter_section = search_space.get("parameters", {})
     parameter_names = [str(name) for name in parameter_section] if isinstance(parameter_section, Mapping) else []
     total_grid_combinations = _grid_trial_count(search_space)
     sweep_dir = _resolve_project_path(output_dir) / sweep_id
     sweep_dir.mkdir(parents=True, exist_ok=False)
     logger.info(
-        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s config_path=%s "
-        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s output_dir=%s",
+        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s grid_combinations=%s output_dir=%s",
         sweep_id,
         tuning_strategy,
         max_trials,
-        config_path,
-        search_space_path,
-        train_until_date.isoformat(),
-        lookback_days,
-        validation_days,
-        top_k,
-        sweep_dir,
-    )
-    logger.info(
-        "[run_tune] search_space parameters=%s parameter_names=%s grid_combinations=%s primary_metric=%s",
-        len(parameter_names),
-        parameter_names,
         total_grid_combinations,
-        _primary_metric_name(search_space),
+        sweep_dir,
     )
     _write_yaml(sweep_dir / "base_config.yaml", base_config)
     _write_yaml(sweep_dir / "search_space.yaml", search_space)
@@ -667,10 +659,7 @@ def run_tuning(
                 sweep_dir=sweep_dir,
                 trial_id=trial_id,
                 overrides=overrides,
-                strategy_columns={
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                },
+                strategy_columns={"resource_lookback_days": trial_lookback_days, "resource_validation_days": validation_days},
                 train_until_date=train_until_date,
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
@@ -711,9 +700,7 @@ def run_tuning(
         survivors_count = max(1, math.ceil(len(stage_one_rows) / halving_reduction_factor))
         survivor_ids = [
             str(row["trial_id"])
-            for row in sorted(stage_one_rows, key=lambda r: _objective_sort_key(r, search_space), reverse=True)[
-                :survivors_count
-            ]
+            for row in sorted(stage_one_rows, key=lambda r: _objective_sort_key(r, search_space), reverse=True)[:survivors_count]
         ]
         logger.info("[run_tune] successive_halving survivors=%s reduction_factor=%s", survivor_ids, halving_reduction_factor)
         for trial_id in survivor_ids:
@@ -725,11 +712,7 @@ def run_tuning(
                 sweep_dir=sweep_dir,
                 trial_id=trial_id,
                 overrides=overrides,
-                strategy_columns={
-                    "stage": 2,
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                },
+                strategy_columns={"stage": 2, "resource_lookback_days": trial_lookback_days, "resource_validation_days": validation_days},
                 train_until_date=train_until_date,
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
@@ -744,10 +727,16 @@ def run_tuning(
         for index in range(max_trials):
             trial_id = f"trial_{index + 1:04d}"
             temperature = _annealing_temperature(
-                index, max_trials, start=annealing_temperature_start, end=annealing_temperature_end
+                index,
+                max_trials,
+                start=annealing_temperature_start,
+                end=annealing_temperature_end,
             )
             candidate = dict(current_trial) if index == 0 else _mutate_trial(
-                current_trial, search_space, mutations=annealing_neighbor_mutations, rng=rng
+                current_trial,
+                search_space,
+                mutations=annealing_neighbor_mutations,
+                rng=rng,
             )
             trial_overrides_by_id[trial_id] = dict(candidate)
             trial_lookback_days = _effective_trial_lookback_days(candidate, lookback_days)
@@ -794,9 +783,7 @@ def run_tuning(
     best_row = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
     best_trial_id = str(best_row["trial_id"])
     best_config = trial_configs[best_trial_id]
-    best_metrics = {
-        key: value for key, value in best_row.items() if key not in {"trial_id", "run_dir", *parameter_names}
-    }
+    best_metrics = {key: value for key, value in best_row.items() if key not in {"trial_id", "run_dir", *parameter_names}}
     _write_yaml(sweep_dir / "best_config.yaml", best_config)
     write_json(sweep_dir / "best_metrics.json", best_metrics)
     write_json(
