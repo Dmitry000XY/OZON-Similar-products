@@ -18,6 +18,7 @@ import polars as pl
 from ozon_similar_products.config import PROJECT_ROOT, get_path_from_config, load_configs
 from ozon_similar_products.evaluation.ground_truth import build_ground_truth_from_daily_pair_counts
 from ozon_similar_products.evaluation.tracking import write_json
+from ozon_similar_products.evaluation.validation_semantics import validation_pair_semantics
 
 
 @dataclass(frozen=True)
@@ -168,11 +169,10 @@ def validation_cache_metadata(
     git_sha: str | None,
 ) -> dict[str, Any]:
     """Build metadata for validation cache invalidation."""
-    pipeline_config = config.get("pipeline", {})
-    pair_builder_config = config.get("item_pair_builder", {})
-    graph_config = config.get("graph", {})
+    pair_semantics = validation_pair_semantics(config)
+    events_config = pair_semantics.get("events", {})
     metadata_config = {
-        "cache_schema_version": 3,
+        "cache_schema_version": 4,
         "validation_start_date": validation_start_date.isoformat(),
         "validation_end_date": validation_end_date.isoformat(),
         "validation_data_identity": validation_data_identity(
@@ -180,19 +180,12 @@ def validation_cache_metadata(
             validation_end_date=validation_end_date,
             item_action_types=item_action_types,
         ),
-        "item_action_types": item_action_types,
-        "session_timeout_minutes": (
-            pipeline_config.get("session_timeout_minutes")
-            if isinstance(pipeline_config, Mapping)
-            else None
+        "item_action_types": (
+            list(events_config.get("item_action_types", item_action_types))
+            if isinstance(events_config, Mapping)
+            else item_action_types
         ),
-        "max_items_per_session": (
-            pipeline_config.get("max_items_per_session")
-            if isinstance(pipeline_config, Mapping)
-            else None
-        ),
-        "item_pair_builder": dict(pair_builder_config) if isinstance(pair_builder_config, Mapping) else {},
-        "graph": dict(graph_config) if isinstance(graph_config, Mapping) else {},
+        "validation_pair_semantics": pair_semantics,
         "relevance_mode": relevance_mode,
         "relevance_weights": dict(relevance_weights) if isinstance(relevance_weights, Mapping) else None,
     }

@@ -90,13 +90,27 @@ Raw thresholds `min_pair_count`, `min_unique_users`, `min_unique_sessions`
 остаются reliability-фильтрами. Дополнительно доступны
 `min_weighted_pair_count` до scoring и `min_score` после scoring.
 
+## Evaluation semantics
+
+Graph tuning parameters влияют на train graph и на итоговые recommendations, но
+validation ground truth строится со стабильной pair semantics:
+
+- distance decay disabled;
+- time decay disabled;
+- `max_distance` disabled.
+
+Это сделано специально, чтобы offline metrics были сравнимыми между graph/scoring
+trial-ами. Меняется train graph, но не validation target.
+
 ## Tuning
 
 Graph-параметры меняют train artifacts, поэтому
 `configs/tuning/search_space_graph_scoring.yaml` нужно запускать только через
 обычный full tuning. Не используйте этот search space с `--fast-scoring-only`:
 fast scoring-only mode переиспользует уже построенный граф и не перестраивает
-daily pair stats.
+daily pair stats. `graph.distance_decay.max_distance` можно тюнить именно потому,
+что он теперь влияет только на train recommendations, а не на validation
+ground truth.
 
 Baseline full run:
 
