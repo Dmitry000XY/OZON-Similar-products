@@ -149,6 +149,12 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
             recall_at_k=0.8,
             ndcg_at_k=0.7,
             mrr_at_k=0.5,
+            strong_hit_rate_at_k=1.0,
+            strong_recall_at_k=0.8,
+            strong_mrr_at_k=0.5,
+            strong_ndcg_at_k=0.7,
+            to_cart_mrr_at_k=0.4,
+            to_cart_ndcg_at_k=0.6,
             coverage_at_k=1.0,
             popularity_bias_at_k=0.2,
             fallback_share_at_k=0.1,
@@ -172,6 +178,10 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
             evaluated_items=2,
             recommended_items=2,
             ground_truth_pairs=3,
+            all_evaluated_items=3,
+            ranking_evaluated_items=2,
+            view_only_ground_truth_pairs=1,
+            ranking_ground_truth_pairs=2,
         )
     )
     expected_metric_names = [
@@ -179,6 +189,12 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
         "recall_at_k",
         "ndcg_at_k",
         "mrr_at_k",
+        "strong_hit_rate_at_k",
+        "strong_recall_at_k",
+        "strong_mrr_at_k",
+        "strong_ndcg_at_k",
+        "to_cart_mrr_at_k",
+        "to_cart_ndcg_at_k",
         "coverage_at_k",
         "popularity_bias_at_k",
         "fallback_share_at_k",
@@ -202,6 +218,10 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
         "evaluated_items",
         "recommended_items",
         "ground_truth_pairs",
+        "all_evaluated_items",
+        "ranking_evaluated_items",
+        "view_only_ground_truth_pairs",
+        "ranking_ground_truth_pairs",
     ]
 
     assert list(metrics) == expected_metric_names

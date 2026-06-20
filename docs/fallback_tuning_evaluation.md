@@ -114,7 +114,7 @@ fallback_to_cart_hit_rate_at_k
 fallback_to_cart_recall_at_k
 ```
 
-Эти метрики используют только fallback-строки, то есть строки, где `source != "behavioral"`. Знаменатель для `fallback_recall_at_k` остаётся полным ground truth набором конкретного исходного товара, поэтому метрика отвечает на вопрос: какую часть validation truth удалось восстановить именно fallback-кандидатами.
+Эти метрики используют только fallback-строки, то есть строки, где `source != "behavioral"`. Общие `fallback_hit_rate_at_k` и `fallback_recall_at_k` считаются по ranking ground truth, поэтому view-only совпадения не завышают fallback quality.
 
 `to_cart` fallback-метрики ограничивают ground truth строками, где `to_cart_count > 0`.
 
@@ -125,7 +125,7 @@ fallback_to_cart_recall_at_k
 Для `search_space_scoring_fallback.yaml` целевая функция остаётся сбалансированной вокруг бизнес-качества:
 
 - основная метрика: `to_cart_hit_rate_at_k`
-- вспомогательные метрики: `ndcg_at_k`, `recall_at_k`, `mrr_at_k`, `coverage_at_k`, `to_cart_recall_at_k`, `fallback_hit_rate_at_k`
+- вспомогательные метрики: `strong_ndcg_at_k`, `strong_recall_at_k`, `strong_mrr_at_k`, `coverage_at_k`, `to_cart_recall_at_k`, `fallback_hit_rate_at_k`
 - штрафные метрики: `popularity_bias_at_k`, `fallback_global_share_at_k`
 - ограничение: `min_coverage_at_k: 0.01`
 

@@ -97,6 +97,19 @@ outputs:
   root_dir: outputs
   latest_dir: outputs/latest
 
+evaluation:
+  relevance_mode: graded
+  relevance_weights:
+    view: 0.1
+    click: 0.3
+    favorite: 0.6
+    to_cart: 1.0
+  ranking_relevant_action_types:
+    - click
+    - favorite
+    - to_cart
+  min_ranking_relevance: 0.3
+
 business:
   fallback:
     enabled: true

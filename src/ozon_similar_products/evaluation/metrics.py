@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,11 +14,14 @@ from ozon_similar_products.evaluation.ground_truth import validate_ground_truth
 FrameLike = pl.DataFrame | pl.LazyFrame
 
 ACTION_TYPES = ("view", "click", "favorite", "to_cart")
+DEFAULT_RANKING_RELEVANT_ACTION_TYPES = ("click", "favorite", "to_cart")
+DEFAULT_MIN_RANKING_RELEVANCE = 0.3
 RECOMMENDATION_METRIC_COLUMNS = ["item_id", "similar_item_id", "rank", "score", "source"]
 GROUND_TRUTH_METRIC_COLUMNS = [
     "item_id",
     "relevant_item_id",
     "relevance",
+    "target_action_type",
     "view_count",
     "click_count",
     "favorite_count",
@@ -41,6 +44,12 @@ class OfflineMetrics:
     recall_at_k: float | None = None
     ndcg_at_k: float | None = None
     mrr_at_k: float | None = None
+    strong_hit_rate_at_k: float | None = None
+    strong_recall_at_k: float | None = None
+    strong_mrr_at_k: float | None = None
+    strong_ndcg_at_k: float | None = None
+    to_cart_mrr_at_k: float | None = None
+    to_cart_ndcg_at_k: float | None = None
     coverage_at_k: float | None = None
     popularity_bias_at_k: float | None = None
     fallback_share_at_k: float | None = None
@@ -64,6 +73,10 @@ class OfflineMetrics:
     evaluated_items: int = 0
     recommended_items: int = 0
     ground_truth_pairs: int = 0
+    all_evaluated_items: int = 0
+    ranking_evaluated_items: int = 0
+    view_only_ground_truth_pairs: int = 0
+    ranking_ground_truth_pairs: int = 0
 
 
 def _collect_if_lazy(frame: FrameLike) -> pl.DataFrame:
@@ -184,6 +197,46 @@ def _truth_totals(ground_truth: pl.DataFrame) -> pl.DataFrame:
             for action_type in ACTION_TYPES
         ],
     )
+
+
+def _filter_ranking_ground_truth(
+    ground_truth: pl.DataFrame,
+    *,
+    relevant_action_types: Sequence[str],
+    min_relevance: float | None,
+) -> pl.DataFrame:
+    """Keep only ground-truth pairs eligible for the primary ranking metrics."""
+
+    if ground_truth.is_empty():
+        return ground_truth
+
+    relevant_actions = tuple(str(action_type) for action_type in relevant_action_types)
+    action_filter = (
+        pl.col("target_action_type").is_in(relevant_actions)
+        if relevant_actions
+        else pl.lit(False)
+    )
+    relevance_filter = pl.lit(False)
+    if min_relevance is not None:
+        if min_relevance < 0.0:
+            raise ValueError("min_ranking_relevance must be >= 0")
+        relevance_filter = (
+            (pl.col("target_action_type") != "view")
+            & (pl.col("relevance").cast(pl.Float64) >= float(min_relevance))
+        )
+
+    return ground_truth.filter(action_filter | relevance_filter)
+
+
+def _view_only_ground_truth_pair_count(ground_truth: pl.DataFrame) -> int:
+    if ground_truth.is_empty():
+        return 0
+    return ground_truth.filter(
+        (pl.col("view_count").cast(pl.Float64) > 0.0)
+        & (pl.col("click_count").cast(pl.Float64) <= 0.0)
+        & (pl.col("favorite_count").cast(pl.Float64) <= 0.0)
+        & (pl.col("to_cart_count").cast(pl.Float64) <= 0.0)
+    ).height
 
 
 def _recommendation_hits(
@@ -345,40 +398,30 @@ def _fallback_quality_metrics(
     *,
     truth_totals: pl.DataFrame,
     hits: pl.DataFrame,
+    to_cart_truth_totals: pl.DataFrame,
+    to_cart_hits: pl.DataFrame,
 ) -> dict[str, float | None]:
-    if truth_totals.is_empty():
-        return {
-            "fallback_hit_rate_at_k": None,
-            "fallback_recall_at_k": None,
-            "fallback_to_cart_hit_rate_at_k": None,
-            "fallback_to_cart_recall_at_k": None,
-        }
-
     fallback_hits = hits.filter(_fallback_source_filter()) if not hits.is_empty() else hits
-    if fallback_hits.is_empty():
+    if truth_totals.is_empty():
+        fallback_hit_rate = None
+        fallback_recall = None
+    elif fallback_hits.is_empty():
         per_item = truth_totals.with_columns(
             pl.lit(0.0).alias("__fallback_hit"),
             pl.lit(0.0).alias("__fallback_recall"),
-            pl.lit(0.0).alias("__fallback_to_cart_hits"),
         )
+        fallback_hit_rate = _mean_or_none(per_item, "__fallback_hit")
+        fallback_recall = _mean_or_none(per_item, "__fallback_recall")
     else:
         fallback_by_item = fallback_hits.group_by("item_id").agg(
             pl.len().alias("__fallback_hit_count"),
             pl.col("relevance").cast(pl.Float64).sum().alias("__fallback_relevance"),
         )
-        fallback_to_cart_by_item = (
-            fallback_hits.filter(pl.col("to_cart_count").cast(pl.Float64) > 0.0)
-            .unique(["item_id", "similar_item_id"])
-            .group_by("item_id")
-            .agg(pl.len().alias("__fallback_to_cart_hits"))
-        )
         per_item = (
             truth_totals.join(fallback_by_item, on="item_id", how="left")
-            .join(fallback_to_cart_by_item, on="item_id", how="left")
             .with_columns(
                 pl.col("__fallback_hit_count").fill_null(0),
                 pl.col("__fallback_relevance").fill_null(0.0),
-                pl.col("__fallback_to_cart_hits").fill_null(0),
             )
             .with_columns(
                 (pl.col("__fallback_hit_count") > 0)
@@ -390,27 +433,47 @@ def _fallback_quality_metrics(
                 .alias("__fallback_recall"),
             )
         )
+        fallback_hit_rate = _mean_or_none(per_item, "__fallback_hit")
+        fallback_recall = _mean_or_none(per_item, "__fallback_recall")
 
-    to_cart_frame = per_item.filter(pl.col("__to_cart_truth_count") > 0)
-    if to_cart_frame.is_empty():
+    fallback_to_cart_hits = (
+        to_cart_hits.filter(_fallback_source_filter()) if not to_cart_hits.is_empty() else to_cart_hits
+    )
+    if to_cart_truth_totals.is_empty():
         fallback_to_cart_hit_rate = None
         fallback_to_cart_recall = None
+    elif fallback_to_cart_hits.is_empty():
+        to_cart_frame = to_cart_truth_totals.with_columns(
+            pl.lit(0.0).alias("__fallback_to_cart_hit"),
+            pl.lit(0.0).alias("__fallback_to_cart_recall"),
+        )
+        fallback_to_cart_hit_rate = _mean_or_none(to_cart_frame, "__fallback_to_cart_hit")
+        fallback_to_cart_recall = _mean_or_none(to_cart_frame, "__fallback_to_cart_recall")
     else:
-        to_cart_frame = to_cart_frame.with_columns(
-            (pl.col("__fallback_to_cart_hits") > 0)
-            .cast(pl.Float64)
-            .alias("__fallback_to_cart_hit"),
-            (
-                pl.col("__fallback_to_cart_hits").cast(pl.Float64)
-                / pl.col("__to_cart_truth_count").cast(pl.Float64)
-            ).alias("__fallback_to_cart_recall"),
+        fallback_to_cart_by_item = (
+            fallback_to_cart_hits.unique(["item_id", "similar_item_id"])
+            .group_by("item_id")
+            .agg(pl.len().alias("__fallback_to_cart_hits"))
+        )
+        to_cart_frame = (
+            to_cart_truth_totals.join(fallback_to_cart_by_item, on="item_id", how="left")
+            .with_columns(pl.col("__fallback_to_cart_hits").fill_null(0))
+            .with_columns(
+                (pl.col("__fallback_to_cart_hits") > 0)
+                .cast(pl.Float64)
+                .alias("__fallback_to_cart_hit"),
+                (
+                    pl.col("__fallback_to_cart_hits").cast(pl.Float64)
+                    / pl.col("__to_cart_truth_count").cast(pl.Float64)
+                ).alias("__fallback_to_cart_recall"),
+            )
         )
         fallback_to_cart_hit_rate = _mean_or_none(to_cart_frame, "__fallback_to_cart_hit")
         fallback_to_cart_recall = _mean_or_none(to_cart_frame, "__fallback_to_cart_recall")
 
     return {
-        "fallback_hit_rate_at_k": _mean_or_none(per_item, "__fallback_hit"),
-        "fallback_recall_at_k": _mean_or_none(per_item, "__fallback_recall"),
+        "fallback_hit_rate_at_k": fallback_hit_rate,
+        "fallback_recall_at_k": fallback_recall,
         "fallback_to_cart_hit_rate_at_k": fallback_to_cart_hit_rate,
         "fallback_to_cart_recall_at_k": fallback_to_cart_recall,
     }
@@ -422,6 +485,8 @@ def compute_offline_metrics(
     *,
     top_k: int,
     context: dict[str, Any] | None = None,
+    ranking_relevant_action_types: Sequence[str] | None = None,
+    min_ranking_relevance: float | None = None,
 ) -> OfflineMetrics:
     """Compute offline ranking metrics for one evaluation slice."""
 
@@ -436,6 +501,16 @@ def compute_offline_metrics(
     top_recommendations = recommendations_frame.filter(pl.col("rank") <= top_k)
     fallback_shares = _fallback_shares(top_recommendations)
     popularity_bias = _popularity_bias(top_recommendations, context)
+    relevant_action_types = (
+        tuple(ranking_relevant_action_types)
+        if ranking_relevant_action_types is not None
+        else DEFAULT_RANKING_RELEVANT_ACTION_TYPES
+    )
+    resolved_min_relevance = (
+        DEFAULT_MIN_RANKING_RELEVANCE
+        if min_ranking_relevance is None
+        else float(min_ranking_relevance)
+    )
 
     if ground_truth_frame.is_empty():
         return OfflineMetrics(
@@ -458,25 +533,61 @@ def compute_offline_metrics(
             popularity_bias_at_k=popularity_bias,
         )
 
-    truth_totals = _truth_totals(ground_truth_frame)
-    hits = _recommendation_hits(top_recommendations, ground_truth_frame)
+    ranking_ground_truth = _filter_ranking_ground_truth(
+        ground_truth_frame,
+        relevant_action_types=relevant_action_types,
+        min_relevance=resolved_min_relevance,
+    )
+    to_cart_ground_truth = ground_truth_frame.filter(
+        pl.col("to_cart_count").cast(pl.Float64) > 0.0
+    )
+
+    full_truth_totals = _truth_totals(ground_truth_frame)
+    ranking_truth_totals = _truth_totals(ranking_ground_truth)
+    to_cart_truth_totals = _truth_totals(to_cart_ground_truth)
+    full_hits = _recommendation_hits(top_recommendations, ground_truth_frame)
+    ranking_hits = _recommendation_hits(top_recommendations, ranking_ground_truth)
+    to_cart_hits = _recommendation_hits(top_recommendations, to_cart_ground_truth)
     ranking_metrics = _ranking_metrics(
-        truth_totals=truth_totals,
+        truth_totals=ranking_truth_totals,
         top_recommendations=top_recommendations,
-        hits=hits,
+        hits=ranking_hits,
+        ground_truth=ranking_ground_truth,
+        top_k=top_k,
+    )
+    action_metrics = _ranking_metrics(
+        truth_totals=full_truth_totals,
+        top_recommendations=top_recommendations,
+        hits=full_hits,
         ground_truth=ground_truth_frame,
         top_k=top_k,
     )
-    fallback_quality = _fallback_quality_metrics(
-        truth_totals=truth_totals,
-        hits=hits,
+    to_cart_metrics = _ranking_metrics(
+        truth_totals=to_cart_truth_totals,
+        top_recommendations=top_recommendations,
+        hits=to_cart_hits,
+        ground_truth=to_cart_ground_truth,
+        top_k=top_k,
     )
+    fallback_quality = _fallback_quality_metrics(
+        truth_totals=ranking_truth_totals,
+        hits=ranking_hits,
+        to_cart_truth_totals=to_cart_truth_totals,
+        to_cart_hits=to_cart_hits,
+    )
+    ranking_evaluated_items = int(ranking_metrics["evaluated_items"] or 0)
 
     return OfflineMetrics(
         hit_rate_at_k=ranking_metrics["hit_rate_at_k"],
         recall_at_k=ranking_metrics["recall_at_k"],
         ndcg_at_k=ranking_metrics["ndcg_at_k"],
         mrr_at_k=ranking_metrics["mrr_at_k"],
+        strong_hit_rate_at_k=ranking_metrics["hit_rate_at_k"],
+        strong_recall_at_k=ranking_metrics["recall_at_k"],
+        strong_mrr_at_k=ranking_metrics["mrr_at_k"],
+        strong_ndcg_at_k=ranking_metrics["ndcg_at_k"],
+        to_cart_mrr_at_k=to_cart_metrics["mrr_at_k"],
+        to_cart_ndcg_at_k=to_cart_metrics["ndcg_at_k"],
         coverage_at_k=ranking_metrics["coverage_at_k"],
         popularity_bias_at_k=popularity_bias,
         fallback_share_at_k=fallback_shares["fallback_share_at_k"],
@@ -497,15 +608,19 @@ def compute_offline_metrics(
         fallback_to_cart_recall_at_k=fallback_quality[
             "fallback_to_cart_recall_at_k"
         ],
-        view_hit_rate_at_k=ranking_metrics["view_hit_rate_at_k"],
-        view_recall_at_k=ranking_metrics["view_recall_at_k"],
-        click_hit_rate_at_k=ranking_metrics["click_hit_rate_at_k"],
-        click_recall_at_k=ranking_metrics["click_recall_at_k"],
-        favorite_hit_rate_at_k=ranking_metrics["favorite_hit_rate_at_k"],
-        favorite_recall_at_k=ranking_metrics["favorite_recall_at_k"],
-        to_cart_hit_rate_at_k=ranking_metrics["to_cart_hit_rate_at_k"],
-        to_cart_recall_at_k=ranking_metrics["to_cart_recall_at_k"],
-        evaluated_items=int(ranking_metrics["evaluated_items"] or 0),
+        view_hit_rate_at_k=action_metrics["view_hit_rate_at_k"],
+        view_recall_at_k=action_metrics["view_recall_at_k"],
+        click_hit_rate_at_k=action_metrics["click_hit_rate_at_k"],
+        click_recall_at_k=action_metrics["click_recall_at_k"],
+        favorite_hit_rate_at_k=action_metrics["favorite_hit_rate_at_k"],
+        favorite_recall_at_k=action_metrics["favorite_recall_at_k"],
+        to_cart_hit_rate_at_k=action_metrics["to_cart_hit_rate_at_k"],
+        to_cart_recall_at_k=action_metrics["to_cart_recall_at_k"],
+        evaluated_items=ranking_evaluated_items,
         recommended_items=int(ranking_metrics["recommended_items"] or 0),
         ground_truth_pairs=ground_truth_frame.height,
+        all_evaluated_items=full_truth_totals.height,
+        ranking_evaluated_items=ranking_evaluated_items,
+        view_only_ground_truth_pairs=_view_only_ground_truth_pair_count(ground_truth_frame),
+        ranking_ground_truth_pairs=ranking_ground_truth.height,
     )

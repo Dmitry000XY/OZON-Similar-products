@@ -18,6 +18,7 @@ from ozon_similar_products.cli.run_full import (
     _config_with_top_k_override,
     _git_sha,
     _item_action_types,
+    _ranking_evaluation_options,
     validation_window,
 )
 from ozon_similar_products.evaluation import (
@@ -258,11 +259,14 @@ def execute_scoring_only_trial(
         row_counts=context.row_counts,
     )
     recommendations = pl.read_parquet(pipeline_result.detailed_recommendations_path)
+    ranking_relevant_action_types, min_ranking_relevance = _ranking_evaluation_options(config)
     metrics = compute_offline_metrics(
         recommendations=recommendations,
         ground_truth=context.ground_truth,
         top_k=int(top_k) if top_k is not None else int(pipeline_result.manifest["top_k"]),
         context={"item_popularity": context.item_popularity, "popularity_column": "events_count"},
+        ranking_relevant_action_types=ranking_relevant_action_types,
+        min_ranking_relevance=min_ranking_relevance,
     )
 
     evaluation_dir = run_dir / "evaluation"

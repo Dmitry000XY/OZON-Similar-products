@@ -341,7 +341,13 @@ def _supporting_metric_names(search_space: Mapping[str, Any]) -> list[str]:
         return [str(name) for name in objective["supporting_metrics"]]
     if isinstance(objective.get("tie_breakers"), list):
         return [str(name) for name in objective["tie_breakers"]]
-    return ["ndcg_at_k", "recall_at_k", "mrr_at_k", "coverage_at_k", "to_cart_recall_at_k"]
+    return [
+        "strong_ndcg_at_k",
+        "strong_recall_at_k",
+        "strong_mrr_at_k",
+        "coverage_at_k",
+        "to_cart_recall_at_k",
+    ]
 
 
 def _penalty_metric_names(search_space: Mapping[str, Any]) -> list[str]:
@@ -393,7 +399,7 @@ def _objective_sort_key(row: Mapping[str, Any], search_space: Mapping[str, Any])
     return (
         float(row.get("objective_score") or 0.0),
         _metric_value(row, _primary_metric_name(search_space)),
-        _metric_value(row, "ndcg_at_k"),
+        _metric_value(row, "strong_ndcg_at_k", default=_metric_value(row, "ndcg_at_k")),
         str(row.get("trial_id", "")),
     )
 

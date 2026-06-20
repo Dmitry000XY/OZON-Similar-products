@@ -1,9 +1,9 @@
 objective:
   primary_metric: to_cart_hit_rate_at_k
   supporting_metrics:
-    - ndcg_at_k
-    - recall_at_k
-    - mrr_at_k
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
     - coverage_at_k
     - to_cart_recall_at_k
   penalty_metrics:
