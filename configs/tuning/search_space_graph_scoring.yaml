@@ -1,0 +1,78 @@
+objective:
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - ndcg_at_k
+    - recall_at_k
+    - mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+    - fallback_global_share_at_k
+  constraints:
+    min_coverage_at_k: 0.01
+
+parameters:
+  graph.distance_decay.enabled:
+    type: choice
+    values: [false, true]
+
+  graph.distance_decay.strategy:
+    type: choice
+    values: [none, weight_table, exponential]
+
+  graph.distance_decay.max_distance:
+    type: choice
+    values: [null, 10]
+
+  graph.distance_decay.exponential.alpha:
+    type: choice
+    values: [0.25, 0.5, 1.0]
+
+  graph.distance_decay.exponential.min_weight:
+    type: choice
+    values: [0.01, 0.05]
+
+  graph.time_decay.enabled:
+    type: choice
+    values: [false, true]
+
+  graph.time_decay.strategy:
+    type: choice
+    values: [none, weight_table, exponential]
+
+  graph.time_decay.exponential.half_life_days:
+    type: choice
+    values: [3, 7, 14]
+
+  graph.time_decay.exponential.min_weight:
+    type: choice
+    values: [0.01, 0.05]
+
+  scoring.count_source:
+    type: choice
+    values: [raw, weighted]
+
+  scoring.count_transform.method:
+    type: choice
+    values: [log, sqrt, linear]
+
+  scoring.count_transform.smoothing:
+    type: choice
+    values: [0.5, 1.0, 2.0]
+
+  scoring.min_pair_count:
+    type: choice
+    values: [1, 2, 3]
+
+  scoring.min_unique_sessions:
+    type: choice
+    values: [1, 2, 3]
+
+  scoring.min_weighted_pair_count:
+    type: choice
+    values: [null, 0.5, 1.0]
+
+  scoring.min_score:
+    type: choice
+    values: [null, 0.01, 0.1]

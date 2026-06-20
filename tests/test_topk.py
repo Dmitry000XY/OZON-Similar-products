@@ -20,6 +20,11 @@ def _pair_scores(rows: list[dict]) -> pl.DataFrame:
             "click_count": pl.Int64,
             "favorite_count": pl.Int64,
             "to_cart_count": pl.Int64,
+            "weighted_pair_count": pl.Float64,
+            "weighted_view_count": pl.Float64,
+            "weighted_click_count": pl.Float64,
+            "weighted_favorite_count": pl.Float64,
+            "weighted_to_cart_count": pl.Float64,
             "unique_users": pl.Int64,
             "unique_sessions": pl.Int64,
         },
@@ -35,6 +40,11 @@ def _row(
     click_count: int = 0,
     favorite_count: int = 0,
     to_cart_count: int = 0,
+    weighted_pair_count: float | None = None,
+    weighted_view_count: float | None = None,
+    weighted_click_count: float | None = None,
+    weighted_favorite_count: float | None = None,
+    weighted_to_cart_count: float | None = None,
     unique_users: int = 1,
     unique_sessions: int = 1,
 ) -> dict:
@@ -48,6 +58,21 @@ def _row(
         "click_count": click_count,
         "favorite_count": favorite_count,
         "to_cart_count": to_cart_count,
+        "weighted_pair_count": float(
+            pair_count if weighted_pair_count is None else weighted_pair_count
+        ),
+        "weighted_view_count": float(
+            view_count if weighted_view_count is None else weighted_view_count
+        ),
+        "weighted_click_count": float(
+            click_count if weighted_click_count is None else weighted_click_count
+        ),
+        "weighted_favorite_count": float(
+            favorite_count if weighted_favorite_count is None else weighted_favorite_count
+        ),
+        "weighted_to_cart_count": float(
+            to_cart_count if weighted_to_cart_count is None else weighted_to_cart_count
+        ),
         "unique_users": unique_users,
         "unique_sessions": unique_sessions,
     }
@@ -219,6 +244,11 @@ def test_topk_selector_preserves_channel_diagnostic_columns() -> None:
         "click_count",
         "favorite_count",
         "to_cart_count",
+        "weighted_pair_count",
+        "weighted_view_count",
+        "weighted_click_count",
+        "weighted_favorite_count",
+        "weighted_to_cart_count",
         "unique_users",
         "unique_sessions",
     ]
@@ -229,6 +259,11 @@ def test_topk_selector_preserves_channel_diagnostic_columns() -> None:
             "click_count",
             "favorite_count",
             "to_cart_count",
+            "weighted_pair_count",
+            "weighted_view_count",
+            "weighted_click_count",
+            "weighted_favorite_count",
+            "weighted_to_cart_count",
             "unique_users",
             "unique_sessions",
         ]
@@ -239,6 +274,11 @@ def test_topk_selector_preserves_channel_diagnostic_columns() -> None:
             "click_count": 3,
             "favorite_count": 2,
             "to_cart_count": 1,
+            "weighted_pair_count": 10.0,
+            "weighted_view_count": 4.0,
+            "weighted_click_count": 3.0,
+            "weighted_favorite_count": 2.0,
+            "weighted_to_cart_count": 1.0,
             "unique_users": 5,
             "unique_sessions": 7,
         }
@@ -261,6 +301,11 @@ def test_topk_selector_handles_empty_input() -> None:
         "click_count",
         "favorite_count",
         "to_cart_count",
+        "weighted_pair_count",
+        "weighted_view_count",
+        "weighted_click_count",
+        "weighted_favorite_count",
+        "weighted_to_cart_count",
         "unique_users",
         "unique_sessions",
     ]
