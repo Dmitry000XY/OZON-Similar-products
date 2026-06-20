@@ -79,7 +79,7 @@ def _weighted_sum_expr(signal_type: str, output_column: str) -> pl.Expr:
 
 
 def _max_distance_filter(distance_decay: DistanceDecayConfig) -> pl.Expr:
-    if distance_decay.max_distance is None:
+    if not distance_decay.enabled or distance_decay.max_distance is None:
         return pl.lit(True)
     return pl.col("position_distance") <= distance_decay.max_distance
 
