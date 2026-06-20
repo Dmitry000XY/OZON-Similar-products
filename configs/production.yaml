@@ -1,8 +1,8 @@
 pipeline:
-  session_timeout_minutes: 15
+  session_timeout_minutes: 20
   max_items_per_session: 50
-  top_k: 20
-  lookback_days: 4
+  top_k: 50
+  lookback_days: 1
 
 events:
   item_action_types:
@@ -22,20 +22,20 @@ item_pair_builder:
 scoring:
   method: calibrated_multichannel
   business_weights:
-    view: 2.0
-    click: 5.5
-    favorite: 4.0
-    to_cart: 5.0
-  beta: 0.75
+    view: 0.25
+    click: 1.0
+    favorite: 1.0
+    to_cart: 1.0
+  beta: 0.25
   reference_action_type: view
   max_frequency_boost:
     view: 1.0
     click: 10.0
     favorite: 15.0
     to_cart: 30.0
-  min_pair_count: 1
+  min_pair_count: 2
   min_unique_users: 1
-  min_unique_sessions: 1
+  min_unique_sessions: 3
   calibration:
     action_shares_used_for_calibration: null
     calibration_start: null
@@ -44,7 +44,7 @@ scoring:
   popularity_normalization:
     popularity_column: unique_users
     smoothing: 1.0
-    power: 0.5
+    power: 0.75
 
 artifacts:
   events_clean_dir: data/processed/events_clean
@@ -68,19 +68,19 @@ evaluation:
 
 business:
   fallback:
-    enabled: false
-    top_k: 20
+    enabled: true
+    top_k: 50
     candidate_pool_size: 200
-    global_candidate_pool_size: 200
+    global_candidate_pool_size: 500
     metadata_candidate_pool_size: 200
-    min_item_events: 1
+    min_item_events: 2
     enable_category_type: true
     enable_category: true
     enable_type: true
-    enable_brand: false
+    enable_brand: true
     enable_global: true
     include_cold_start_items: true
     include_catalog_only_sources: false
 
 topk:
-  top_k: 20
+  top_k: 50
