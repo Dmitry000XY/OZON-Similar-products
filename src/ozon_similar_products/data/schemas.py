@@ -19,6 +19,24 @@ ITEM_SIGNAL_TYPES = [
     "to_cart",
 ]
 
+RAW_COUNT_COLUMNS = [
+    "pair_count",
+    "view_count",
+    "click_count",
+    "favorite_count",
+    "to_cart_count",
+]
+
+WEIGHTED_COUNT_COLUMNS = [
+    "weighted_pair_count",
+    "weighted_view_count",
+    "weighted_click_count",
+    "weighted_favorite_count",
+    "weighted_to_cart_count",
+]
+
+WEIGHTED_COUNT_BY_RAW_COLUMN = dict(zip(RAW_COUNT_COLUMNS, WEIGHTED_COUNT_COLUMNS))
+
 CLEAN_EVENTS_COLUMNS = [
     "user_id",
     "event_date",
@@ -76,11 +94,8 @@ DAILY_PAIR_COUNTS_COLUMNS = [
     "pair_date",
     "item_id",
     "similar_item_id",
-    "pair_count",
-    "view_count",
-    "click_count",
-    "favorite_count",
-    "to_cart_count",
+    *RAW_COUNT_COLUMNS,
+    *WEIGHTED_COUNT_COLUMNS,
 ]
 
 DAILY_PAIR_USER_KEYS_COLUMNS = [
@@ -101,11 +116,8 @@ DAILY_PAIR_SESSION_KEYS_COLUMNS = [
 PAIR_AGGREGATES_COLUMNS = [
     "item_id",
     "similar_item_id",
-    "pair_count",
-    "view_count",
-    "click_count",
-    "favorite_count",
-    "to_cart_count",
+    *RAW_COUNT_COLUMNS,
+    *WEIGHTED_COUNT_COLUMNS,
     "unique_users",
     "unique_sessions",
     "window_start",
@@ -116,11 +128,8 @@ PAIR_SCORES_COLUMNS = [
     "item_id",
     "similar_item_id",
     "score",
-    "pair_count",
-    "view_count",
-    "click_count",
-    "favorite_count",
-    "to_cart_count",
+    *RAW_COUNT_COLUMNS,
+    *WEIGHTED_COUNT_COLUMNS,
     "unique_users",
     "unique_sessions",
 ]
