@@ -19,8 +19,41 @@ item_pair_builder:
     favorite: 3
     to_cart: 4
 
+graph:
+  distance_decay:
+    enabled: false
+    strategy: none
+    max_distance: null
+    weight_by_distance:
+      1: 1.0
+      2: 0.8
+      3: 0.6
+      5: 0.3
+      default: 0.1
+    exponential:
+      alpha: 0.5
+      min_weight: 0.05
+
+  time_decay:
+    enabled: false
+    strategy: none
+    weight_by_age_days:
+      0: 1.0
+      1: 0.9
+      3: 0.75
+      7: 0.5
+      14: 0.3
+      default: 0.2
+    exponential:
+      half_life_days: 7
+      min_weight: 0.05
+
 scoring:
   method: calibrated_multichannel
+  count_source: raw
+  count_transform:
+    method: log
+    smoothing: 1.0
   business_weights:
     view: 0.25
     click: 1.0
@@ -36,6 +69,8 @@ scoring:
   min_pair_count: 2
   min_unique_users: 1
   min_unique_sessions: 3
+  min_weighted_pair_count: null
+  min_score: null
   calibration:
     action_shares_used_for_calibration: null
     calibration_start: null

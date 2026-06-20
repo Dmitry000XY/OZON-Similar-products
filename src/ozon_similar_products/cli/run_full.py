@@ -31,6 +31,9 @@ from ozon_similar_products.evaluation.validation_cache import (
     load_or_build_validation_cache,
     validation_cache_metadata,
 )
+from ozon_similar_products.evaluation.validation_semantics import (
+    validation_ground_truth_config,
+)
 from ozon_similar_products.output.writers import RecommendationWriter
 from ozon_similar_products.pipeline.run_pipeline import PipelineRunResult, run_pipeline
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
@@ -219,11 +222,12 @@ def _build_validation_pair_counts(
 ) -> pl.DataFrame:
     """Build compact validation pair counts day by day."""
     data_config = load_configs(project_root=PROJECT_ROOT)
-    action_types = _item_action_types(config)
+    validation_config = validation_ground_truth_config(config)
+    action_types = _item_action_types(validation_config)
 
     cleaner = EventCleaner(item_action_types=action_types)
-    session_builder = SessionBuilder.from_config(dict(config))
-    pair_builder = ItemPairBuilder.from_config(dict(config))
+    session_builder = SessionBuilder.from_config(validation_config)
+    pair_builder = ItemPairBuilder.from_config(validation_config)
 
     count_frames: list[pl.DataFrame] = []
     missing_dates: list[str] = []
@@ -276,6 +280,11 @@ def _build_validation_pair_counts(
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])

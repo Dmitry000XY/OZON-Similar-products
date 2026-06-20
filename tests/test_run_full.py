@@ -9,10 +9,15 @@ import polars as pl
 import pytest
 
 from ozon_similar_products.cli import run_full
+from ozon_similar_products.data import schemas
+from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
 from ozon_similar_products.evaluation.validation_cache import (
     load_or_build_validation_cache,
     validation_cache_metadata,
+)
+from ozon_similar_products.evaluation.validation_semantics import (
+    validation_ground_truth_config,
 )
 
 
@@ -31,6 +36,36 @@ def _validation_pair_counts_frame(pair_date: date) -> pl.DataFrame:
     )
 
 
+def _graph_tuning_config(
+    *,
+    distance_enabled: bool,
+    distance_strategy: str,
+    max_distance: int | None,
+    time_enabled: bool,
+    time_strategy: str,
+) -> dict[str, object]:
+    return {
+        "pipeline": {"session_timeout_minutes": 20, "max_items_per_session": 50},
+        "events": {"item_action_types": ["view", "click", "favorite", "to_cart"]},
+        "item_pair_builder": {
+            "signal_priority": {"view": 1, "click": 2, "favorite": 3, "to_cart": 4}
+        },
+        "graph": {
+            "distance_decay": {
+                "enabled": distance_enabled,
+                "strategy": distance_strategy,
+                "max_distance": max_distance,
+                "exponential": {"alpha": 1.0, "min_weight": 0.05},
+            },
+            "time_decay": {
+                "enabled": time_enabled,
+                "strategy": time_strategy,
+                "exponential": {"half_life_days": 7, "min_weight": 0.05},
+            },
+        },
+    }
+
+
 def test_validation_window_is_computed_from_validation_days() -> None:
     start, end = run_full.validation_window(date(2024, 4, 23), 7)
 
@@ -41,6 +76,63 @@ def test_validation_window_is_computed_from_validation_days() -> None:
 def test_validation_window_rejects_non_positive_days() -> None:
     with pytest.raises(ValueError, match="validation_days"):
         run_full.validation_window(date(2024, 4, 23), 0)
+
+
+def test_validation_ground_truth_config_disables_graph_decay() -> None:
+    config = _graph_tuning_config(
+        distance_enabled=True,
+        distance_strategy="exponential",
+        max_distance=1,
+        time_enabled=True,
+        time_strategy="exponential",
+    )
+
+    validation_config = validation_ground_truth_config(config)
+
+    assert validation_config["graph"]["distance_decay"]["enabled"] is False
+    assert validation_config["graph"]["distance_decay"]["strategy"] == "none"
+    assert validation_config["graph"]["distance_decay"]["max_distance"] is None
+    assert validation_config["graph"]["time_decay"]["enabled"] is False
+    assert validation_config["graph"]["time_decay"]["strategy"] == "none"
+
+
+def test_validation_cache_metadata_ignores_train_graph_decay() -> None:
+    config_a = _graph_tuning_config(
+        distance_enabled=False,
+        distance_strategy="none",
+        max_distance=None,
+        time_enabled=False,
+        time_strategy="none",
+    )
+    config_b = _graph_tuning_config(
+        distance_enabled=True,
+        distance_strategy="weight_table",
+        max_distance=1,
+        time_enabled=True,
+        time_strategy="exponential",
+    )
+
+    metadata_a = validation_cache_metadata(
+        config=config_a,
+        validation_start_date=date(2024, 4, 24),
+        validation_end_date=date(2024, 4, 24),
+        relevance_mode="binary",
+        relevance_weights=None,
+        item_action_types=["view", "click", "favorite", "to_cart"],
+        git_sha="sha",
+    )
+    metadata_b = validation_cache_metadata(
+        config=config_b,
+        validation_start_date=date(2024, 4, 24),
+        validation_end_date=date(2024, 4, 24),
+        relevance_mode="binary",
+        relevance_weights=None,
+        item_action_types=["view", "click", "favorite", "to_cart"],
+        git_sha="sha",
+    )
+
+    assert metadata_a["config_hash"] == metadata_b["config_hash"]
+    assert metadata_a["validation_pair_semantics"] == metadata_b["validation_pair_semantics"]
 
 
 def test_publish_latest_full_run_uses_flat_latest_layout(tmp_path: Path) -> None:
@@ -162,6 +254,96 @@ def test_validation_cache_creates_reuses_and_invalidates(tmp_path: Path) -> None
     assert (first.cache_dir / "validation_pair_counts.parquet").exists()
     assert (first.cache_dir / "ground_truth.parquet").exists()
     assert (first.cache_dir / "metadata.json").exists()
+
+
+def test_build_validation_pair_counts_uses_stable_validation_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _graph_tuning_config(
+        distance_enabled=True,
+        distance_strategy="exponential",
+        max_distance=1,
+        time_enabled=True,
+        time_strategy="exponential",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(run_full, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(run_full, "load_configs", lambda project_root: {"project_root": project_root})
+    monkeypatch.setattr(
+        run_full,
+        "load_events",
+        lambda **_: pl.DataFrame(
+            {
+                "user_id": [1],
+                "event_date": [date(2024, 4, 24)],
+                "timestamp": [date(2024, 4, 24)],
+                "action_type": ["view"],
+                "item_id": [1],
+                "search_query": [None],
+                "widget_name": [None],
+            }
+        ),
+    )
+
+    class FakeCleaner:
+        def __init__(self, item_action_types: list[str]) -> None:
+            self.item_action_types = item_action_types
+
+        def transform_day(self, raw_day: pl.DataFrame) -> pl.DataFrame:
+            return raw_day
+
+    class FakeSessionBuilder:
+        @classmethod
+        def from_config(cls, cfg: dict[str, object]) -> "FakeSessionBuilder":
+            captured["session_config"] = cfg
+            return cls()
+
+        def transform_day(self, clean_day: pl.DataFrame) -> pl.DataFrame:
+            return pl.DataFrame(
+                {
+                    "user_id": [1],
+                    "session_index": [1],
+                    "session_start_date": [date(2024, 4, 24)],
+                    "event_date": [date(2024, 4, 24)],
+                    "timestamp": [date(2024, 4, 24)],
+                    "action_type": ["view"],
+                    "item_id": [1],
+                }
+            )
+
+    class FakePairBuilder:
+        @classmethod
+        def from_config(cls, cfg: dict[str, object]) -> "FakePairBuilder":
+            captured["pair_config"] = cfg
+            return cls()
+
+        def build_daily_pair_stats(self, sessions_day: pl.DataFrame) -> object:
+            return type(
+                "Stats",
+                (),
+                {"counts": empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)},
+            )()
+
+    monkeypatch.setattr(run_full, "EventCleaner", FakeCleaner)
+    monkeypatch.setattr(run_full, "SessionBuilder", FakeSessionBuilder)
+    monkeypatch.setattr(run_full, "ItemPairBuilder", FakePairBuilder)
+
+    run_full._build_validation_pair_counts(
+        config=config,
+        validation_start_date=date(2024, 4, 24),
+        validation_end_date=date(2024, 4, 24),
+        logger=logging.getLogger(__name__),
+    )
+
+    pair_config = captured["pair_config"]
+    assert isinstance(pair_config, dict)
+    assert pair_config["graph"]["distance_decay"]["enabled"] is False
+    assert pair_config["graph"]["distance_decay"]["strategy"] == "none"
+    assert pair_config["graph"]["distance_decay"]["max_distance"] is None
+    assert pair_config["graph"]["time_decay"]["enabled"] is False
+    assert pair_config["graph"]["time_decay"]["strategy"] == "none"
 
 
 def test_execute_full_run_writes_debug_artifacts_only_when_requested(

@@ -9,6 +9,7 @@
 - [Calibrated multi-channel веса](calibrated_multichannel_weights.md) — подробное решение по весам `view`, `click`, `favorite`, `to_cart`, частотной калибровке и тому, почему веса применяются только в `CoVisitationScorer`.
 - [ItemPairBuilder](item_pair_builder.md) — как из сессий строятся directed item-item pairs, почему `signal_type` равен target action type, и почему приоритеты сигналов живут в config.
 - [PairAggregator](aggregate_pairs.md) — как дневные пары агрегируются за rolling window и почему агрегатор считает только channel counts, без весов и score.
+- [Graph scoring improvements](graph_scoring_improvements.md) — distance decay, time decay, weighted counts, weighted scoring и full graph/scoring tuning.
 - [ItemPopularityBuilder](item_popularity_builder.md) — как считаются факты популярности товаров и статистика action type для будущей калибровки scorer-а.
 - [Тюнинг и оценка fallback](fallback_tuning_evaluation.md) — fallback-метрики, пространство перебора параметров и логика целевой функции.
 - [Работа с данными](data_io.md) — как распаковать архивы и читать parquet через data readers.

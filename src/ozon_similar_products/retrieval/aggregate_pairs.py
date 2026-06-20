@@ -1,9 +1,10 @@
 """Aggregate daily multichannel item pairs over a rolling window."""
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -16,6 +17,7 @@ from ozon_similar_products.data.validation import (
     validate_daily_pair_user_keys,
     validate_pair_aggregates,
 )
+from ozon_similar_products.retrieval.decay import TimeDecayConfig
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
@@ -30,6 +32,27 @@ def _as_lazy(frame: FrameLike) -> pl.LazyFrame:
 def _scan_parquet_paths(paths: Sequence[str | Path]) -> pl.LazyFrame:
     """Scan parquet paths with normalized POSIX path strings."""
     return pl.scan_parquet([Path(path).as_posix() for path in paths])
+
+
+def _lazy_columns(frame: pl.LazyFrame) -> set[str]:
+    return set(frame.collect_schema().names())
+
+
+def _with_distance_weight(pairs: pl.LazyFrame) -> pl.LazyFrame:
+    if "distance_weight" in _lazy_columns(pairs):
+        return pairs.with_columns(pl.col("distance_weight").cast(pl.Float64))
+    return pairs.with_columns(pl.lit(1.0).alias("distance_weight"))
+
+
+def _with_weighted_count_columns(counts: pl.LazyFrame) -> pl.LazyFrame:
+    columns = _lazy_columns(counts)
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return counts.with_columns(expressions)
 
 
 def _empty_pair_aggregates() -> pl.DataFrame:
@@ -58,14 +81,26 @@ def _aggregate_pairs_lazy(
         pairs_window: pl.LazyFrame,
         window_start: str,
         window_end: str,
+        time_decay: TimeDecayConfig,
 ) -> pl.DataFrame:
     """Aggregate a lazy daily-pairs scan into pair aggregates."""
     start_date, end_date = _validate_window_bounds(window_start, window_end)
 
     filtered_pairs = (
-        pairs_window
+        _with_distance_weight(pairs_window)
         .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
         .filter(pl.col("pair_date").is_between(start_date, end_date))
+        .with_columns(
+            (pl.lit(end_date).cast(pl.Date).cast(pl.Int32) - pl.col("pair_date").cast(pl.Int32))
+            .cast(pl.Int64)
+            .alias("__age_days")
+        )
+        .with_columns(
+            time_decay.weight_expr(pl.col("__age_days")).cast(pl.Float64).alias("__time_weight")
+        )
+        .with_columns(
+            (pl.col("distance_weight") * pl.col("__time_weight")).alias("__weighted_count")
+        )
     )
 
     aggregates = (
@@ -76,6 +111,27 @@ def _aggregate_pairs_lazy(
             (pl.col("signal_type") == "click").sum().alias("click_count"),
             (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
             (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
+            pl.col("__weighted_count").sum().alias("weighted_pair_count"),
+            pl.when(pl.col("signal_type") == "view")
+            .then(pl.col("__weighted_count"))
+            .otherwise(0.0)
+            .sum()
+            .alias("weighted_view_count"),
+            pl.when(pl.col("signal_type") == "click")
+            .then(pl.col("__weighted_count"))
+            .otherwise(0.0)
+            .sum()
+            .alias("weighted_click_count"),
+            pl.when(pl.col("signal_type") == "favorite")
+            .then(pl.col("__weighted_count"))
+            .otherwise(0.0)
+            .sum()
+            .alias("weighted_favorite_count"),
+            pl.when(pl.col("signal_type") == "to_cart")
+            .then(pl.col("__weighted_count"))
+            .otherwise(0.0)
+            .sum()
+            .alias("weighted_to_cart_count"),
             pl.col("user_id").n_unique().alias("unique_users"),
             pl.struct(["user_id", "session_index"]).n_unique().alias("unique_sessions"),
         )
@@ -101,14 +157,23 @@ def _aggregate_daily_stats_lazy(
         session_keys_scan: pl.LazyFrame,
         window_start: str,
         window_end: str,
+        time_decay: TimeDecayConfig,
 ) -> pl.DataFrame:
     """Aggregate compact daily pair stats into pair aggregates."""
     start_date, end_date = _validate_window_bounds(window_start, window_end)
 
     filtered_counts = (
-        counts_scan
+        _with_weighted_count_columns(counts_scan)
         .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
         .filter(pl.col("pair_date").is_between(start_date, end_date))
+        .with_columns(
+            (pl.lit(end_date).cast(pl.Date).cast(pl.Int32) - pl.col("pair_date").cast(pl.Int32))
+            .cast(pl.Int64)
+            .alias("__age_days")
+        )
+        .with_columns(
+            time_decay.weight_expr(pl.col("__age_days")).cast(pl.Float64).alias("__time_weight")
+        )
     )
     filtered_user_keys = (
         user_keys_scan
@@ -129,6 +194,21 @@ def _aggregate_daily_stats_lazy(
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            (pl.col("weighted_pair_count") * pl.col("__time_weight"))
+            .sum()
+            .alias("weighted_pair_count"),
+            (pl.col("weighted_view_count") * pl.col("__time_weight"))
+            .sum()
+            .alias("weighted_view_count"),
+            (pl.col("weighted_click_count") * pl.col("__time_weight"))
+            .sum()
+            .alias("weighted_click_count"),
+            (pl.col("weighted_favorite_count") * pl.col("__time_weight"))
+            .sum()
+            .alias("weighted_favorite_count"),
+            (pl.col("weighted_to_cart_count") * pl.col("__time_weight"))
+            .sum()
+            .alias("weighted_to_cart_count"),
         )
     )
 
@@ -173,8 +253,14 @@ class PairAggregator:
     the scorer to change calibration without rebuilding pairs.
     """
 
-    @staticmethod
+    time_decay: TimeDecayConfig = field(default_factory=TimeDecayConfig)
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "PairAggregator":
+        return cls(time_decay=TimeDecayConfig.from_config(config))
+
     def aggregate_window(
+            self,
             daily_pairs: list[FrameLike],
             window_start: str,
             window_end: str,
@@ -195,10 +281,11 @@ class PairAggregator:
             pairs_window=pairs_window,
             window_start=window_start,
             window_end=window_end,
+            time_decay=self.time_decay,
         )
 
-    @staticmethod
     def aggregate_window_from_paths(
+            self,
             daily_pair_paths: Sequence[str | Path],
             window_start: str,
             window_end: str,
@@ -224,10 +311,11 @@ class PairAggregator:
             pairs_window=pairs_scan,
             window_start=window_start,
             window_end=window_end,
+            time_decay=self.time_decay,
         )
 
-    @staticmethod
     def aggregate_window_from_daily_stats_paths(
+            self,
             count_paths: Sequence[str | Path],
             user_key_paths: Sequence[str | Path],
             session_key_paths: Sequence[str | Path],
@@ -257,6 +345,7 @@ class PairAggregator:
         user_keys_scan = _scan_parquet_paths(user_key_paths)
         session_keys_scan = _scan_parquet_paths(session_key_paths)
 
+        counts_scan = _with_weighted_count_columns(counts_scan)
         validate_daily_pair_counts(counts_scan)
         validate_daily_pair_user_keys(user_keys_scan)
         validate_daily_pair_session_keys(session_keys_scan)
@@ -267,4 +356,5 @@ class PairAggregator:
             session_keys_scan=session_keys_scan,
             window_start=window_start,
             window_end=window_end,
+            time_decay=self.time_decay,
         )
