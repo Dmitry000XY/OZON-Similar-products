@@ -170,8 +170,9 @@ def validation_cache_metadata(
     """Build metadata for validation cache invalidation."""
     pipeline_config = config.get("pipeline", {})
     pair_builder_config = config.get("item_pair_builder", {})
+    graph_config = config.get("graph", {})
     metadata_config = {
-        "cache_schema_version": 2,
+        "cache_schema_version": 3,
         "validation_start_date": validation_start_date.isoformat(),
         "validation_end_date": validation_end_date.isoformat(),
         "validation_data_identity": validation_data_identity(
@@ -191,6 +192,7 @@ def validation_cache_metadata(
             else None
         ),
         "item_pair_builder": dict(pair_builder_config) if isinstance(pair_builder_config, Mapping) else {},
+        "graph": dict(graph_config) if isinstance(graph_config, Mapping) else {},
         "relevance_mode": relevance_mode,
         "relevance_weights": dict(relevance_weights) if isinstance(relevance_weights, Mapping) else None,
     }

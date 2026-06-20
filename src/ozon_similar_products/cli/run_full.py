@@ -276,6 +276,11 @@ def _build_validation_pair_counts(
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])

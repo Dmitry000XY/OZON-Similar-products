@@ -15,6 +15,7 @@ from ozon_similar_products.data.validation import (
     validate_daily_pair_user_keys,
     validate_sessions,
 )
+from ozon_similar_products.retrieval.decay import DistanceDecayConfig
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
@@ -67,6 +68,22 @@ def _priority_expr(priority: Mapping[str, int]) -> pl.Expr:
     return expr.cast(pl.Int64).alias("signal_priority")
 
 
+def _weighted_sum_expr(signal_type: str, output_column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col("signal_type") == signal_type)
+        .then(pl.col("distance_weight"))
+        .otherwise(0.0)
+        .sum()
+        .alias(output_column)
+    )
+
+
+def _max_distance_filter(distance_decay: DistanceDecayConfig) -> pl.Expr:
+    if distance_decay.max_distance is None:
+        return pl.lit(True)
+    return pl.col("position_distance") <= distance_decay.max_distance
+
+
 @dataclass(frozen=True)
 class DailyPairStats:
     """Compact daily pair artifacts derived from raw directed pair rows."""
@@ -97,6 +114,7 @@ class ItemPairBuilder:
         default_factory=lambda: tuple(schemas.ITEM_SIGNAL_TYPES)
     )
     signal_priority: Mapping[str, int] | None = None
+    distance_decay: DistanceDecayConfig = field(default_factory=DistanceDecayConfig)
 
     def __post_init__(self) -> None:
         if self.max_items_per_session < 2:
@@ -152,6 +170,7 @@ class ItemPairBuilder:
             max_items_per_session=int(pipeline_config.get("max_items_per_session", 50)),
             item_action_types=item_action_types,
             signal_priority=signal_priority,
+            distance_decay=DistanceDecayConfig.from_config(config),
         )
 
     def transform_day(self, sessions: FrameLike) -> pl.DataFrame:
@@ -185,6 +204,20 @@ class ItemPairBuilder:
                 pl.col("item_action_type").alias("source_action_type"),
                 pl.col("item_action_type_similar").alias("target_action_type"),
                 pl.col("item_action_type_similar").alias("signal_type"),
+                pl.col("item_position").alias("source_position"),
+                pl.col("item_position_similar").alias("target_position"),
+            )
+            .with_columns(
+                (pl.col("target_position") - pl.col("source_position"))
+                .abs()
+                .cast(pl.Int64)
+                .alias("position_distance")
+            )
+            .filter(_max_distance_filter(self.distance_decay))
+            .with_columns(
+                self.distance_decay.weight_expr(pl.col("position_distance"))
+                .cast(pl.Float64)
+                .alias("distance_weight")
             )
             .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
             .collect()
@@ -226,6 +259,11 @@ class ItemPairBuilder:
                 (pl.col("signal_type") == "click").sum().alias("click_count"),
                 (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
                 (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
+                pl.col("distance_weight").sum().alias("weighted_pair_count"),
+                _weighted_sum_expr("view", "weighted_view_count"),
+                _weighted_sum_expr("click", "weighted_click_count"),
+                _weighted_sum_expr("favorite", "weighted_favorite_count"),
+                _weighted_sum_expr("to_cart", "weighted_to_cart_count"),
             )
             .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
             .sort(["pair_date", "item_id", "similar_item_id"])
@@ -264,12 +302,15 @@ class ItemPairBuilder:
                 "session_index",
                 "session_start_date",
                 "event_date",
+                "timestamp",
                 "item_id",
                 "action_type",
             )
             .filter(pl.col("item_id").is_not_null())
             .filter(pl.col("action_type").is_in(list(self.item_action_types)))
             .with_columns(_priority_expr(priority))
+            .sort(["user_id", "session_index", "timestamp", "item_id", "action_type"])
+            .with_row_index("__event_position")
             .group_by(["user_id", "session_index", "session_start_date", "item_id"])
             .agg(
                 pl.col("action_type")
@@ -277,6 +318,7 @@ class ItemPairBuilder:
                 .first()
                 .alias("item_action_type"),
                 pl.col("signal_priority").max().alias("item_signal_priority"),
+                pl.col("__event_position").min().cast(pl.Int64).alias("item_position"),
             )
         )
 

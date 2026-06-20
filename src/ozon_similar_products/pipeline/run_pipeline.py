@@ -332,6 +332,8 @@ def _merge_daily_pair_counts(
         existing: pl.DataFrame,
         new: pl.DataFrame,
 ) -> pl.DataFrame:
+    existing = _with_weighted_count_columns(existing)
+    new = _with_weighted_count_columns(new)
     merged = pl.concat([existing, new], how="vertical")
     if merged.is_empty():
         return empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
@@ -344,10 +346,25 @@ def _merge_daily_pair_counts(
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])
     )
+
+
+def _with_weighted_count_columns(frame: pl.DataFrame) -> pl.DataFrame:
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in frame.columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return frame.with_columns(expressions)
 
 
 def _merge_daily_pair_keys(
@@ -760,6 +777,13 @@ def _action_shares_from_distribution(
     return action_shares
 
 
+def _pair_aggregator_from_config(config: Mapping[str, Any]) -> Any:
+    from_config = getattr(PairAggregator, "from_config", None)
+    if callable(from_config):
+        return from_config(config)
+    return PairAggregator()
+
+
 def _run_id(train_until_date: str, lookback_days: int) -> str:
     return f"run_{train_until_date}_lb{lookback_days}"
 
@@ -934,7 +958,7 @@ def run_pipeline(
     )
 
     logger.info("[run_pipeline] aggregate pairs from compact daily stats")
-    pair_aggregates = PairAggregator().aggregate_window_from_daily_stats_paths(
+    pair_aggregates = _pair_aggregator_from_config(config).aggregate_window_from_daily_stats_paths(
         count_paths=daily_pair_stats_paths.count_paths,
         user_key_paths=daily_pair_stats_paths.user_key_paths,
         session_key_paths=daily_pair_stats_paths.session_key_paths,

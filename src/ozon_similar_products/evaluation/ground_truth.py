@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 import polars as pl
 
+from ozon_similar_products.data import schemas
 from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.data.validation import validate_daily_pair_counts
 
@@ -35,6 +36,23 @@ def _collect_if_lazy(frame: FrameLike) -> pl.DataFrame:
     if isinstance(frame, pl.LazyFrame):
         return frame.collect()
     return frame
+
+
+def _frame_columns(frame: FrameLike) -> set[str]:
+    if isinstance(frame, pl.LazyFrame):
+        return set(frame.collect_schema().names())
+    return set(frame.columns)
+
+
+def _with_weighted_count_columns(frame: FrameLike) -> pl.LazyFrame:
+    columns = _frame_columns(frame)
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return (frame if isinstance(frame, pl.LazyFrame) else frame.lazy()).with_columns(expressions)
 
 
 def _empty_ground_truth() -> pl.DataFrame:
@@ -96,6 +114,7 @@ def build_ground_truth_from_daily_pair_counts(
     session self-join.
     """
 
+    daily_pair_counts = _with_weighted_count_columns(daily_pair_counts)
     validate_daily_pair_counts(daily_pair_counts)
 
     if min_relevance < 0.0:
