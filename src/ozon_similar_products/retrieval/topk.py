@@ -20,6 +20,11 @@ _DIAGNOSTIC_COLUMNS = [
     "click_count",
     "favorite_count",
     "to_cart_count",
+    "weighted_pair_count",
+    "weighted_view_count",
+    "weighted_click_count",
+    "weighted_favorite_count",
+    "weighted_to_cart_count",
     "unique_users",
     "unique_sessions",
 ]
@@ -96,6 +101,7 @@ class TopKSelector:
             DataFrame with the recommendations contract. Diagnostic pair-score
             columns are preserved when they are present in the input.
         """
+        pair_scores = _with_weighted_count_columns(pair_scores)
         validate_pair_scores(pair_scores)
 
         ranked = (
@@ -169,6 +175,17 @@ def _frame_columns(frame: FrameLike) -> list[str]:
     if isinstance(frame, pl.LazyFrame):
         return list(frame.collect_schema().names())
     return list(frame.columns)
+
+
+def _with_weighted_count_columns(frame: FrameLike) -> pl.LazyFrame:
+    input_columns = set(_frame_columns(frame))
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in input_columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return _as_lazy(frame).with_columns(expressions)
 
 
 def _output_columns(pair_scores: FrameLike) -> list[str]:
