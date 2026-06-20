@@ -1,6 +1,7 @@
 """Tests for full run orchestration helpers."""
 
 import json
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -9,6 +10,25 @@ import pytest
 
 from ozon_similar_products.cli import run_full
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
+from ozon_similar_products.evaluation.validation_cache import (
+    load_or_build_validation_cache,
+    validation_cache_metadata,
+)
+
+
+def _validation_pair_counts_frame(pair_date: date) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "pair_date": [pair_date],
+            "item_id": [1],
+            "similar_item_id": [2],
+            "pair_count": [1],
+            "view_count": [0],
+            "click_count": [0],
+            "favorite_count": [0],
+            "to_cart_count": [1],
+        }
+    )
 
 
 def test_validation_window_is_computed_from_validation_days() -> None:
@@ -28,9 +48,9 @@ def test_publish_latest_full_run_uses_flat_latest_layout(tmp_path: Path) -> None
     (run_dir / "recommendations").mkdir(parents=True)
     (run_dir / "evaluation").mkdir()
 
-    pl.DataFrame({"item_id": [1], "similar_item_id": [2], "score": [1.0], "rank": [1], "source": ["behavioral"]}).write_parquet(
-        run_dir / "recommendations" / "detailed.parquet"
-    )
+    pl.DataFrame(
+        {"item_id": [1], "similar_item_id": [2], "score": [1.0], "rank": [1], "source": ["behavioral"]}
+    ).write_parquet(run_dir / "recommendations" / "detailed.parquet")
     pl.DataFrame(
         {
             "item_id": [1],
@@ -86,6 +106,64 @@ def test_find_item_popularity_artifact_requires_exact_window(tmp_path: Path) -> 
     assert actual is None
 
 
+def test_validation_cache_creates_reuses_and_invalidates(tmp_path: Path) -> None:
+    config = {
+        "events": {"item_action_types": ["view", "to_cart"]},
+        "pipeline": {"session_timeout_minutes": 15, "max_items_per_session": 50},
+        "item_pair_builder": {"signal_priority": {"view": 1, "to_cart": 2}},
+    }
+    build_calls = 0
+
+    def fake_pair_counts() -> pl.DataFrame:
+        nonlocal build_calls
+        build_calls += 1
+        return _validation_pair_counts_frame(date(2024, 4, 24))
+
+    def make_metadata(start_date: date) -> dict[str, object]:
+        return validation_cache_metadata(
+            config=config,
+            validation_start_date=start_date,
+            validation_end_date=start_date,
+            relevance_mode="binary",
+            relevance_weights=None,
+            item_action_types=["view", "to_cart"],
+            git_sha="sha",
+        )
+
+    first = load_or_build_validation_cache(
+        cache_root=tmp_path / "validation_cache",
+        metadata=make_metadata(date(2024, 4, 24)),
+        relevance_mode="binary",
+        relevance_weights=None,
+        build_validation_pair_counts=fake_pair_counts,
+        logger=logging.getLogger(__name__),
+    )
+    second = load_or_build_validation_cache(
+        cache_root=tmp_path / "validation_cache",
+        metadata=make_metadata(date(2024, 4, 24)),
+        relevance_mode="binary",
+        relevance_weights=None,
+        build_validation_pair_counts=fake_pair_counts,
+        logger=logging.getLogger(__name__),
+    )
+    changed_window = load_or_build_validation_cache(
+        cache_root=tmp_path / "validation_cache",
+        metadata=make_metadata(date(2024, 4, 25)),
+        relevance_mode="binary",
+        relevance_weights=None,
+        build_validation_pair_counts=fake_pair_counts,
+        logger=logging.getLogger(__name__),
+    )
+
+    assert build_calls == 2
+    assert not first.cache_hit
+    assert second.cache_hit
+    assert not changed_window.cache_hit
+    assert (first.cache_dir / "validation_pair_counts.parquet").exists()
+    assert (first.cache_dir / "ground_truth.parquet").exists()
+    assert (first.cache_dir / "metadata.json").exists()
+
+
 def test_execute_full_run_writes_debug_artifacts_only_when_requested(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -131,19 +209,9 @@ def test_execute_full_run_writes_debug_artifacts_only_when_requested(
     monkeypatch.setattr(
         run_full,
         "_build_validation_pair_counts",
-        lambda **_: pl.DataFrame(
-            {
-                "pair_date": [date(2024, 4, 24)],
-                "item_id": [1],
-                "similar_item_id": [2],
-                "pair_count": [1],
-                "view_count": [0],
-                "click_count": [0],
-                "favorite_count": [0],
-                "to_cart_count": [1],
-            }
-        ),
+        lambda **_: _validation_pair_counts_frame(date(2024, 4, 24)),
     )
+    monkeypatch.setattr(run_full, "_validation_cache_root", lambda _: tmp_path / "cache")
     monkeypatch.setattr(run_full, "_find_item_popularity_artifact", lambda *_: None)
     monkeypatch.setattr(
         run_full,
@@ -168,10 +236,12 @@ def test_execute_full_run_writes_debug_artifacts_only_when_requested(
     saved_metrics = json.loads(result.metrics_path.read_text(encoding="utf-8"))
     saved_scorecard = json.loads(result.scorecard_path.read_text(encoding="utf-8"))
     assert saved_scorecard["metrics"] == saved_metrics
-    manifest = (result.run_dir / "manifest.json").read_text(encoding="utf-8")
-    assert "recommendations/detailed.parquet" in manifest
-    assert "recommendations/lookup.parquet" in manifest
-    assert "evaluation/metrics.json" in manifest
+    manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["used_validation_cache"] is True
+    assert manifest["validation_cache_hit"] is False
+    assert "recommendations/detailed.parquet" in json.dumps(manifest)
+    assert "recommendations/lookup.parquet" in json.dumps(manifest)
+    assert "evaluation/metrics.json" in json.dumps(manifest)
 
     debug_result = run_full.execute_full_run(
         train_until_date=date(2024, 4, 23),
@@ -187,3 +257,5 @@ def test_execute_full_run_writes_debug_artifacts_only_when_requested(
 
     assert (debug_result.run_dir / "evaluation" / "debug" / "validation_pair_counts.parquet").exists()
     assert (debug_result.run_dir / "evaluation" / "debug" / "ground_truth.parquet").exists()
+    debug_manifest = json.loads((debug_result.run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert debug_manifest["validation_cache_hit"] is True
