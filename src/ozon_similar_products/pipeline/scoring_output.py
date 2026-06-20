@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -70,14 +71,7 @@ def run_scoring_output_from_artifacts(
     if scorer.action_shares is None:
         derived_action_shares = _action_shares_from_distribution(action_distribution)
         if derived_action_shares is not None:
-            scorer = scorer.__class__(
-                method=scorer.method,
-                business_weights=scorer.business_weights,
-                beta=scorer.beta,
-                log1p_counts=scorer.log1p_counts,
-                normalize_by_item_popularity=scorer.normalize_by_item_popularity,
-                action_shares=derived_action_shares,
-            )
+            scorer = replace(scorer, action_shares=derived_action_shares)
 
     if scorer.normalize_by_item_popularity:
         pair_scores = scorer.score_lazy(pair_aggregates, item_popularity=item_popularity)
