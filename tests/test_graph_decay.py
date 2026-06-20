@@ -113,6 +113,22 @@ def test_distance_decay_max_distance_filters_distant_pairs() -> None:
     ).is_empty()
 
 
+def test_distance_decay_disabled_ignores_max_distance() -> None:
+    stats = ItemPairBuilder(
+        distance_decay=DistanceDecayConfig(
+            enabled=False,
+            strategy="none",
+            max_distance=1,
+        )
+    ).build_daily_pair_stats(_sessions_for_distance())
+
+    assert stats.raw_pair_rows == 6
+    assert not stats.counts.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 30)
+    ).is_empty()
+
+
 def _daily_stats_frame(partition_date: date, weighted_pair_count: float = 1.0) -> pl.DataFrame:
     return pl.DataFrame(
         {
