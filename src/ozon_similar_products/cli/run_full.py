@@ -27,6 +27,10 @@ from ozon_similar_products.evaluation import (
     write_json,
 )
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
+from ozon_similar_products.evaluation.validation_cache import (
+    load_or_build_validation_cache,
+    validation_cache_metadata,
+)
 from ozon_similar_products.output.writers import RecommendationWriter
 from ozon_similar_products.pipeline.run_pipeline import PipelineRunResult, run_pipeline
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
@@ -195,6 +199,17 @@ def _resolve_project_path(value: Any, default: str) -> Path:
     return (PROJECT_ROOT / path).resolve()
 
 
+def _validation_cache_root(config: Mapping[str, Any]) -> Path:
+    outputs_config = config.get("outputs", {})
+    root_dir = "outputs"
+    if isinstance(outputs_config, Mapping):
+        root_dir = str(outputs_config.get("root_dir", root_dir))
+    return _resolve_project_path(
+        Path(root_dir) / "cache" / "validation",
+        "outputs/cache/validation",
+    )
+
+
 def _build_validation_pair_counts(
     *,
     config: Mapping[str, Any],
@@ -337,6 +352,13 @@ def execute_full_run(
     latest_dir: Path = Path("outputs/latest"),
     keep_evaluation_artifacts: bool = False,
     publish_latest: bool = True,
+    validation_pair_counts: pl.DataFrame | None = None,
+    ground_truth: pl.DataFrame | None = None,
+    used_validation_cache: bool = False,
+    validation_cache_hit: bool = False,
+    validation_cache_key: str | None = None,
+    validation_cache_dir: Path | None = None,
+    used_scoring_only_mode: bool = False,
 ) -> FullRunResult:
     """Run train recommendations, build validation ground truth, and compute metrics."""
     logger = logging.getLogger(__name__)
@@ -387,20 +409,57 @@ def execute_full_run(
 
     recommendations = pl.read_parquet(pipeline_result.detailed_recommendations_path)
 
-    logger.info("[run_full] build validation pair counts")
-    validation_pair_counts = _build_validation_pair_counts(
-        config=config,
-        validation_start_date=validation_start_date,
-        validation_end_date=validation_end_date,
-        logger=logger,
-    )
-
-    logger.info("[run_full] build validation ground truth")
-    ground_truth = build_ground_truth_from_daily_pair_counts(
-        validation_pair_counts,
-        relevance_mode=relevance_mode,
-        action_weights=relevance_weights,
-    )
+    validation_pair_counts_seconds = 0.0
+    ground_truth_seconds = 0.0
+    if ground_truth is not None:
+        logger.info("[run_full] reuse prebuilt validation ground truth")
+        if validation_pair_counts is None:
+            validation_pair_counts = empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+    elif validation_pair_counts is not None:
+        logger.info("[run_full] reuse prebuilt validation pair counts")
+        ground_truth_started = time.perf_counter()
+        ground_truth = build_ground_truth_from_daily_pair_counts(
+            validation_pair_counts,
+            relevance_mode=relevance_mode,
+            action_weights=relevance_weights,
+        )
+        ground_truth_seconds = time.perf_counter() - ground_truth_started
+    else:
+        cache_started = time.perf_counter()
+        metadata = validation_cache_metadata(
+            config=config,
+            validation_start_date=validation_start_date,
+            validation_end_date=validation_end_date,
+            relevance_mode=relevance_mode,
+            relevance_weights=relevance_weights,
+            item_action_types=_item_action_types(config),
+            git_sha=_git_sha(),
+        )
+        validation_cache = load_or_build_validation_cache(
+            cache_root=_validation_cache_root(config),
+            metadata=metadata,
+            relevance_mode=relevance_mode,
+            relevance_weights=relevance_weights,
+            build_validation_pair_counts=lambda: _build_validation_pair_counts(
+                config=config,
+                validation_start_date=validation_start_date,
+                validation_end_date=validation_end_date,
+                logger=logger,
+            ),
+            logger=logger,
+        )
+        cache_elapsed = time.perf_counter() - cache_started
+        validation_pair_counts = validation_cache.validation_pair_counts
+        ground_truth = validation_cache.ground_truth
+        used_validation_cache = True
+        validation_cache_hit = validation_cache.cache_hit
+        validation_cache_key = validation_cache.cache_key
+        validation_cache_dir = validation_cache.cache_dir
+        if validation_cache.cache_hit:
+            logger.info("[run_full] validation cache hit in %.2fs", cache_elapsed)
+        else:
+            logger.info("[run_full] validation cache miss/build in %.2fs", cache_elapsed)
+            validation_pair_counts_seconds = cache_elapsed
 
     evaluation_dir = resolved_run_dir / "evaluation"
     debug_dir = evaluation_dir / "debug"
@@ -420,12 +479,14 @@ def execute_full_run(
         context["popularity_column"] = "events_count"
 
     logger.info("[run_full] compute metrics")
+    metrics_started = time.perf_counter()
     metrics = compute_offline_metrics(
         recommendations=recommendations,
         ground_truth=ground_truth,
         top_k=resolved_top_k,
         context=context,
     )
+    metrics_seconds = time.perf_counter() - metrics_started
 
     scorecard = build_scorecard(
         experiment_id=resolved_run_id,
@@ -441,6 +502,11 @@ def execute_full_run(
             "config_path": config_snapshot_path,
             "recommendations_path": pipeline_result.detailed_recommendations_path,
             "keep_evaluation_artifacts": keep_evaluation_artifacts,
+            "used_validation_cache": used_validation_cache,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": used_scoring_only_mode,
         },
     )
 
@@ -474,6 +540,14 @@ def execute_full_run(
         "scorecard_path": "evaluation/scorecard.json",
         "debug_artifacts_kept": keep_evaluation_artifacts,
         "elapsed_seconds": elapsed_seconds,
+        "validation_pair_counts_seconds": validation_pair_counts_seconds,
+        "ground_truth_seconds": ground_truth_seconds,
+        "metrics_seconds": metrics_seconds,
+        "used_validation_cache": used_validation_cache,
+        "validation_cache_hit": validation_cache_hit,
+        "validation_cache_key": validation_cache_key,
+        "validation_cache_dir": validation_cache_dir,
+        "used_scoring_only_mode": used_scoring_only_mode,
     }
     if keep_evaluation_artifacts:
         evaluation_manifest["debug_paths"] = {
@@ -498,6 +572,11 @@ def execute_full_run(
             "scorecard_path": "evaluation/scorecard.json",
             "evaluation_manifest_path": "evaluation/evaluation_manifest.json",
             "elapsed_seconds": elapsed_seconds,
+            "used_validation_cache": used_validation_cache,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": used_scoring_only_mode,
             "paths": {
                 **dict(pipeline_result.manifest["paths"]),
                 "metrics_path": "evaluation/metrics.json",
