@@ -276,6 +276,22 @@ def _ideal_dcg_by_item(ground_truth: pl.DataFrame, top_k: int) -> pl.DataFrame:
     )
 
 
+def _empty_ranking_metrics() -> dict[str, float | None | int]:
+    metrics: dict[str, float | None | int] = {
+        "hit_rate_at_k": None,
+        "recall_at_k": None,
+        "ndcg_at_k": None,
+        "mrr_at_k": None,
+        "coverage_at_k": 0.0,
+        "evaluated_items": 0,
+        "recommended_items": 0,
+    }
+    for action_type in ACTION_TYPES:
+        metrics[f"{action_type}_hit_rate_at_k"] = None
+        metrics[f"{action_type}_recall_at_k"] = None
+    return metrics
+
+
 def _ranking_metrics(
     *,
     truth_totals: pl.DataFrame,
@@ -284,6 +300,9 @@ def _ranking_metrics(
     ground_truth: pl.DataFrame,
     top_k: int,
 ) -> dict[str, float | None | int]:
+    if truth_totals.is_empty():
+        return _empty_ranking_metrics()
+
     evaluated_items = truth_totals.height
     recommended_items = (
         top_recommendations.select("item_id")
@@ -304,7 +323,7 @@ def _ranking_metrics(
             pl.lit(0.0).alias("__recall"),
             pl.lit(0.0).alias("__mrr"),
             pl.lit(0.0).alias("__ndcg"),
-            *[pl.lit(0.0).alias(f"__{action_type}_hits") for action_type in ACTION_TYPES],
+            *[pl.lit(0).alias(f"__{action_type}_hits") for action_type in ACTION_TYPES],
         )
     else:
         hit_by_item = (
@@ -486,7 +505,7 @@ def compute_offline_metrics(
     top_k: int,
     context: dict[str, Any] | None = None,
     ranking_relevant_action_types: Sequence[str] | None = None,
-    min_ranking_relevance: float | None = None,
+    min_ranking_relevance: float | None = DEFAULT_MIN_RANKING_RELEVANCE,
 ) -> OfflineMetrics:
     """Compute offline ranking metrics for one evaluation slice."""
 
@@ -507,9 +526,7 @@ def compute_offline_metrics(
         else DEFAULT_RANKING_RELEVANT_ACTION_TYPES
     )
     resolved_min_relevance = (
-        DEFAULT_MIN_RANKING_RELEVANCE
-        if min_ranking_relevance is None
-        else float(min_ranking_relevance)
+        None if min_ranking_relevance is None else float(min_ranking_relevance)
     )
 
     if ground_truth_frame.is_empty():
