@@ -2,7 +2,7 @@ pipeline:
   session_timeout_minutes: 15
   max_items_per_session: 50
   top_k: 20
-  lookback_days: 30
+  lookback_days: 4
 
 events:
   item_action_types:
@@ -22,11 +22,11 @@ item_pair_builder:
 scoring:
   method: calibrated_multichannel
   business_weights:
-    view: 1.0
-    click: 3.0
-    favorite: 6.0
-    to_cart: 8.0
-  beta: 0.5
+    view: 2.0
+    click: 5.5
+    favorite: 4.0
+    to_cart: 5.0
+  beta: 0.75
   reference_action_type: view
   max_frequency_boost:
     view: 1.0
@@ -68,7 +68,7 @@ evaluation:
 
 business:
   fallback:
-    enabled: true
+    enabled: false
     top_k: 20
     candidate_pool_size: 200
     global_candidate_pool_size: 200
@@ -81,3 +81,6 @@ business:
     enable_global: true
     include_cold_start_items: true
     include_catalog_only_sources: false
+
+topk:
+  top_k: 20
