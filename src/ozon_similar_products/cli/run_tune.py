@@ -19,6 +19,12 @@ from typing import Any
 import yaml
 
 from ozon_similar_products.cli.run_full import execute_full_run, validation_window
+from ozon_similar_products.cli.scoring_only_tuning import (
+    FastScoringContext,
+    build_fast_scoring_context,
+    execute_scoring_only_trial,
+    validate_scoring_only_search_space,
+)
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.evaluation import metrics_to_flat_dict, write_json
 
@@ -525,16 +531,17 @@ def _run_trial(
     lookback_days: int,
     validation_days: int,
     default_top_k: int | None,
+    fast_context: FastScoringContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stage = strategy_columns.get("stage")
     stage_value = int(stage) if stage is not None else None
     trial_dir = _trial_dir(sweep_dir, trial_id, stage_value)
     started = time.perf_counter()
     trial_config = apply_overrides(base_config, overrides)
-    trial_run_config = _with_trial_artifact_dirs(trial_config, trial_dir)
+    trial_run_config = trial_config if fast_context is not None else _with_trial_artifact_dirs(trial_config, trial_dir)
     trial_top_k = _effective_trial_top_k(trial_config, overrides, default_top_k)
     logger.info(
-        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s resource_validation_days=%s effective_top_k=%s output_dir=%s",
+        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s resource_validation_days=%s effective_top_k=%s output_dir=%s fast_scoring_only=%s",
         trial_id,
         stage_value,
         overrides,
@@ -542,24 +549,37 @@ def _run_trial(
         validation_days,
         trial_top_k,
         trial_dir,
+        fast_context is not None,
     )
     trial_config_path = _write_yaml(trial_dir / "config.yaml", trial_run_config)
-    result = execute_full_run(
-        train_until_date=train_until_date,
-        lookback_days=lookback_days,
-        validation_days=validation_days,
-        top_k=trial_top_k,
-        config_path=trial_config_path,
-        run_id=_trial_run_id(trial_id, stage_value),
-        run_dir=trial_dir,
-        keep_evaluation_artifacts=False,
-        publish_latest=False,
-    )
+    if fast_context is None:
+        result = execute_full_run(
+            train_until_date=train_until_date,
+            lookback_days=lookback_days,
+            validation_days=validation_days,
+            top_k=trial_top_k,
+            config_path=trial_config_path,
+            run_id=_trial_run_id(trial_id, stage_value),
+            run_dir=trial_dir,
+            keep_evaluation_artifacts=False,
+            publish_latest=False,
+        )
+    else:
+        result = execute_scoring_only_trial(
+            context=fast_context,
+            trial_config=trial_run_config,
+            trial_config_path=trial_config_path,
+            run_id=_trial_run_id(trial_id, stage_value),
+            run_dir=trial_dir,
+            top_k=trial_top_k,
+        )
     metrics = metrics_to_flat_dict(result.metrics)
     _copy_if_different(result.metrics_path, trial_dir / "metrics.json")
     _copy_if_different(result.manifest_path, trial_dir / "manifest.json")
     _strip_trial_recommendation_parquets(trial_dir)
     row = {"trial_id": trial_id, "run_dir": trial_dir.as_posix(), **strategy_columns, **overrides, **metrics}
+    if fast_context is not None:
+        row["fast_scoring_only"] = True
     logger.info(
         "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
         trial_id,
@@ -602,6 +622,7 @@ def run_tuning(
     annealing_temperature_start: float = 0.10,
     annealing_temperature_end: float = 0.01,
     annealing_neighbor_mutations: int = 2,
+    fast_scoring_only: bool = False,
 ) -> Path:
     logger = logging.getLogger(__name__)
     validation_window(train_until_date, validation_days)
@@ -615,9 +636,13 @@ def run_tuning(
         raise ValueError("annealing_temperature_end must be <= annealing_temperature_start")
     if annealing_neighbor_mutations <= 0:
         raise ValueError("annealing_neighbor_mutations must be a positive integer")
+    if fast_scoring_only and tuning_strategy == "successive_halving":
+        raise ValueError("fast scoring-only mode does not support successive_halving")
 
     base_config = load_yaml_config(config_path)
     search_space = load_yaml_config(search_space_path)
+    if fast_scoring_only:
+        validate_scoring_only_search_space(search_space)
     sweep_id = _safe_sweep_id(
         sweep_name,
         strategy=tuning_strategy,
@@ -632,15 +657,28 @@ def run_tuning(
     sweep_dir = _resolve_project_path(output_dir) / sweep_id
     sweep_dir.mkdir(parents=True, exist_ok=False)
     logger.info(
-        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s grid_combinations=%s output_dir=%s",
+        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s grid_combinations=%s output_dir=%s fast_scoring_only=%s",
         sweep_id,
         tuning_strategy,
         max_trials,
         total_grid_combinations,
         sweep_dir,
+        fast_scoring_only,
     )
     _write_yaml(sweep_dir / "base_config.yaml", base_config)
     _write_yaml(sweep_dir / "search_space.yaml", search_space)
+
+    fast_context: FastScoringContext | None = None
+    if fast_scoring_only:
+        fast_context = build_fast_scoring_context(
+            base_config=base_config,
+            sweep_dir=sweep_dir,
+            train_until_date=train_until_date,
+            lookback_days=lookback_days,
+            validation_days=validation_days,
+            top_k=top_k,
+            logger=logger,
+        )
 
     rows: list[dict[str, Any]] = []
     trial_configs: dict[str, dict[str, Any]] = {}
@@ -652,7 +690,7 @@ def run_tuning(
         for index, overrides in enumerate(trial_overrides, start=1):
             trial_id = f"trial_{index:04d}"
             trial_overrides_by_id[trial_id] = dict(overrides)
-            trial_lookback_days = _effective_trial_lookback_days(overrides, lookback_days)
+            trial_lookback_days = lookback_days if fast_context is not None else _effective_trial_lookback_days(overrides, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
@@ -664,6 +702,7 @@ def run_tuning(
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
                 default_top_k=top_k,
+                fast_context=fast_context,
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
@@ -739,7 +778,7 @@ def run_tuning(
                 rng=rng,
             )
             trial_overrides_by_id[trial_id] = dict(candidate)
-            trial_lookback_days = _effective_trial_lookback_days(candidate, lookback_days)
+            trial_lookback_days = lookback_days if fast_context is not None else _effective_trial_lookback_days(candidate, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
@@ -756,6 +795,7 @@ def run_tuning(
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
                 default_top_k=top_k,
+                fast_context=fast_context,
             )
             trial_configs[trial_id] = trial_config
             candidate_score = _objective_fields(row, search_space)[1]
@@ -802,6 +842,7 @@ def run_tuning(
             "lookback_days": lookback_days,
             "validation_days": validation_days,
             "top_k": top_k,
+            "fast_scoring_only": fast_scoring_only,
             "halving_reduction_factor": halving_reduction_factor,
             "annealing_temperature_start": annealing_temperature_start,
             "annealing_temperature_end": annealing_temperature_end,
@@ -838,6 +879,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--annealing-temperature-start", type=float, default=0.10)
     parser.add_argument("--annealing-temperature-end", type=float, default=0.01)
     parser.add_argument("--annealing-neighbor-mutations", type=int, default=2)
+    parser.add_argument("--fast-scoring-only", action="store_true")
     return parser.parse_args()
 
 
@@ -861,6 +903,7 @@ def main() -> int:
             annealing_temperature_start=args.annealing_temperature_start,
             annealing_temperature_end=args.annealing_temperature_end,
             annealing_neighbor_mutations=args.annealing_neighbor_mutations,
+            fast_scoring_only=args.fast_scoring_only,
         )
     except Exception:
         logger.exception("[run_tune] failed")
