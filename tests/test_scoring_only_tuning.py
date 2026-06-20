@@ -13,6 +13,7 @@ import yaml
 
 from ozon_similar_products.cli import run_tune
 from ozon_similar_products.cli.scoring_only_tuning import validate_scoring_only_search_space
+from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
 
 
@@ -26,6 +27,17 @@ def test_validate_scoring_only_search_space_rejects_train_artifact_parameters() 
                 }
             }
         )
+
+
+def test_fast_scoring_only_search_space_files_are_valid() -> None:
+    for relative_path in (
+        "configs/tuning/search_space_scoring_core.yaml",
+        "configs/tuning/search_space_scoring_fallback.yaml",
+    ):
+        search_space = load_yaml_config(PROJECT_ROOT / relative_path)
+        validate_scoring_only_search_space(search_space)
+        assert search_space["objective"]["primary_metric"] == "to_cart_hit_rate_at_k"
+        assert search_space["parameters"]
 
 
 def test_run_tuning_fast_scoring_only_uses_prebuilt_context(
