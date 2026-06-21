@@ -13,15 +13,11 @@ data:
   raw_archives_dir: data/raw/archives
   product_information_dir: data/raw/product_information
   user_actions_dir: data/raw/user_actions
-  interim_dir: data/interim
   processed_dir: data/processed
-  samples_dir: data/samples
 
 outputs:
   root_dir: outputs
   recommendations_dir: outputs
-  reports_dir: outputs/reports
-  figures_dir: outputs/figures
 
 source:
   package_dir: src/ozon_similar_products
@@ -75,13 +71,9 @@ project_dirs:
   - data/raw/archives
   - data/raw/product_information
   - data/raw/user_actions
-  - data/interim
   - data/processed
-  - data/samples
   - docs
   - notebooks
   - outputs
-  - outputs/reports
-  - outputs/figures
   - scripts
   - tests

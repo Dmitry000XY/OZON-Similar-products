@@ -1,8 +1,8 @@
 param(
-  [string]$RunnerRoot = "D:\ozon-local-runner\actions-runner",
-  [string]$RunnerName = "ozon-local-heavy-runner",
-  [string]$RuntimeRoot = "D:\ozon-local-runner",
-  [string]$GitHubActionsUrl = "https://github.com/Dmitry000XY/OZON-Similar-products/actions"
+    [string]$RunnerRoot = "D:\ozon-local-runner\actions-runner",
+    [string]$RunnerName = "ozon-local-heavy-runner",
+    [string]$RuntimeRoot = "D:\ozon-local-runner",
+    [string]$GitHubActionsUrl = "https://github.com/Dmitry000XY/OZON-Similar-products/actions"
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,44 +14,50 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $logsRoot = Join-Path $RuntimeRoot "logs"
 New-Item -ItemType Directory -Path $logsRoot -Force | Out-Null
 
-function Get-RunnerState {
-  $service = Get-Service -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like "*$RunnerName*" -or $_.DisplayName -like "*$RunnerName*" } |
-    Select-Object -First 1
+function Get-RunnerState
+{
+    $service = Get-Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*$RunnerName*" -or $_.DisplayName -like "*$RunnerName*" } |
+            Select-Object -First 1
 
-  $listener = Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -like "$RunnerRoot*" -and $_.ProcessName -eq "Runner.Listener" } |
-    Select-Object -First 1
+    $listener = Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -like "$RunnerRoot*" -and $_.ProcessName -eq "Runner.Listener" } |
+            Select-Object -First 1
 
-  if ($service -and $service.Status -eq "Running") {
-    return "running"
-  }
-  if ($listener) {
-    return "running"
-  }
-  return "stopped"
+    if ($service -and $service.Status -eq "Running")
+    {
+        return "running"
+    }
+    if ($listener)
+    {
+        return "running"
+    }
+    return "stopped"
 }
 
-function Update-IconText {
-  $state = Get-RunnerState
-  $notifyIcon.Text = "Ozon runner: $state"
+function Update-IconText
+{
+    $state = Get-RunnerState
+    $notifyIcon.Text = "Ozon runner: $state"
 }
 
-function Start-RunnerScript {
-  param([string]$ScriptName)
+function Start-RunnerScript
+{
+    param([string]$ScriptName)
 
-  $scriptPath = Join-Path $scriptRoot $ScriptName
-  Start-Process `
+    $scriptPath = Join-Path $scriptRoot $ScriptName
+    Start-Process `
     -FilePath "powershell.exe" `
     -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath) `
     -WindowStyle Hidden
 }
 
-function Open-CmdWrapper {
-  param([string]$CmdName)
+function Open-CmdWrapper
+{
+    param([string]$CmdName)
 
-  $cmdPath = Join-Path $scriptRoot $CmdName
-  Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "`"$cmdPath`"")
+    $cmdPath = Join-Path $scriptRoot $CmdName
+    Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "`"$cmdPath`"")
 }
 
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -62,16 +68,16 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
 $startItem = $menu.Items.Add("Start runner")
 $startItem.add_Click({
-  Start-RunnerScript -ScriptName "start-ozon-runner.ps1"
-  Start-Sleep -Milliseconds 800
-  Update-IconText
+    Start-RunnerScript -ScriptName "start-ozon-runner.ps1"
+    Start-Sleep -Milliseconds 800
+    Update-IconText
 })
 
 $stopItem = $menu.Items.Add("Stop runner")
 $stopItem.add_Click({
-  Start-RunnerScript -ScriptName "stop-ozon-runner.ps1"
-  Start-Sleep -Milliseconds 800
-  Update-IconText
+    Start-RunnerScript -ScriptName "stop-ozon-runner.ps1"
+    Start-Sleep -Milliseconds 800
+    Update-IconText
 })
 
 $statusItem = $menu.Items.Add("Status")
@@ -87,9 +93,9 @@ $actionsItem.add_Click({ Start-Process $GitHubActionsUrl })
 
 $exitItem = $menu.Items.Add("Exit tray monitor")
 $exitItem.add_Click({
-  $notifyIcon.Visible = $false
-  $notifyIcon.Dispose()
-  [System.Windows.Forms.Application]::Exit()
+    $notifyIcon.Visible = $false
+    $notifyIcon.Dispose()
+    [System.Windows.Forms.Application]::Exit()
 })
 
 $notifyIcon.ContextMenuStrip = $menu

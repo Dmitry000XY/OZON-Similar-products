@@ -19,6 +19,12 @@ from typing import Any
 import yaml
 
 from ozon_similar_products.cli.run_full import execute_full_run, validation_window
+from ozon_similar_products.cli.scoring_only_tuning import (
+    FastScoringContext,
+    build_fast_scoring_context,
+    execute_scoring_only_trial,
+    validate_scoring_only_search_space,
+)
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.evaluation import metrics_to_flat_dict, write_json
 
@@ -34,15 +40,44 @@ def _resolve_project_path(path: Path) -> Path:
     return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
-def _safe_sweep_id(name: str | None = None) -> str:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    if not name:
-        return f"sweep_{timestamp}"
-    normalized = "".join(
+def _timestamp_slug() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%SZ")
+
+
+def _safe_label(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(
         character if character.isalnum() or character in {"-", "_"} else "_"
-        for character in name.strip()
+        for character in value.strip()
     ).strip("_")
-    return f"{timestamp}_{normalized}" if normalized else f"sweep_{timestamp}"
+
+
+def _safe_sweep_id(
+    name: str | None = None,
+    *,
+    strategy: str | None = None,
+    train_until_date: date | None = None,
+    lookback_days: int | None = None,
+    validation_days: int | None = None,
+    top_k: int | None = None,
+) -> str:
+    parts = ["sweep", _timestamp_slug()]
+    strategy_label = _safe_label(strategy)
+    if strategy_label:
+        parts.append(strategy_label)
+    if train_until_date is not None:
+        parts.append(f"train-{train_until_date.isoformat()}")
+    if lookback_days is not None:
+        parts.append(f"lookback-{lookback_days}d")
+    if validation_days is not None:
+        parts.append(f"validation-{validation_days}d")
+    if top_k is not None:
+        parts.append(f"top-{top_k}")
+    name_label = _safe_label(name)
+    if name_label:
+        parts.append(name_label)
+    return "_".join(parts)
 
 
 def set_by_dot_path(config: Mapping[str, Any], dot_path: str, value: Any) -> dict[str, Any]:
@@ -306,7 +341,13 @@ def _supporting_metric_names(search_space: Mapping[str, Any]) -> list[str]:
         return [str(name) for name in objective["supporting_metrics"]]
     if isinstance(objective.get("tie_breakers"), list):
         return [str(name) for name in objective["tie_breakers"]]
-    return ["ndcg_at_k", "recall_at_k", "mrr_at_k", "coverage_at_k", "to_cart_recall_at_k"]
+    return [
+        "strong_ndcg_at_k",
+        "strong_recall_at_k",
+        "strong_mrr_at_k",
+        "coverage_at_k",
+        "to_cart_recall_at_k",
+    ]
 
 
 def _penalty_metric_names(search_space: Mapping[str, Any]) -> list[str]:
@@ -358,14 +399,12 @@ def _objective_sort_key(row: Mapping[str, Any], search_space: Mapping[str, Any])
     return (
         float(row.get("objective_score") or 0.0),
         _metric_value(row, _primary_metric_name(search_space)),
-        _metric_value(row, "ndcg_at_k"),
+        _metric_value(row, "strong_ndcg_at_k", default=_metric_value(row, "ndcg_at_k")),
         str(row.get("trial_id", "")),
     )
 
 
-def _annotate_objective_rows(
-    rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any]
-) -> list[dict[str, Any]]:
+def _annotate_objective_rows(rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any]) -> list[dict[str, Any]]:
     annotated = [dict(row) for row in rows]
     primary_metric = _primary_metric_name(search_space)
     for row in annotated:
@@ -374,22 +413,13 @@ def _annotate_objective_rows(
         row["objective_eligible"] = eligible
         row["objective_rank"] = None
         row["objective_primary_metric"] = primary_metric
-    eligible = sorted(
-        (row for row in annotated if row["objective_eligible"]),
-        key=lambda row: _objective_sort_key(row, search_space),
-        reverse=True,
-    )
+    eligible = sorted((row for row in annotated if row["objective_eligible"]), key=lambda row: _objective_sort_key(row, search_space), reverse=True)
     for rank, row in enumerate(eligible, start=1):
         row["objective_rank"] = rank
     return annotated
 
 
-def best_trial_row(
-    rows: Iterable[Mapping[str, Any]],
-    search_space: Mapping[str, Any],
-    *,
-    preferred_stage: int | None = None,
-) -> Mapping[str, Any]:
+def best_trial_row(rows: Iterable[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None) -> Mapping[str, Any]:
     annotated = _annotate_objective_rows(rows, search_space)
     if not annotated:
         raise ValueError("Cannot select best trial from an empty result set")
@@ -429,9 +459,7 @@ def _effective_trial_lookback_days(overrides: Mapping[str, Any], default_lookbac
     return _as_positive_int(overrides.get("pipeline.lookback_days", default_lookback_days), "lookback_days")
 
 
-def _effective_trial_top_k(
-    config: Mapping[str, Any], overrides: Mapping[str, Any], default_top_k: int | None
-) -> int | None:
+def _effective_trial_top_k(config: Mapping[str, Any], overrides: Mapping[str, Any], default_top_k: int | None) -> int | None:
     for key in ("topk.top_k", "pipeline.top_k"):
         if key in overrides:
             return _as_positive_int(overrides[key], key)
@@ -481,10 +509,19 @@ def _write_results_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
     return path
 
 
-def _strip_trial_recommendation_parquets(trial_dir: Path) -> None:
-    recommendations_dir = trial_dir / "recommendations"
-    if recommendations_dir.exists():
-        shutil.rmtree(recommendations_dir)
+def _strip_trial_scratch_artifacts(trial_dir: Path) -> list[Path]:
+    """Remove heavyweight per-trial scratch outputs after metrics are persisted."""
+    removed: list[Path] = []
+    for relative_path in (
+        Path("artifacts"),
+        Path("recommendations"),
+        Path("evaluation") / "debug",
+    ):
+        target = trial_dir / relative_path
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+            removed.append(target)
+    return removed
 
 
 def _trial_dir(sweep_dir: Path, trial_id: str, stage: int | None) -> Path:
@@ -509,17 +546,17 @@ def _run_trial(
     lookback_days: int,
     validation_days: int,
     default_top_k: int | None,
+    fast_context: FastScoringContext | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stage = strategy_columns.get("stage")
     stage_value = int(stage) if stage is not None else None
     trial_dir = _trial_dir(sweep_dir, trial_id, stage_value)
     started = time.perf_counter()
     trial_config = apply_overrides(base_config, overrides)
-    trial_run_config = _with_trial_artifact_dirs(trial_config, trial_dir)
+    trial_run_config = trial_config if fast_context is not None else _with_trial_artifact_dirs(trial_config, trial_dir)
     trial_top_k = _effective_trial_top_k(trial_config, overrides, default_top_k)
     logger.info(
-        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s "
-        "resource_validation_days=%s effective_top_k=%s output_dir=%s",
+        "[run_tune] trial_id=%s stage=%s overrides=%s resource_lookback_days=%s resource_validation_days=%s effective_top_k=%s output_dir=%s fast_scoring_only=%s",
         trial_id,
         stage_value,
         overrides,
@@ -527,27 +564,46 @@ def _run_trial(
         validation_days,
         trial_top_k,
         trial_dir,
+        fast_context is not None,
     )
     trial_config_path = _write_yaml(trial_dir / "config.yaml", trial_run_config)
-    result = execute_full_run(
-        train_until_date=train_until_date,
-        lookback_days=lookback_days,
-        validation_days=validation_days,
-        top_k=trial_top_k,
-        config_path=trial_config_path,
-        run_id=_trial_run_id(trial_id, stage_value),
-        run_dir=trial_dir,
-        keep_evaluation_artifacts=False,
-        publish_latest=False,
-    )
+    if fast_context is None:
+        result = execute_full_run(
+            train_until_date=train_until_date,
+            lookback_days=lookback_days,
+            validation_days=validation_days,
+            top_k=trial_top_k,
+            config_path=trial_config_path,
+            run_id=_trial_run_id(trial_id, stage_value),
+            run_dir=trial_dir,
+            keep_evaluation_artifacts=False,
+            publish_latest=False,
+        )
+    else:
+        result = execute_scoring_only_trial(
+            context=fast_context,
+            trial_config=trial_run_config,
+            trial_config_path=trial_config_path,
+            run_id=_trial_run_id(trial_id, stage_value),
+            run_dir=trial_dir,
+            top_k=trial_top_k,
+        )
     metrics = metrics_to_flat_dict(result.metrics)
     _copy_if_different(result.metrics_path, trial_dir / "metrics.json")
     _copy_if_different(result.manifest_path, trial_dir / "manifest.json")
-    _strip_trial_recommendation_parquets(trial_dir)
+    removed_scratch_artifacts = _strip_trial_scratch_artifacts(trial_dir)
+    if removed_scratch_artifacts:
+        logger.info(
+            "[run_tune] pruned_trial_scratch_artifacts trial_id=%s stage=%s removed=%s",
+            trial_id,
+            stage_value,
+            [path.as_posix() for path in removed_scratch_artifacts],
+        )
     row = {"trial_id": trial_id, "run_dir": trial_dir.as_posix(), **strategy_columns, **overrides, **metrics}
+    if fast_context is not None:
+        row["fast_scoring_only"] = True
     logger.info(
-        "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f "
-        "to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
+        "[run_tune] trial_finished trial_id=%s stage=%s elapsed_seconds=%.2f to_cart_hit_rate_at_k=%s ndcg_at_k=%s recall_at_k=%s coverage_at_k=%s",
         trial_id,
         stage_value,
         time.perf_counter() - started,
@@ -559,21 +615,92 @@ def _run_trial(
     return row, trial_config
 
 
-def _current_best_log(
-    rows: Sequence[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None
-) -> tuple[str | None, float | None]:
+def _current_best_log(rows: Sequence[Mapping[str, Any]], search_space: Mapping[str, Any], *, preferred_stage: int | None = None) -> tuple[str | None, float | None]:
     if not rows:
         return None, None
     best = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
-    return str(best.get("trial_id")), _metric_value(
-        best, _primary_metric_name(search_space), default=float("-inf")
-    )
+    return str(best.get("trial_id")), _metric_value(best, _primary_metric_name(search_space), default=float("-inf"))
 
 
 def _annealing_temperature(index: int, total_trials: int, *, start: float, end: float) -> float:
     if total_trials <= 1:
         return end
     return start * ((end / start) ** (float(index) / float(total_trials - 1)))
+
+
+def _preferred_checkpoint_stage(rows: Sequence[Mapping[str, Any]]) -> int | None:
+    stages = [
+        int(row["stage"])
+        for row in rows
+        if row.get("stage") is not None
+    ]
+    return max(stages) if stages else None
+
+
+def _write_tuning_checkpoint(
+    *,
+    sweep_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+    search_space: Mapping[str, Any],
+    trial_configs: Mapping[str, Mapping[str, Any]],
+    parameter_names: Sequence[str],
+    sweep_id: str,
+    tuning_strategy: str,
+    max_trials: int,
+    train_until_date: date,
+    lookback_days: int,
+    validation_days: int,
+    top_k: int | None,
+    fast_scoring_only: bool,
+    halving_reduction_factor: int,
+    annealing_temperature_start: float,
+    annealing_temperature_end: float,
+    annealing_neighbor_mutations: int,
+) -> None:
+    """Persist sweep-level checkpoint files after each successful trial."""
+    if not rows:
+        return
+
+    preferred_stage = _preferred_checkpoint_stage(rows)
+    best_row = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
+    best_trial_id = str(best_row["trial_id"])
+    best_config = trial_configs.get(best_trial_id)
+
+    _write_results_csv(sweep_dir / "results.csv", rows)
+
+    if best_config is not None:
+        _write_yaml(sweep_dir / "best_config.yaml", best_config)
+
+    best_metrics = {
+        key: value
+        for key, value in best_row.items()
+        if key not in {"trial_id", "run_dir", *parameter_names}
+    }
+    write_json(sweep_dir / "best_metrics.json", best_metrics)
+    write_json(
+        sweep_dir / "summary.json",
+        {
+            "sweep_id": sweep_id,
+            "created_at": datetime.now(UTC),
+            "checkpoint": True,
+            "strategy": tuning_strategy,
+            "max_trials": max_trials,
+            "trials_run": len(rows),
+            "best_trial_id": best_trial_id,
+            "best_metrics_path": "best_metrics.json",
+            "best_config_path": "best_config.yaml" if best_config is not None else None,
+            "results_path": "results.csv",
+            "train_until_date": train_until_date.isoformat(),
+            "lookback_days": lookback_days,
+            "validation_days": validation_days,
+            "top_k": top_k,
+            "fast_scoring_only": fast_scoring_only,
+            "halving_reduction_factor": halving_reduction_factor,
+            "annealing_temperature_start": annealing_temperature_start,
+            "annealing_temperature_end": annealing_temperature_end,
+            "annealing_neighbor_mutations": annealing_neighbor_mutations,
+        },
+    )
 
 
 def run_tuning(
@@ -592,20 +719,9 @@ def run_tuning(
     annealing_temperature_start: float = 0.10,
     annealing_temperature_end: float = 0.01,
     annealing_neighbor_mutations: int = 2,
+    fast_scoring_only: bool = False,
 ) -> Path:
     logger = logging.getLogger(__name__)
-    logger.info(
-        "[run_tune] initializing tuning_strategy=%s max_trials=%s config_path=%s "
-        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s",
-        tuning_strategy,
-        max_trials,
-        config_path,
-        search_space_path,
-        train_until_date.isoformat(),
-        lookback_days,
-        validation_days,
-        top_k,
-    )
     validation_window(train_until_date, validation_days)
     if max_trials <= 0:
         raise ValueError("max_trials must be a positive integer")
@@ -617,38 +733,49 @@ def run_tuning(
         raise ValueError("annealing_temperature_end must be <= annealing_temperature_start")
     if annealing_neighbor_mutations <= 0:
         raise ValueError("annealing_neighbor_mutations must be a positive integer")
+    if fast_scoring_only and tuning_strategy == "successive_halving":
+        raise ValueError("fast scoring-only mode does not support successive_halving")
 
     base_config = load_yaml_config(config_path)
     search_space = load_yaml_config(search_space_path)
-    sweep_id = _safe_sweep_id(sweep_name)
+    if fast_scoring_only:
+        validate_scoring_only_search_space(search_space)
+    sweep_id = _safe_sweep_id(
+        sweep_name,
+        strategy=tuning_strategy,
+        train_until_date=train_until_date,
+        lookback_days=lookback_days,
+        validation_days=validation_days,
+        top_k=top_k,
+    )
     parameter_section = search_space.get("parameters", {})
     parameter_names = [str(name) for name in parameter_section] if isinstance(parameter_section, Mapping) else []
     total_grid_combinations = _grid_trial_count(search_space)
     sweep_dir = _resolve_project_path(output_dir) / sweep_id
     sweep_dir.mkdir(parents=True, exist_ok=False)
     logger.info(
-        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s config_path=%s "
-        "search_space_path=%s train_until_date=%s lookback_days=%s validation_days=%s top_k=%s output_dir=%s",
+        "[run_tune] start sweep_id=%s tuning_strategy=%s max_trials=%s grid_combinations=%s output_dir=%s fast_scoring_only=%s",
         sweep_id,
         tuning_strategy,
         max_trials,
-        config_path,
-        search_space_path,
-        train_until_date.isoformat(),
-        lookback_days,
-        validation_days,
-        top_k,
-        sweep_dir,
-    )
-    logger.info(
-        "[run_tune] search_space parameters=%s parameter_names=%s grid_combinations=%s primary_metric=%s",
-        len(parameter_names),
-        parameter_names,
         total_grid_combinations,
-        _primary_metric_name(search_space),
+        sweep_dir,
+        fast_scoring_only,
     )
     _write_yaml(sweep_dir / "base_config.yaml", base_config)
     _write_yaml(sweep_dir / "search_space.yaml", search_space)
+
+    fast_context: FastScoringContext | None = None
+    if fast_scoring_only:
+        fast_context = build_fast_scoring_context(
+            base_config=base_config,
+            sweep_dir=sweep_dir,
+            train_until_date=train_until_date,
+            lookback_days=lookback_days,
+            validation_days=validation_days,
+            top_k=top_k,
+            logger=logger,
+        )
 
     rows: list[dict[str, Any]] = []
     trial_configs: dict[str, dict[str, Any]] = {}
@@ -660,24 +787,41 @@ def run_tuning(
         for index, overrides in enumerate(trial_overrides, start=1):
             trial_id = f"trial_{index:04d}"
             trial_overrides_by_id[trial_id] = dict(overrides)
-            trial_lookback_days = _effective_trial_lookback_days(overrides, lookback_days)
+            trial_lookback_days = lookback_days if fast_context is not None else _effective_trial_lookback_days(overrides, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
                 sweep_dir=sweep_dir,
                 trial_id=trial_id,
                 overrides=overrides,
-                strategy_columns={
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                },
+                strategy_columns={"resource_lookback_days": trial_lookback_days, "resource_validation_days": validation_days},
                 train_until_date=train_until_date,
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
                 default_top_k=top_k,
+                fast_context=fast_context,
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
             best_id, best_primary = _current_best_log(rows, search_space)
             logger.info(
                 "[run_tune] trial_done trial_id=%s objective_score=%s current_best_trial_id=%s current_best_%s=%s",
@@ -707,13 +851,30 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
         stage_one_rows = [row for row in rows if row.get("stage") == 1]
         survivors_count = max(1, math.ceil(len(stage_one_rows) / halving_reduction_factor))
         survivor_ids = [
             str(row["trial_id"])
-            for row in sorted(stage_one_rows, key=lambda r: _objective_sort_key(r, search_space), reverse=True)[
-                :survivors_count
-            ]
+            for row in sorted(stage_one_rows, key=lambda r: _objective_sort_key(r, search_space), reverse=True)[:survivors_count]
         ]
         logger.info("[run_tune] successive_halving survivors=%s reduction_factor=%s", survivor_ids, halving_reduction_factor)
         for trial_id in survivor_ids:
@@ -725,11 +886,7 @@ def run_tuning(
                 sweep_dir=sweep_dir,
                 trial_id=trial_id,
                 overrides=overrides,
-                strategy_columns={
-                    "stage": 2,
-                    "resource_lookback_days": trial_lookback_days,
-                    "resource_validation_days": validation_days,
-                },
+                strategy_columns={"stage": 2, "resource_lookback_days": trial_lookback_days, "resource_validation_days": validation_days},
                 train_until_date=train_until_date,
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
@@ -737,6 +894,25 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
 
     elif tuning_strategy == "simulated_annealing":
         current_trial = _sample_trial(search_space, rng=rng, discrete_only=True)
@@ -744,13 +920,19 @@ def run_tuning(
         for index in range(max_trials):
             trial_id = f"trial_{index + 1:04d}"
             temperature = _annealing_temperature(
-                index, max_trials, start=annealing_temperature_start, end=annealing_temperature_end
+                index,
+                max_trials,
+                start=annealing_temperature_start,
+                end=annealing_temperature_end,
             )
             candidate = dict(current_trial) if index == 0 else _mutate_trial(
-                current_trial, search_space, mutations=annealing_neighbor_mutations, rng=rng
+                current_trial,
+                search_space,
+                mutations=annealing_neighbor_mutations,
+                rng=rng,
             )
             trial_overrides_by_id[trial_id] = dict(candidate)
-            trial_lookback_days = _effective_trial_lookback_days(candidate, lookback_days)
+            trial_lookback_days = lookback_days if fast_context is not None else _effective_trial_lookback_days(candidate, lookback_days)
             row, trial_config = _run_trial(
                 logger=logger,
                 base_config=base_config,
@@ -767,6 +949,7 @@ def run_tuning(
                 lookback_days=trial_lookback_days,
                 validation_days=validation_days,
                 default_top_k=top_k,
+                fast_context=fast_context,
             )
             trial_configs[trial_id] = trial_config
             candidate_score = _objective_fields(row, search_space)[1]
@@ -778,6 +961,25 @@ def run_tuning(
                 current_trial, current_score = dict(candidate), candidate_score
             row["accepted"] = accepted
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
             logger.info(
                 "[run_tune] annealing trial_id=%s accepted=%s temperature=%s objective_score=%s",
                 trial_id,
@@ -794,9 +996,7 @@ def run_tuning(
     best_row = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
     best_trial_id = str(best_row["trial_id"])
     best_config = trial_configs[best_trial_id]
-    best_metrics = {
-        key: value for key, value in best_row.items() if key not in {"trial_id", "run_dir", *parameter_names}
-    }
+    best_metrics = {key: value for key, value in best_row.items() if key not in {"trial_id", "run_dir", *parameter_names}}
     _write_yaml(sweep_dir / "best_config.yaml", best_config)
     write_json(sweep_dir / "best_metrics.json", best_metrics)
     write_json(
@@ -815,6 +1015,7 @@ def run_tuning(
             "lookback_days": lookback_days,
             "validation_days": validation_days,
             "top_k": top_k,
+            "fast_scoring_only": fast_scoring_only,
             "halving_reduction_factor": halving_reduction_factor,
             "annealing_temperature_start": annealing_temperature_start,
             "annealing_temperature_end": annealing_temperature_end,
@@ -851,6 +1052,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--annealing-temperature-start", type=float, default=0.10)
     parser.add_argument("--annealing-temperature-end", type=float, default=0.01)
     parser.add_argument("--annealing-neighbor-mutations", type=int, default=2)
+    parser.add_argument("--fast-scoring-only", action="store_true")
     return parser.parse_args()
 
 
@@ -874,6 +1076,7 @@ def main() -> int:
             annealing_temperature_start=args.annealing_temperature_start,
             annealing_temperature_end=args.annealing_temperature_end,
             annealing_neighbor_mutations=args.annealing_neighbor_mutations,
+            fast_scoring_only=args.fast_scoring_only,
         )
     except Exception:
         logger.exception("[run_tune] failed")

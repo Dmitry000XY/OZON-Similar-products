@@ -21,6 +21,11 @@ def test_validate_daily_pair_counts_accepts_contract_columns() -> None:
             "click_count": [],
             "favorite_count": [],
             "to_cart_count": [],
+            "weighted_pair_count": [],
+            "weighted_view_count": [],
+            "weighted_click_count": [],
+            "weighted_favorite_count": [],
+            "weighted_to_cart_count": [],
         }
     )
 

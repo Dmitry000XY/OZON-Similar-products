@@ -13,7 +13,11 @@ from typing import Any
 
 import polars as pl
 
-from ozon_similar_products.business.fallback import FallbackConfig, FallbackLayer
+from ozon_similar_products.business.fallback import (
+    FALLBACK_SOURCE_LABELS,
+    FallbackConfig,
+    FallbackLayer,
+)
 from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
 from ozon_similar_products.data import load_configs, load_events, load_products, schemas
 from ozon_similar_products.data.frames import empty_contract_frame
@@ -219,6 +223,7 @@ def _current_rss_mb() -> float | None:
     """Return current process RSS in MiB when supported."""
     try:
         import os
+
         import psutil
 
         return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
@@ -228,9 +233,16 @@ def _current_rss_mb() -> float | None:
     try:
         import resource
 
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        rss_kb = usage.ru_maxrss
-        return rss_kb / 1024
+        getrusage = getattr(resource, "getrusage", None)
+        rusage_self = getattr(resource, "RUSAGE_SELF", None)
+        if not callable(getrusage) or rusage_self is None:
+            return None
+
+        usage = getrusage(rusage_self)
+        rss_kb = getattr(usage, "ru_maxrss", None)
+        if rss_kb is None:
+            return None
+        return float(rss_kb) / 1024
     except (ImportError, AttributeError):
         return None
 
@@ -352,10 +364,22 @@ class DailyPairStatsPaths:
     raw_pair_rows: int
 
 
+def _with_weighted_count_columns(frame: pl.DataFrame) -> pl.DataFrame:
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in frame.columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return frame.with_columns(expressions)
+
+
 def _merge_daily_pair_counts(
         existing: pl.DataFrame,
         new: pl.DataFrame,
 ) -> pl.DataFrame:
+    existing = _with_weighted_count_columns(existing)
+    new = _with_weighted_count_columns(new)
     merged = pl.concat([existing, new], how="vertical")
     if merged.is_empty():
         return empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
@@ -368,6 +392,11 @@ def _merge_daily_pair_counts(
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])
@@ -392,7 +421,10 @@ def _combine_daily_pair_stats(stats_list: Sequence[DailyPairStats]) -> DailyPair
         )
 
     counts = (
-        pl.concat([stats.counts for stats in non_empty_stats], how="vertical")
+        pl.concat(
+            [_with_weighted_count_columns(stats.counts) for stats in non_empty_stats],
+            how="vertical",
+        )
         .group_by(["pair_date", "item_id", "similar_item_id"])
         .agg(
             pl.col("pair_count").sum().alias("pair_count"),
@@ -400,6 +432,11 @@ def _combine_daily_pair_stats(stats_list: Sequence[DailyPairStats]) -> DailyPair
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])
@@ -982,6 +1019,13 @@ def _action_shares_from_distribution(
     return action_shares
 
 
+def _pair_aggregator_from_config(config: Mapping[str, Any]) -> Any:
+    from_config = getattr(PairAggregator, "from_config", None)
+    if callable(from_config):
+        return from_config(config)
+    return PairAggregator()
+
+
 def _run_id(train_until_date: str, lookback_days: int) -> str:
     return f"run_{train_until_date}_lb{lookback_days}"
 
@@ -1267,7 +1311,7 @@ def run_pipeline(
                 aggregation_item_buckets,
             )
 
-        aggregator = PairAggregator()
+        aggregator = _pair_aggregator_from_config(config)
 
         if aggregation_item_buckets == 1:
             pair_aggregates = aggregator.aggregate_window_from_daily_stats_paths(
@@ -1329,11 +1373,16 @@ def run_pipeline(
                 "click_count",
                 "favorite_count",
                 "to_cart_count",
+                "weighted_pair_count",
+                "weighted_view_count",
+                "weighted_click_count",
+                "weighted_favorite_count",
+                "weighted_to_cart_count",
                 "unique_users",
                 "unique_sessions",
                 "base_score",
             ]
-            if column in pair_scores.columns
+            if column in pair_scores.columns and column not in bucket_recommendations.columns
         ]
 
         if score_detail_columns and not bucket_recommendations.is_empty():
@@ -1380,17 +1429,23 @@ def run_pipeline(
             fallback_config.top_k,
             fallback_config.include_cold_start_items,
         )
+        product_information = load_products(
+            data_config,
+            columns=schemas.PRODUCT_INFORMATION_COLUMNS,
+        )
         recommendations = FallbackLayer(config=fallback_config).apply(
             recommendations,
             item_popularity=item_popularity,
+            product_information=product_information,
         )
+        del product_information
 
     del item_popularity
 
     recommendations_rows = recommendations.height
     fallback_rows = (
         recommendations
-        .filter(pl.col("source") == fallback_config.source_label)
+        .filter(pl.col("source").is_in(FALLBACK_SOURCE_LABELS))
         .height
     )
     if recommendations_rows == 0:

@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
-import subprocess
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -27,7 +26,18 @@ from ozon_similar_products.evaluation import (
     metrics_to_flat_dict,
     write_json,
 )
-from ozon_similar_products.evaluation.metrics import OfflineMetrics
+from ozon_similar_products.evaluation.metrics import (
+    DEFAULT_MIN_RANKING_RELEVANCE,
+    DEFAULT_RANKING_RELEVANT_ACTION_TYPES,
+    OfflineMetrics,
+)
+from ozon_similar_products.evaluation.validation_cache import (
+    load_or_build_validation_cache,
+    validation_cache_metadata,
+)
+from ozon_similar_products.evaluation.validation_semantics import (
+    validation_ground_truth_config,
+)
 from ozon_similar_products.output.writers import RecommendationWriter
 from ozon_similar_products.pipeline.run_pipeline import PipelineRunResult, run_pipeline
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
@@ -78,19 +88,11 @@ def _date_range_strings(start_date: date, end_date: date) -> list[str]:
 
 
 def _git_sha() -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-c", f"safe.directory={PROJECT_ROOT.as_posix()}", "rev-parse", "HEAD"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
+    return None
 
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+
+def _timestamp_slug() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%SZ")
 
 
 def _safe_label(value: str | None) -> str:
@@ -111,15 +113,18 @@ def make_run_id(
     top_k: int,
     run_name: str | None,
 ) -> str:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    base = (
-        f"{timestamp}_train-{train_until_date.isoformat()}"
-        f"_lb{lookback_days}_val{validation_days}_top{top_k}"
-    )
+    parts = [
+        "run",
+        _timestamp_slug(),
+        f"train-{train_until_date.isoformat()}",
+        f"lookback-{lookback_days}d",
+        f"validation-{validation_days}d",
+        f"top-{top_k}",
+    ]
     label = _safe_label(run_name)
     if label:
-        return f"{base}_{label}"
-    return base
+        parts.append(label)
+    return "_".join(parts)
 
 
 def _config_with_top_k_override(
@@ -185,6 +190,36 @@ def _item_action_types(config: Mapping[str, Any]) -> list[str]:
     return list(action_types)
 
 
+def _ranking_evaluation_options(config: Mapping[str, Any]) -> tuple[tuple[str, ...], float | None]:
+    evaluation_config = config.get("evaluation", {})
+    if not isinstance(evaluation_config, Mapping):
+        evaluation_config = {}
+
+    relevant_actions = evaluation_config.get(
+        "ranking_relevant_action_types",
+        DEFAULT_RANKING_RELEVANT_ACTION_TYPES,
+    )
+    if isinstance(relevant_actions, str):
+        ranking_relevant_action_types = (relevant_actions,)
+    elif isinstance(relevant_actions, Sequence):
+        ranking_relevant_action_types = tuple(str(action) for action in relevant_actions)
+    else:
+        ranking_relevant_action_types = DEFAULT_RANKING_RELEVANT_ACTION_TYPES
+
+    min_relevance = evaluation_config.get(
+        "min_ranking_relevance",
+        DEFAULT_MIN_RANKING_RELEVANCE,
+    )
+    if min_relevance is None:
+        min_ranking_relevance = None
+    elif isinstance(min_relevance, bool):
+        raise ValueError("min_ranking_relevance must be numeric or null")
+    else:
+        min_ranking_relevance = float(min_relevance)
+
+    return ranking_relevant_action_types, min_ranking_relevance
+
+
 def _write_config_snapshot(config: Mapping[str, Any], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -201,6 +236,17 @@ def _resolve_project_path(value: Any, default: str) -> Path:
     return (PROJECT_ROOT / path).resolve()
 
 
+def _validation_cache_root(config: Mapping[str, Any]) -> Path:
+    outputs_config = config.get("outputs", {})
+    root_dir = "outputs"
+    if isinstance(outputs_config, Mapping):
+        root_dir = str(outputs_config.get("root_dir", root_dir))
+    return _resolve_project_path(
+        Path(root_dir) / "cache" / "validation",
+        "outputs/cache/validation",
+    )
+
+
 def _build_validation_pair_counts(
     *,
     config: Mapping[str, Any],
@@ -210,11 +256,12 @@ def _build_validation_pair_counts(
 ) -> pl.DataFrame:
     """Build compact validation pair counts day by day."""
     data_config = load_configs(project_root=PROJECT_ROOT)
-    action_types = _item_action_types(config)
+    validation_config = validation_ground_truth_config(config)
+    action_types = _item_action_types(validation_config)
 
     cleaner = EventCleaner(item_action_types=action_types)
-    session_builder = SessionBuilder.from_config(dict(config))
-    pair_builder = ItemPairBuilder.from_config(dict(config))
+    session_builder = SessionBuilder.from_config(validation_config)
+    pair_builder = ItemPairBuilder.from_config(validation_config)
 
     count_frames: list[pl.DataFrame] = []
     missing_dates: list[str] = []
@@ -267,6 +314,11 @@ def _build_validation_pair_counts(
             pl.col("click_count").sum().alias("click_count"),
             pl.col("favorite_count").sum().alias("favorite_count"),
             pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])
@@ -343,6 +395,13 @@ def execute_full_run(
     latest_dir: Path = Path("outputs/latest"),
     keep_evaluation_artifacts: bool = False,
     publish_latest: bool = True,
+    validation_pair_counts: pl.DataFrame | None = None,
+    ground_truth: pl.DataFrame | None = None,
+    used_validation_cache: bool = False,
+    validation_cache_hit: bool = False,
+    validation_cache_key: str | None = None,
+    validation_cache_dir: Path | None = None,
+    used_scoring_only_mode: bool = False,
 ) -> FullRunResult:
     """Run train recommendations, build validation ground truth, and compute metrics."""
     logger = logging.getLogger(__name__)
@@ -365,6 +424,7 @@ def execute_full_run(
     relevance_weights = evaluation_config.get("relevance_weights")
     if not isinstance(relevance_weights, Mapping):
         relevance_weights = None
+    ranking_relevant_action_types, min_ranking_relevance = _ranking_evaluation_options(config)
 
     resolved_run_id = run_id or make_run_id(
         train_until_date=train_until_date,
@@ -393,20 +453,57 @@ def execute_full_run(
 
     recommendations = pl.read_parquet(pipeline_result.detailed_recommendations_path)
 
-    logger.info("[run_full] build validation pair counts")
-    validation_pair_counts = _build_validation_pair_counts(
-        config=config,
-        validation_start_date=validation_start_date,
-        validation_end_date=validation_end_date,
-        logger=logger,
-    )
-
-    logger.info("[run_full] build validation ground truth")
-    ground_truth = build_ground_truth_from_daily_pair_counts(
-        validation_pair_counts,
-        relevance_mode=relevance_mode,
-        action_weights=relevance_weights,
-    )
+    validation_pair_counts_seconds = 0.0
+    ground_truth_seconds = 0.0
+    if ground_truth is not None:
+        logger.info("[run_full] reuse prebuilt validation ground truth")
+        if validation_pair_counts is None:
+            validation_pair_counts = empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+    elif validation_pair_counts is not None:
+        logger.info("[run_full] reuse prebuilt validation pair counts")
+        ground_truth_started = time.perf_counter()
+        ground_truth = build_ground_truth_from_daily_pair_counts(
+            validation_pair_counts,
+            relevance_mode=relevance_mode,
+            action_weights=relevance_weights,
+        )
+        ground_truth_seconds = time.perf_counter() - ground_truth_started
+    else:
+        cache_started = time.perf_counter()
+        metadata = validation_cache_metadata(
+            config=config,
+            validation_start_date=validation_start_date,
+            validation_end_date=validation_end_date,
+            relevance_mode=relevance_mode,
+            relevance_weights=relevance_weights,
+            item_action_types=_item_action_types(config),
+            git_sha=_git_sha(),
+        )
+        validation_cache = load_or_build_validation_cache(
+            cache_root=_validation_cache_root(config),
+            metadata=metadata,
+            relevance_mode=relevance_mode,
+            relevance_weights=relevance_weights,
+            build_validation_pair_counts=lambda: _build_validation_pair_counts(
+                config=config,
+                validation_start_date=validation_start_date,
+                validation_end_date=validation_end_date,
+                logger=logger,
+            ),
+            logger=logger,
+        )
+        cache_elapsed = time.perf_counter() - cache_started
+        validation_pair_counts = validation_cache.validation_pair_counts
+        ground_truth = validation_cache.ground_truth
+        used_validation_cache = True
+        validation_cache_hit = validation_cache.cache_hit
+        validation_cache_key = validation_cache.cache_key
+        validation_cache_dir = validation_cache.cache_dir
+        if validation_cache.cache_hit:
+            logger.info("[run_full] validation cache hit in %.2fs", cache_elapsed)
+        else:
+            logger.info("[run_full] validation cache miss/build in %.2fs", cache_elapsed)
+            validation_pair_counts_seconds = cache_elapsed
 
     evaluation_dir = resolved_run_dir / "evaluation"
     debug_dir = evaluation_dir / "debug"
@@ -426,12 +523,16 @@ def execute_full_run(
         context["popularity_column"] = "events_count"
 
     logger.info("[run_full] compute metrics")
+    metrics_started = time.perf_counter()
     metrics = compute_offline_metrics(
         recommendations=recommendations,
         ground_truth=ground_truth,
         top_k=resolved_top_k,
         context=context,
+        ranking_relevant_action_types=ranking_relevant_action_types,
+        min_ranking_relevance=min_ranking_relevance,
     )
+    metrics_seconds = time.perf_counter() - metrics_started
 
     scorecard = build_scorecard(
         experiment_id=resolved_run_id,
@@ -447,6 +548,11 @@ def execute_full_run(
             "config_path": config_snapshot_path,
             "recommendations_path": pipeline_result.detailed_recommendations_path,
             "keep_evaluation_artifacts": keep_evaluation_artifacts,
+            "used_validation_cache": used_validation_cache,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": used_scoring_only_mode,
         },
     )
 
@@ -480,6 +586,14 @@ def execute_full_run(
         "scorecard_path": "evaluation/scorecard.json",
         "debug_artifacts_kept": keep_evaluation_artifacts,
         "elapsed_seconds": elapsed_seconds,
+        "validation_pair_counts_seconds": validation_pair_counts_seconds,
+        "ground_truth_seconds": ground_truth_seconds,
+        "metrics_seconds": metrics_seconds,
+        "used_validation_cache": used_validation_cache,
+        "validation_cache_hit": validation_cache_hit,
+        "validation_cache_key": validation_cache_key,
+        "validation_cache_dir": validation_cache_dir,
+        "used_scoring_only_mode": used_scoring_only_mode,
     }
     if keep_evaluation_artifacts:
         evaluation_manifest["debug_paths"] = {
@@ -504,6 +618,11 @@ def execute_full_run(
             "scorecard_path": "evaluation/scorecard.json",
             "evaluation_manifest_path": "evaluation/evaluation_manifest.json",
             "elapsed_seconds": elapsed_seconds,
+            "used_validation_cache": used_validation_cache,
+            "validation_cache_hit": validation_cache_hit,
+            "validation_cache_key": validation_cache_key,
+            "validation_cache_dir": validation_cache_dir,
+            "used_scoring_only_mode": used_scoring_only_mode,
             "paths": {
                 **dict(pipeline_result.manifest["paths"]),
                 "metrics_path": "evaluation/metrics.json",

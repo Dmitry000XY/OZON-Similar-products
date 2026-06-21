@@ -39,6 +39,8 @@ _COUNT_COLUMNS = {
 }
 
 _VALID_METHODS = {"pair_count", "calibrated_multichannel"}
+_VALID_COUNT_SOURCES = {"raw", "weighted"}
+_VALID_COUNT_TRANSFORMS = {"log", "linear", "sqrt"}
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -65,6 +67,21 @@ def _as_float(value: Any, default: float) -> float:
         except ValueError:
             return default
     return default
+
+
+def _as_optional_float(value: Any, name: str) -> float | None:
+    """Return optional float threshold with strict bool rejection."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a number or null")
+    if isinstance(value, int | float | str):
+        parsed = float(value)
+    else:
+        raise TypeError(f"{name} must be a number or null")
+    if parsed < 0.0:
+        raise ValueError(f"{name} must be non-negative or null")
+    return parsed
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -123,6 +140,38 @@ def _empty_pair_scores() -> pl.DataFrame:
     return empty_contract_frame(schemas.PAIR_SCORES_COLUMNS)
 
 
+def _frame_columns(frame: FrameLike) -> set[str]:
+    if isinstance(frame, pl.LazyFrame):
+        return set(frame.collect_schema().names())
+    return set(frame.columns)
+
+
+def _with_weighted_count_columns(
+        frame: FrameLike,
+        *,
+        require_weighted: bool,
+) -> pl.LazyFrame:
+    columns = _frame_columns(frame)
+    missing_weighted = [
+        weighted_column
+        for weighted_column in schemas.WEIGHTED_COUNT_COLUMNS
+        if weighted_column not in columns
+    ]
+    if require_weighted and missing_weighted:
+        raise ValueError(
+            "weighted count columns are required for scoring.count_source='weighted': "
+            f"{missing_weighted}"
+        )
+
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return _as_lazy(frame).with_columns(expressions)
+
+
 def _effective_weight(
         action_type: str,
         business_weights: Mapping[str, float],
@@ -173,6 +222,11 @@ class CoVisitationScorer:
     min_pair_count: int = 1
     min_unique_users: int = 1
     min_unique_sessions: int = 1
+    count_source: str = "raw"
+    count_transform_method: str = "log"
+    count_transform_smoothing: float = 1.0
+    min_weighted_pair_count: float | None = None
+    min_score: float | None = None
     normalize_by_item_popularity: bool = False
     popularity_column: str = "unique_users"
     popularity_smoothing: float = 1.0
@@ -181,6 +235,12 @@ class CoVisitationScorer:
     def __post_init__(self) -> None:
         if self.method not in _VALID_METHODS:
             raise ValueError("method must be one of: pair_count, calibrated_multichannel")
+        if self.count_source not in _VALID_COUNT_SOURCES:
+            raise ValueError("count_source must be one of: raw, weighted")
+        if self.count_transform_method not in _VALID_COUNT_TRANSFORMS:
+            raise ValueError("count_transform.method must be one of: log, linear, sqrt")
+        if self.count_transform_smoothing <= 0.0:
+            raise ValueError("count_transform.smoothing must be > 0")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError("beta must be between 0 and 1")
         if self.min_pair_count < 1:
@@ -189,6 +249,10 @@ class CoVisitationScorer:
             raise ValueError("min_unique_users must be at least 1")
         if self.min_unique_sessions < 1:
             raise ValueError("min_unique_sessions must be at least 1")
+        if self.min_weighted_pair_count is not None and self.min_weighted_pair_count < 0.0:
+            raise ValueError("min_weighted_pair_count must be non-negative or null")
+        if self.min_score is not None and self.min_score < 0.0:
+            raise ValueError("min_score must be non-negative or null")
         if not self.popularity_column:
             raise ValueError("popularity_column must be a non-empty string")
         if self.popularity_smoothing < 0.0:
@@ -208,6 +272,7 @@ class CoVisitationScorer:
         min_pair_count = _as_int(scoring.get("min_pair_count", 1), 1)
         min_unique_users = _as_int(scoring.get("min_unique_users", 1), 1)
         min_unique_sessions = _as_int(scoring.get("min_unique_sessions", 1), 1)
+        count_transform = _as_mapping(scoring.get("count_transform", {}))
         popularity_column = _as_str(
             popularity_normalization.get("popularity_column", "unique_users"),
             "unique_users",
@@ -225,6 +290,20 @@ class CoVisitationScorer:
             min_pair_count=min_pair_count,
             min_unique_users=min_unique_users,
             min_unique_sessions=min_unique_sessions,
+            count_source=_as_str(scoring.get("count_source", "raw"), "raw"),
+            count_transform_method=_as_str(count_transform.get("method", "log"), "log"),
+            count_transform_smoothing=_as_float(
+                count_transform.get("smoothing", 1.0),
+                1.0,
+            ),
+            min_weighted_pair_count=_as_optional_float(
+                scoring.get("min_weighted_pair_count"),
+                "scoring.min_weighted_pair_count",
+            ),
+            min_score=_as_optional_float(
+                scoring.get("min_score"),
+                "scoring.min_score",
+            ),
             normalize_by_item_popularity=_as_strict_bool(
                 scoring.get("normalize_by_item_popularity", False),
                 default=False,
@@ -240,18 +319,25 @@ class CoVisitationScorer:
             item_popularity: FrameLike | None = None,
     ) -> pl.LazyFrame:
         """Build a lazy pair-score plan from pair aggregates."""
-        validate_pair_aggregates(pair_aggregates)
+        pair_aggregates_lazy = _with_weighted_count_columns(
+            pair_aggregates,
+            require_weighted=self.count_source == "weighted",
+        )
+        validate_pair_aggregates(pair_aggregates_lazy)
 
         scored = (
-            _as_lazy(pair_aggregates)
+            pair_aggregates_lazy
             .filter(
                 (pl.col("pair_count") >= self.min_pair_count)
                 & (pl.col("unique_users") >= self.min_unique_users)
                 & (pl.col("unique_sessions") >= self.min_unique_sessions)
             )
-            .with_columns(
-                self._base_score_expression().cast(pl.Float64).alias("base_score")
-            )
+        )
+        if self.min_weighted_pair_count is not None:
+            scored = scored.filter(pl.col("weighted_pair_count") >= self.min_weighted_pair_count)
+
+        scored = scored.with_columns(
+            self._base_score_expression().cast(pl.Float64).alias("base_score")
         )
 
         if self.normalize_by_item_popularity:
@@ -265,6 +351,9 @@ class CoVisitationScorer:
             )
         else:
             scored = scored.with_columns(pl.col("base_score").alias("score"))
+
+        if self.min_score is not None:
+            scored = scored.filter(pl.col("score") >= self.min_score)
 
         scores = (
             scored.select(schemas.PAIR_SCORES_COLUMNS)
@@ -287,11 +376,12 @@ class CoVisitationScorer:
 
     def _base_score_expression(self) -> pl.Expr:
         """Build the Polars base-scoring expression for the selected method."""
+        count_columns = self._count_columns()
         if self.method == "pair_count":
-            return pl.col("pair_count").cast(pl.Float64)
+            return pl.col(count_columns["pair"]).cast(pl.Float64)
 
         score_expr = pl.lit(0.0)
-        for action_type, count_column in _COUNT_COLUMNS.items():
+        for action_type, count_column in count_columns["channels"].items():
             effective_weight = _effective_weight(
                 action_type=action_type,
                 business_weights=self.business_weights,
@@ -302,8 +392,29 @@ class CoVisitationScorer:
             )
             if math.isclose(effective_weight, 0.0):
                 continue
-            score_expr += effective_weight * (pl.col(count_column).cast(pl.Float64) + 1.0).log()
+            score_expr += effective_weight * self._count_transform_expr(pl.col(count_column))
         return score_expr
+
+    def _count_columns(self) -> dict[str, Any]:
+        if self.count_source == "raw":
+            return {"pair": "pair_count", "channels": _COUNT_COLUMNS}
+        return {
+            "pair": "weighted_pair_count",
+            "channels": {
+                "view": "weighted_view_count",
+                "click": "weighted_click_count",
+                "favorite": "weighted_favorite_count",
+                "to_cart": "weighted_to_cart_count",
+            },
+        }
+
+    def _count_transform_expr(self, count_expr: pl.Expr) -> pl.Expr:
+        count = count_expr.cast(pl.Float64)
+        if self.count_transform_method == "linear":
+            return count
+        if self.count_transform_method == "sqrt":
+            return count.sqrt()
+        return (count + self.count_transform_smoothing).log()
 
     def _apply_item_popularity_normalization(
             self,

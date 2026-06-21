@@ -41,6 +41,35 @@ def _aggregates() -> pl.DataFrame:
     )
 
 
+def _aggregates_with_weighted() -> pl.DataFrame:
+    return _aggregates().with_columns(
+        pl.when(pl.col("similar_item_id") == 10)
+        .then(2.5)
+        .otherwise(0.25)
+        .alias("weighted_pair_count"),
+        pl.when(pl.col("similar_item_id") == 10)
+        .then(2.5)
+        .otherwise(0.0)
+        .alias("weighted_view_count"),
+        pl.lit(0.0).alias("weighted_click_count"),
+        pl.lit(0.0).alias("weighted_favorite_count"),
+        pl.when(pl.col("similar_item_id") == 20)
+        .then(0.25)
+        .otherwise(0.0)
+        .alias("weighted_to_cart_count"),
+    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+
+
+def _complete_aggregates(frame: pl.DataFrame) -> pl.DataFrame:
+    return frame.with_columns(
+        pl.col("pair_count").cast(pl.Float64).alias("weighted_pair_count"),
+        pl.col("view_count").cast(pl.Float64).alias("weighted_view_count"),
+        pl.col("click_count").cast(pl.Float64).alias("weighted_click_count"),
+        pl.col("favorite_count").cast(pl.Float64).alias("weighted_favorite_count"),
+        pl.col("to_cart_count").cast(pl.Float64).alias("weighted_to_cart_count"),
+    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+
+
 def _item_popularity() -> pl.DataFrame:
     return pl.DataFrame(
         [
@@ -100,9 +129,81 @@ def test_scorer_thresholds_filter_weak_pairs() -> None:
     assert scores[0, "similar_item_id"] == 10
 
 
+def test_count_source_raw_uses_raw_counts_even_when_weighted_counts_differ() -> None:
+    scores = CoVisitationScorer(method="pair_count", count_source="raw").score(
+        _aggregates_with_weighted()
+    )
+
+    assert scores.filter(pl.col("similar_item_id") == 10)[0, "score"] == 100.0
+    assert scores.filter(pl.col("similar_item_id") == 20)[0, "score"] == 1.0
+
+
+def test_count_source_weighted_uses_weighted_counts() -> None:
+    scores = CoVisitationScorer(method="pair_count", count_source="weighted").score(
+        _aggregates_with_weighted()
+    )
+
+    assert scores.filter(pl.col("similar_item_id") == 10)[0, "score"] == 2.5
+    assert scores.filter(pl.col("similar_item_id") == 20)[0, "score"] == 0.25
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        ("log", math.log(2.5 + 1.0)),
+        ("linear", 2.5),
+        ("sqrt", math.sqrt(2.5)),
+    ],
+)
+def test_count_transform_methods(method: str, expected: float) -> None:
+    scores = CoVisitationScorer(
+        method="calibrated_multichannel",
+        count_source="weighted",
+        count_transform_method=method,
+        count_transform_smoothing=1.0,
+        business_weights={"view": 1.0, "click": 0.0, "favorite": 0.0, "to_cart": 0.0},
+    ).score(_aggregates_with_weighted())
+
+    assert scores.filter(pl.col("similar_item_id") == 10)[0, "score"] == pytest.approx(expected)
+
+
+def test_min_weighted_pair_count_filters_weak_weighted_pairs() -> None:
+    scores = CoVisitationScorer(
+        method="pair_count",
+        min_weighted_pair_count=1.0,
+    ).score(_aggregates_with_weighted())
+
+    assert scores["similar_item_id"].to_list() == [10]
+
+
+def test_min_score_filters_after_scoring() -> None:
+    scores = CoVisitationScorer(
+        method="pair_count",
+        count_source="weighted",
+        min_score=1.0,
+    ).score(_aggregates_with_weighted())
+
+    assert scores["similar_item_id"].to_list() == [10]
+
+
 def test_scorer_rejects_invalid_method() -> None:
     with pytest.raises(ValueError, match="method"):
         CoVisitationScorer(method="unknown")
+
+
+def test_scorer_rejects_invalid_count_source() -> None:
+    with pytest.raises(ValueError, match="count_source"):
+        CoVisitationScorer(count_source="missing")
+
+
+def test_scorer_rejects_invalid_count_transform() -> None:
+    with pytest.raises(ValueError, match="count_transform.method"):
+        CoVisitationScorer(count_transform_method="missing")
+
+
+def test_weighted_count_source_requires_weighted_columns() -> None:
+    with pytest.raises(ValueError, match="weighted count columns"):
+        CoVisitationScorer(count_source="weighted").score(_aggregates())
 
 
 def test_popularity_normalization_penalizes_popular_candidate() -> None:
@@ -191,7 +292,7 @@ def test_from_config_rejects_invalid_normalize_by_item_popularity() -> None:
         )
 
 def test_score_lazy_matches_score() -> None:
-    pair_aggregates = pl.DataFrame(
+    pair_aggregates = _complete_aggregates(pl.DataFrame(
         {
             "item_id": [10, 10, 20],
             "similar_item_id": [20, 30, 10],
@@ -205,7 +306,7 @@ def test_score_lazy_matches_score() -> None:
             "window_start": ["2026-05-01", "2026-05-01", "2026-05-01"],
             "window_end": ["2026-05-02", "2026-05-02", "2026-05-02"],
         }
-    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+    ))
 
     scorer = CoVisitationScorer(
         method="calibrated_multichannel",
@@ -223,7 +324,7 @@ def test_score_lazy_matches_score() -> None:
     assert lazy.equals(eager)
 
 def test_score_lazy_with_popularity_normalization_matches_score() -> None:
-    pair_aggregates = pl.DataFrame(
+    pair_aggregates = _complete_aggregates(pl.DataFrame(
         {
             "item_id": [10, 10],
             "similar_item_id": [20, 30],
@@ -237,7 +338,7 @@ def test_score_lazy_with_popularity_normalization_matches_score() -> None:
             "window_start": ["2026-05-01", "2026-05-01"],
             "window_end": ["2026-05-02", "2026-05-02"],
         }
-    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+    ))
 
     item_popularity = pl.DataFrame(
         {
@@ -268,7 +369,7 @@ def test_score_lazy_with_popularity_normalization_matches_score() -> None:
     assert lazy.equals(eager)
 
 def test_score_lazy_rejects_missing_popularity_column() -> None:
-    pair_aggregates = pl.DataFrame(
+    pair_aggregates = _complete_aggregates(pl.DataFrame(
         {
             "item_id": [10],
             "similar_item_id": [20],
@@ -282,7 +383,7 @@ def test_score_lazy_rejects_missing_popularity_column() -> None:
             "window_start": ["2026-05-01"],
             "window_end": ["2026-05-01"],
         }
-    ).select(schemas.PAIR_AGGREGATES_COLUMNS)
+    ))
 
     item_popularity = pl.DataFrame(
         {

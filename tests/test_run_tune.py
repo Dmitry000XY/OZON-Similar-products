@@ -9,8 +9,11 @@ import pytest
 import yaml
 
 from ozon_similar_products.cli import run_tune
+from ozon_similar_products.config import load_yaml_config
 from ozon_similar_products.evaluation import metrics_to_flat_dict
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
+from ozon_similar_products.retrieval.decay import DistanceDecayConfig, TimeDecayConfig
+from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 
 
 def test_set_by_dot_path_updates_nested_config_without_mutation() -> None:
@@ -111,6 +114,34 @@ def test_best_trial_row_prefers_eligible_balanced_objective() -> None:
     assert best["trial_id"] == "trial_0001"
 
 
+def test_best_trial_row_applies_fallback_global_share_penalty() -> None:
+    search_space = {
+        "objective": {
+            "primary_metric": "to_cart_hit_rate_at_k",
+            "supporting_metrics": ["fallback_hit_rate_at_k"],
+            "penalty_metrics": ["fallback_global_share_at_k"],
+        }
+    }
+    rows = [
+        {
+            "trial_id": "trial_low_global",
+            "to_cart_hit_rate_at_k": 0.6,
+            "fallback_hit_rate_at_k": 0.8,
+            "fallback_global_share_at_k": 0.1,
+        },
+        {
+            "trial_id": "trial_high_global",
+            "to_cart_hit_rate_at_k": 0.6,
+            "fallback_hit_rate_at_k": 0.8,
+            "fallback_global_share_at_k": 0.9,
+        },
+    ]
+
+    best = run_tune.best_trial_row(rows, search_space)
+
+    assert best["trial_id"] == "trial_low_global"
+
+
 def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Path) -> None:
     metrics = metrics_to_flat_dict(
         OfflineMetrics(
@@ -118,9 +149,24 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
             recall_at_k=0.8,
             ndcg_at_k=0.7,
             mrr_at_k=0.5,
+            strong_hit_rate_at_k=1.0,
+            strong_recall_at_k=0.8,
+            strong_mrr_at_k=0.5,
+            strong_ndcg_at_k=0.7,
+            to_cart_mrr_at_k=0.4,
+            to_cart_ndcg_at_k=0.6,
             coverage_at_k=1.0,
             popularity_bias_at_k=0.2,
             fallback_share_at_k=0.1,
+            fallback_category_type_share_at_k=0.01,
+            fallback_category_share_at_k=0.02,
+            fallback_type_share_at_k=0.03,
+            fallback_brand_share_at_k=0.04,
+            fallback_global_share_at_k=0.05,
+            fallback_hit_rate_at_k=0.6,
+            fallback_recall_at_k=0.5,
+            fallback_to_cart_hit_rate_at_k=0.4,
+            fallback_to_cart_recall_at_k=0.3,
             view_hit_rate_at_k=1.0,
             view_recall_at_k=0.8,
             click_hit_rate_at_k=0.7,
@@ -132,6 +178,10 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
             evaluated_items=2,
             recommended_items=2,
             ground_truth_pairs=3,
+            all_evaluated_items=3,
+            ranking_evaluated_items=2,
+            view_only_ground_truth_pairs=1,
+            ranking_ground_truth_pairs=2,
         )
     )
     expected_metric_names = [
@@ -139,9 +189,24 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
         "recall_at_k",
         "ndcg_at_k",
         "mrr_at_k",
+        "strong_hit_rate_at_k",
+        "strong_recall_at_k",
+        "strong_mrr_at_k",
+        "strong_ndcg_at_k",
+        "to_cart_mrr_at_k",
+        "to_cart_ndcg_at_k",
         "coverage_at_k",
         "popularity_bias_at_k",
         "fallback_share_at_k",
+        "fallback_category_type_share_at_k",
+        "fallback_category_share_at_k",
+        "fallback_type_share_at_k",
+        "fallback_brand_share_at_k",
+        "fallback_global_share_at_k",
+        "fallback_hit_rate_at_k",
+        "fallback_recall_at_k",
+        "fallback_to_cart_hit_rate_at_k",
+        "fallback_to_cart_recall_at_k",
         "view_hit_rate_at_k",
         "view_recall_at_k",
         "click_hit_rate_at_k",
@@ -153,6 +218,10 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
         "evaluated_items",
         "recommended_items",
         "ground_truth_pairs",
+        "all_evaluated_items",
+        "ranking_evaluated_items",
+        "view_only_ground_truth_pairs",
+        "ranking_ground_truth_pairs",
     ]
 
     assert list(metrics) == expected_metric_names
@@ -165,6 +234,27 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
     with results_path.open(encoding="utf-8", newline="") as file:
         reader = csv.DictReader(file)
         assert reader.fieldnames == ["trial_id", "run_dir", *expected_metric_names]
+
+
+def test_graph_scoring_configs_and_search_space_load() -> None:
+    for config_path in [
+        Path("configs/baseline.yaml"),
+        Path("configs/production.yaml"),
+    ]:
+        config = load_yaml_config(config_path)
+        assert DistanceDecayConfig.from_config(config).strategy == "none"
+        assert TimeDecayConfig.from_config(config).strategy == "none"
+        scorer = CoVisitationScorer.from_config(config)
+        assert scorer.count_source == "raw"
+        assert scorer.count_transform_method == "log"
+        assert scorer.count_transform_smoothing == 1.0
+
+    search_space = load_yaml_config("configs/tuning/search_space_graph_scoring.yaml")
+    parameters = search_space["parameters"]
+    assert "graph.distance_decay.enabled" in parameters
+    assert "graph.time_decay.strategy" in parameters
+    assert "scoring.count_source" in parameters
+    assert "scoring.min_weighted_pair_count" in parameters
 
 
 def test_run_tuning_uses_trial_overrides_and_best_config_without_scratch_artifacts(

@@ -10,7 +10,6 @@ src/ozon_similar_products/retrieval/aggregate_pairs.py
 
 Главное правило: **PairAggregator не применяет веса и не считает score**.
 
-
 Он только считает фактические статистики по парам и каналам поведения:
 
 ```text
@@ -22,7 +21,8 @@ unique_users
 unique_sessions
 ```
 
-Это принципиально важно для новой multi-channel архитектуры: до `CoVisitationScorer` мы не хотим превращать разные типы событий в одно число.
+Это принципиально важно для новой multi-channel архитектуры: до `CoVisitationScorer` мы не хотим превращать разные типы
+событий в одно число.
 
 ---
 
@@ -99,16 +99,16 @@ signal_type
 
 Смысл полей:
 
-| Поле | Значение |
-|---|---|
-| `pair_date` | Дата pair event |
-| `item_id` | Исходный товар |
-| `similar_item_id` | Товар-кандидат |
-| `session_id` | Сессия, где возникла связь |
-| `user_id` | Пользователь, создавший связь |
+| Поле                 | Значение                                        |
+|----------------------|-------------------------------------------------|
+| `pair_date`          | Дата pair event                                 |
+| `item_id`            | Исходный товар                                  |
+| `similar_item_id`    | Товар-кандидат                                  |
+| `session_id`         | Сессия, где возникла связь                      |
+| `user_id`            | Пользователь, создавший связь                   |
 | `source_action_type` | Strongest action исходного товара внутри сессии |
-| `target_action_type` | Strongest action кандидата внутри сессии |
-| `signal_type` | Канал пары; сейчас равен `target_action_type` |
+| `target_action_type` | Strongest action кандидата внутри сессии        |
+| `signal_type`        | Канал пары; сейчас равен `target_action_type`   |
 
 Пример:
 
@@ -125,7 +125,8 @@ B → A: signal_type = view
 B → C: signal_type = view
 ```
 
-Почему `signal_type` берётся от target item: если мы строим рекомендацию `A → B`, то для качества кандидата особенно важно, что пользователь сделал с `B`. Если `B` добавили в корзину, это сильный сигнал для рекомендации `B` рядом с `A`.
+Почему `signal_type` берётся от target item: если мы строим рекомендацию `A → B`, то для качества кандидата особенно
+важно, что пользователь сделал с `B`. Если `B` добавили в корзину, это сильный сигнал для рекомендации `B` рядом с `A`.
 
 ---
 
@@ -149,19 +150,19 @@ window_end
 
 Смысл полей:
 
-| Поле | Значение |
-|---|---|
-| `item_id` | Исходный товар |
-| `similar_item_id` | Товар-кандидат |
-| `pair_count` | Сколько раз пара встретилась в rolling window |
-| `view_count` | Сколько pair events пришли из `signal_type = view` |
-| `click_count` | Сколько pair events пришли из `signal_type = click` |
-| `favorite_count` | Сколько pair events пришли из `signal_type = favorite` |
-| `to_cart_count` | Сколько pair events пришли из `signal_type = to_cart` |
-| `unique_users` | Сколько уникальных пользователей создали пару |
+| Поле              | Значение                                                |
+|-------------------|---------------------------------------------------------|
+| `item_id`         | Исходный товар                                          |
+| `similar_item_id` | Товар-кандидат                                          |
+| `pair_count`      | Сколько раз пара встретилась в rolling window           |
+| `view_count`      | Сколько pair events пришли из `signal_type = view`      |
+| `click_count`     | Сколько pair events пришли из `signal_type = click`     |
+| `favorite_count`  | Сколько pair events пришли из `signal_type = favorite`  |
+| `to_cart_count`   | Сколько pair events пришли из `signal_type = to_cart`   |
+| `unique_users`    | Сколько уникальных пользователей создали пару           |
 | `unique_sessions` | Сколько уникальных `(user_id, session_id)` создали пару |
-| `window_start` | Начало rolling window |
-| `window_end` | Конец rolling window |
+| `window_start`    | Начало rolling window                                   |
+| `window_end`      | Конец rolling window                                    |
 
 Главный инвариант:
 
@@ -192,7 +193,8 @@ pair_weight
 1 to_cart?
 ```
 
-А именно это важно для калибровки. Добавление в корзину должно быть сильнее просмотра, но просмотров может быть в десятки раз больше. Поэтому нам нельзя просто смешать всё до scorer-а.
+А именно это важно для калибровки. Добавление в корзину должно быть сильнее просмотра, но просмотров может быть в
+десятки раз больше. Поэтому нам нельзя просто смешать всё до scorer-а.
 
 Правильная схема:
 
@@ -309,7 +311,8 @@ from ozon_similar_products.data import schemas
 empty = empty_contract_frame(schemas.PAIR_AGGREGATES_COLUMNS)
 ```
 
-Так модуль знает только канонический список колонок из `schemas.py`. Если позже потребуется строгая dtype-валидация, её лучше добавить централизованно, а не размазывать по файлам.
+Так модуль знает только канонический список колонок из `schemas.py`. Если позже потребуется строгая dtype-валидация, её
+лучше добавить централизованно, а не размазывать по файлам.
 
 ---
 

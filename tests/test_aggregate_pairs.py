@@ -22,6 +22,11 @@ def _daily_stats_from_pairs(
             (pl.col("signal_type") == "click").sum().alias("click_count"),
             (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
             (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
+            pl.len().cast(pl.Float64).alias("weighted_pair_count"),
+            (pl.col("signal_type") == "view").sum().cast(pl.Float64).alias("weighted_view_count"),
+            (pl.col("signal_type") == "click").sum().cast(pl.Float64).alias("weighted_click_count"),
+            (pl.col("signal_type") == "favorite").sum().cast(pl.Float64).alias("weighted_favorite_count"),
+            (pl.col("signal_type") == "to_cart").sum().cast(pl.Float64).alias("weighted_to_cart_count"),
         )
         .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
         .sort(["pair_date", "item_id", "similar_item_id"])
@@ -439,19 +444,7 @@ def test_aggregate_window_from_paths_returns_empty_for_no_paths() -> None:
     )
 
     assert result.is_empty()
-    assert result.columns == [
-        "item_id",
-        "similar_item_id",
-        "pair_count",
-        "view_count",
-        "click_count",
-        "favorite_count",
-        "to_cart_count",
-        "unique_users",
-        "unique_sessions",
-        "window_start",
-        "window_end",
-    ]
+    assert result.columns == schemas.PAIR_AGGREGATES_COLUMNS
 
 
 def test_aggregate_window_from_paths_returns_empty_when_no_pairs_in_window(tmp_path) -> None:
@@ -480,16 +473,4 @@ def test_aggregate_window_from_paths_returns_empty_when_no_pairs_in_window(tmp_p
     )
 
     assert result.is_empty()
-    assert result.columns == [
-        "item_id",
-        "similar_item_id",
-        "pair_count",
-        "view_count",
-        "click_count",
-        "favorite_count",
-        "to_cart_count",
-        "unique_users",
-        "unique_sessions",
-        "window_start",
-        "window_end",
-    ]
+    assert result.columns == schemas.PAIR_AGGREGATES_COLUMNS
