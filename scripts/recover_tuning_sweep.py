@@ -24,9 +24,9 @@ import yaml
 TRIALS_DIR_NAME = "trials"
 DEFAULT_PRIMARY_METRIC = "to_cart_hit_rate_at_k"
 DEFAULT_SUPPORTING_METRICS = [
-    "ndcg_at_k",
-    "recall_at_k",
-    "mrr_at_k",
+    "strong_ndcg_at_k",
+    "strong_recall_at_k",
+    "strong_mrr_at_k",
     "coverage_at_k",
     "to_cart_recall_at_k",
 ]
@@ -59,6 +59,20 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"YAML payload must be an object: {path}")
     return payload
+
+
+def _clean_recovered_config(
+    config: Mapping[str, Any],
+    base_config: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Drop per-trial runtime artifact paths from recovered configs."""
+    cleaned = dict(config)
+    base_artifacts = base_config.get("artifacts")
+    if isinstance(base_artifacts, Mapping):
+        cleaned["artifacts"] = dict(base_artifacts)
+    else:
+        cleaned.pop("artifacts", None)
+    return cleaned
 
 
 def _json_ready(value: Any) -> Any:
@@ -207,7 +221,7 @@ def _objective_sort_key(row: Mapping[str, Any]) -> tuple[float, float, float, st
     return (
         float(row.get("objective_score") or 0.0),
         _metric_value(row, primary_metric),
-        _metric_value(row, "ndcg_at_k"),
+        _metric_value(row, "strong_ndcg_at_k", default=_metric_value(row, "ndcg_at_k")),
         str(row.get("trial_id", "")),
     )
 
@@ -280,6 +294,7 @@ def _write_recovery_outputs(
     rows: Sequence[Mapping[str, Any]],
     best_row: Mapping[str, Any],
     best_artifact: TrialArtifacts,
+    base_config: Mapping[str, Any],
     canonical: bool,
     overwrite: bool,
 ) -> None:
@@ -302,7 +317,10 @@ def _write_recovery_outputs(
         ),
     }
     if best_artifact.config_path is not None:
-        outputs[f"{prefix}best_config.yaml"] = lambda path: _write_yaml(path, _load_yaml(best_artifact.config_path))
+        outputs[f"{prefix}best_config.yaml"] = lambda path: _write_yaml(
+            path,
+            _clean_recovered_config(_load_yaml(best_artifact.config_path), base_config),
+        )
 
     for filename, writer in outputs.items():
         path = sweep_dir / filename
@@ -320,6 +338,7 @@ def recover_sweep(
 ) -> None:
     sweep_dir = sweep_dir.resolve()
     search_space = _load_yaml(sweep_dir / "search_space.yaml")
+    base_config = _load_yaml(sweep_dir / "base_config.yaml")
     rows, artifacts_by_key = build_recovered_rows(sweep_dir, search_space)
     best = _best_row(rows)
     best_artifact = artifacts_by_key[_row_key(best)]
@@ -328,6 +347,7 @@ def recover_sweep(
         rows=rows,
         best_row=best,
         best_artifact=best_artifact,
+        base_config=base_config,
         canonical=canonical,
         overwrite=overwrite,
     )
