@@ -509,10 +509,19 @@ def _write_results_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> Path:
     return path
 
 
-def _strip_trial_recommendation_parquets(trial_dir: Path) -> None:
-    recommendations_dir = trial_dir / "recommendations"
-    if recommendations_dir.exists():
-        shutil.rmtree(recommendations_dir)
+def _strip_trial_scratch_artifacts(trial_dir: Path) -> list[Path]:
+    """Remove heavyweight per-trial scratch outputs after metrics are persisted."""
+    removed: list[Path] = []
+    for relative_path in (
+        Path("artifacts"),
+        Path("recommendations"),
+        Path("evaluation") / "debug",
+    ):
+        target = trial_dir / relative_path
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+            removed.append(target)
+    return removed
 
 
 def _trial_dir(sweep_dir: Path, trial_id: str, stage: int | None) -> Path:
@@ -582,7 +591,14 @@ def _run_trial(
     metrics = metrics_to_flat_dict(result.metrics)
     _copy_if_different(result.metrics_path, trial_dir / "metrics.json")
     _copy_if_different(result.manifest_path, trial_dir / "manifest.json")
-    _strip_trial_recommendation_parquets(trial_dir)
+    removed_scratch_artifacts = _strip_trial_scratch_artifacts(trial_dir)
+    if removed_scratch_artifacts:
+        logger.info(
+            "[run_tune] pruned_trial_scratch_artifacts trial_id=%s stage=%s removed=%s",
+            trial_id,
+            stage_value,
+            [path.as_posix() for path in removed_scratch_artifacts],
+        )
     row = {"trial_id": trial_id, "run_dir": trial_dir.as_posix(), **strategy_columns, **overrides, **metrics}
     if fast_context is not None:
         row["fast_scoring_only"] = True
@@ -610,6 +626,81 @@ def _annealing_temperature(index: int, total_trials: int, *, start: float, end: 
     if total_trials <= 1:
         return end
     return start * ((end / start) ** (float(index) / float(total_trials - 1)))
+
+
+def _preferred_checkpoint_stage(rows: Sequence[Mapping[str, Any]]) -> int | None:
+    stages = [
+        int(row["stage"])
+        for row in rows
+        if row.get("stage") is not None
+    ]
+    return max(stages) if stages else None
+
+
+def _write_tuning_checkpoint(
+    *,
+    sweep_dir: Path,
+    rows: Sequence[Mapping[str, Any]],
+    search_space: Mapping[str, Any],
+    trial_configs: Mapping[str, Mapping[str, Any]],
+    parameter_names: Sequence[str],
+    sweep_id: str,
+    tuning_strategy: str,
+    max_trials: int,
+    train_until_date: date,
+    lookback_days: int,
+    validation_days: int,
+    top_k: int | None,
+    fast_scoring_only: bool,
+    halving_reduction_factor: int,
+    annealing_temperature_start: float,
+    annealing_temperature_end: float,
+    annealing_neighbor_mutations: int,
+) -> None:
+    """Persist sweep-level checkpoint files after each successful trial."""
+    if not rows:
+        return
+
+    preferred_stage = _preferred_checkpoint_stage(rows)
+    best_row = best_trial_row(rows, search_space, preferred_stage=preferred_stage)
+    best_trial_id = str(best_row["trial_id"])
+    best_config = trial_configs.get(best_trial_id)
+
+    _write_results_csv(sweep_dir / "results.csv", rows)
+
+    if best_config is not None:
+        _write_yaml(sweep_dir / "best_config.yaml", best_config)
+
+    best_metrics = {
+        key: value
+        for key, value in best_row.items()
+        if key not in {"trial_id", "run_dir", *parameter_names}
+    }
+    write_json(sweep_dir / "best_metrics.json", best_metrics)
+    write_json(
+        sweep_dir / "summary.json",
+        {
+            "sweep_id": sweep_id,
+            "created_at": datetime.now(UTC),
+            "checkpoint": True,
+            "strategy": tuning_strategy,
+            "max_trials": max_trials,
+            "trials_run": len(rows),
+            "best_trial_id": best_trial_id,
+            "best_metrics_path": "best_metrics.json",
+            "best_config_path": "best_config.yaml" if best_config is not None else None,
+            "results_path": "results.csv",
+            "train_until_date": train_until_date.isoformat(),
+            "lookback_days": lookback_days,
+            "validation_days": validation_days,
+            "top_k": top_k,
+            "fast_scoring_only": fast_scoring_only,
+            "halving_reduction_factor": halving_reduction_factor,
+            "annealing_temperature_start": annealing_temperature_start,
+            "annealing_temperature_end": annealing_temperature_end,
+            "annealing_neighbor_mutations": annealing_neighbor_mutations,
+        },
+    )
 
 
 def run_tuning(
@@ -712,6 +803,25 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
             best_id, best_primary = _current_best_log(rows, search_space)
             logger.info(
                 "[run_tune] trial_done trial_id=%s objective_score=%s current_best_trial_id=%s current_best_%s=%s",
@@ -741,6 +851,25 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
         stage_one_rows = [row for row in rows if row.get("stage") == 1]
         survivors_count = max(1, math.ceil(len(stage_one_rows) / halving_reduction_factor))
         survivor_ids = [
@@ -765,6 +894,25 @@ def run_tuning(
             )
             trial_configs[trial_id] = trial_config
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
 
     elif tuning_strategy == "simulated_annealing":
         current_trial = _sample_trial(search_space, rng=rng, discrete_only=True)
@@ -813,6 +961,25 @@ def run_tuning(
                 current_trial, current_score = dict(candidate), candidate_score
             row["accepted"] = accepted
             rows = _annotate_objective_rows([*rows, row], search_space)
+            _write_tuning_checkpoint(
+                sweep_dir=sweep_dir,
+                rows=rows,
+                search_space=search_space,
+                trial_configs=trial_configs,
+                parameter_names=parameter_names,
+                sweep_id=sweep_id,
+                tuning_strategy=tuning_strategy,
+                max_trials=max_trials,
+                train_until_date=train_until_date,
+                lookback_days=lookback_days,
+                validation_days=validation_days,
+                top_k=top_k,
+                fast_scoring_only=fast_scoring_only,
+                halving_reduction_factor=halving_reduction_factor,
+                annealing_temperature_start=annealing_temperature_start,
+                annealing_temperature_end=annealing_temperature_end,
+                annealing_neighbor_mutations=annealing_neighbor_mutations,
+            )
             logger.info(
                 "[run_tune] annealing trial_id=%s accepted=%s temperature=%s objective_score=%s",
                 trial_id,
