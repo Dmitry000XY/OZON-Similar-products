@@ -21,7 +21,6 @@ from typing import Any
 
 import yaml
 
-
 TRIALS_DIR_NAME = "trials"
 DEFAULT_PRIMARY_METRIC = "to_cart_hit_rate_at_k"
 DEFAULT_SUPPORTING_METRICS = [
