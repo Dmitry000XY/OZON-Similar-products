@@ -557,25 +557,8 @@ def _build_daily_pair_stats_in_memory(
         )
 
         for batch_index, session_batch in enumerate(session_batches, start=1):
-            logging.getLogger(__name__).info(
-                "[run_pipeline] pair stats batch start date=%s batch=%s/%s rows=%s",
-                partition_date,
-                batch_index,
-                len(session_batches),
-                session_batch.height,
-            )
-            _log_memory(logging.getLogger(__name__), "before_pair_stats_batch")
 
             stats = pair_builder.build_daily_pair_stats(session_batch)
-
-            logging.getLogger(__name__).info(
-                "[run_pipeline] pair stats batch done date=%s batch=%s/%s raw_pair_rows=%s",
-                partition_date,
-                batch_index,
-                len(session_batches),
-                stats.raw_pair_rows,
-            )
-            _log_memory(logging.getLogger(__name__), "after_pair_stats_batch")
 
             batch_stats.append(stats)
 
@@ -605,25 +588,8 @@ def _build_and_write_daily_pair_stats(
         )
 
         for batch_index, session_batch in enumerate(session_batches, start=1):
-            logging.getLogger(__name__).info(
-                "[run_pipeline] pair stats batch start date=%s batch=%s/%s rows=%s",
-                partition_date,
-                batch_index,
-                len(session_batches),
-                session_batch.height,
-            )
-            _log_memory(logging.getLogger(__name__), "before_pair_stats_batch")
 
             stats = pair_builder.build_daily_pair_stats(session_batch)
-
-            logging.getLogger(__name__).info(
-                "[run_pipeline] pair stats batch done date=%s batch=%s/%s raw_pair_rows=%s",
-                partition_date,
-                batch_index,
-                len(session_batches),
-                stats.raw_pair_rows,
-            )
-            _log_memory(logging.getLogger(__name__), "after_pair_stats_batch")
 
             batch_stats.append(stats)
             raw_pair_rows += stats.raw_pair_rows
@@ -910,17 +876,6 @@ def _build_streaming_sessions_and_pair_stats(
                 ).select(schemas.CLEAN_EVENTS_COLUMNS)
 
             relative_sessions = session_builder.transform_day(session_input)
-
-            if bucket_id % 10 == 0:
-                logging.getLogger(__name__).info(
-                    "[run_pipeline] session bucket built date=%s bucket=%s/%s input_rows=%s sessions_rows=%s",
-                    partition_date,
-                    bucket_id + 1,
-                    session_user_buckets,
-                    session_input.height,
-                    relative_sessions.height,
-                )
-                _log_memory(logging.getLogger(__name__), "after_session_bucket_transform")
 
             active_sessions_bucket = (
                 active_sessions.filter(bucket_filter)
@@ -1321,12 +1276,6 @@ def run_pipeline(
         )
 
     for bucket_id in range(aggregation_item_buckets):
-        logger.info(
-            "[run_pipeline] aggregate/score/top-k item bucket=%s/%s",
-            bucket_id + 1,
-            aggregation_item_buckets,
-        )
-        _log_memory(logger, "before_aggregation_item_bucket")
 
         aggregator = PairAggregator()
 

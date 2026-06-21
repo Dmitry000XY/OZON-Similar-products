@@ -3,6 +3,9 @@ pipeline:
   max_items_per_session: 50
   top_k: 20
   lookback_days: 30
+  session_batch_size: 500
+  session_user_buckets: 256
+  aggregation_item_buckets: 128
 
 events:
   item_action_types:
@@ -48,7 +51,7 @@ scoring:
 
 artifacts:
   events_clean_dir: data/processed/events_clean
-  sessions_dir: data/processed/sessions
+  sessions_dir: null
   item_popularity_dir: data/processed/item_popularity
   action_type_distribution_dir: data/processed/action_type_distribution
   daily_pairs_dir: data/processed/item_pairs
