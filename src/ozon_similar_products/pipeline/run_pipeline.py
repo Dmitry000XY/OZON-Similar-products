@@ -235,16 +235,6 @@ def _current_rss_mb() -> float | None:
         return None
 
 
-def _log_memory(logger: logging.Logger, stage: str) -> None:
-    """Log current memory usage without adding a hard dependency."""
-    rss_mb = _current_rss_mb()
-    if rss_mb is None:
-        logger.info("[memory] stage=%s rss_mb=unavailable", stage)
-        return
-
-    logger.info("[memory] stage=%s rss_mb=%.1f", stage, rss_mb)
-
-
 def _scan_parquet_paths_or_empty_frame(
         paths: Sequence[Path],
         contract_columns: Sequence[str],
@@ -949,10 +939,6 @@ def _build_streaming_sessions_and_pair_stats(
                 stats_partition_date,
                 len(stats_list),
             )
-            _log_memory(
-                logging.getLogger(__name__),
-                "before_write_combined_daily_pair_stats",
-            )
 
             combined_stats = _combine_daily_pair_stats(stats_list)
             count_path, user_key_path, session_key_path = _write_daily_pair_stats(
@@ -964,11 +950,6 @@ def _build_streaming_sessions_and_pair_stats(
             count_paths.append(count_path)
             user_key_paths.append(user_key_path)
             session_key_paths.append(session_key_path)
-
-            _log_memory(
-                logging.getLogger(__name__),
-                "after_write_combined_daily_pair_stats",
-            )
 
             del combined_stats
 
@@ -1134,7 +1115,6 @@ def run_pipeline(
         len(clean_event_paths),
         events_clean_output_dir,
     )
-    _log_memory(logger, "after_clean_events")
 
     events_clean_input = _scan_parquet_paths_or_empty_frame(
         clean_event_paths,
@@ -1197,7 +1177,6 @@ def run_pipeline(
         len(daily_pair_stats_paths.count_paths),
         daily_pairs_output_dir,
     )
-    _log_memory(logger, "after_sessions_and_daily_pairs")
 
     logger.info("[run_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
@@ -1214,7 +1193,6 @@ def run_pipeline(
         item_popularity_rows,
         action_distribution_rows,
     )
-    _log_memory(logger, "after_item_popularity")
 
     item_popularity_dir = artifacts_config.get("item_popularity_dir")
     if isinstance(item_popularity_dir, str | Path):
@@ -1288,7 +1266,6 @@ def run_pipeline(
                 bucket_id + 1,
                 aggregation_item_buckets,
             )
-            _log_memory(logger, "before_aggregation_item_bucket")
 
         aggregator = PairAggregator()
 
@@ -1320,7 +1297,6 @@ def run_pipeline(
                 aggregation_item_buckets,
                 bucket_pair_aggregates_rows,
             )
-            _log_memory(logger, "after_aggregation_item_bucket")
 
         if aggregation_item_buckets == 1 and isinstance(pair_aggregates_dir, str | Path):
             _write_window_artifact(
@@ -1381,7 +1357,6 @@ def run_pipeline(
                 aggregation_item_buckets,
                 bucket_recommendations.height,
             )
-            _log_memory(logger, "after_topk_item_bucket")
 
     recommendations = _concat_recommendation_parts(recommendation_parts)
     del recommendation_parts
@@ -1390,14 +1365,12 @@ def run_pipeline(
         "[run_pipeline] pair aggregates rows=%s",
         pair_aggregates_rows,
     )
-    _log_memory(logger, "after_pair_aggregation")
 
     logger.info(
         "[run_pipeline] pair scores rows=%s calibration_used=%s",
         pair_scores_rows,
         scorer.action_shares is not None,
     )
-    _log_memory(logger, "after_scoring")
 
     fallback_config = FallbackConfig.from_config(config, top_k=top_k)
     if fallback_config.enabled:
@@ -1427,7 +1400,6 @@ def run_pipeline(
         recommendations_rows,
         fallback_rows,
     )
-    _log_memory(logger, "after_recommendations")
 
     outputs_root = _outputs_root(outputs_config)
     latest_dir = _as_path(outputs_config.get("latest_dir"), "outputs/latest")
