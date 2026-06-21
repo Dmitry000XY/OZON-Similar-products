@@ -219,6 +219,34 @@ def _write_window_artifact(
     return output_path
 
 
+def _current_rss_mb() -> float | None:
+    """Return current process RSS in MiB when supported."""
+    try:
+        import os
+
+        import psutil
+
+        return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    except ImportError:
+        pass
+
+    try:
+        import resource
+
+        getrusage = getattr(resource, "getrusage", None)
+        rusage_self = getattr(resource, "RUSAGE_SELF", None)
+        if not callable(getrusage) or rusage_self is None:
+            return None
+
+        usage = getrusage(rusage_self)
+        rss_kb = getattr(usage, "ru_maxrss", None)
+        if rss_kb is None:
+            return None
+        return float(rss_kb) / 1024
+    except (ImportError, AttributeError):
+        return None
+
+
 def _scan_parquet_paths_or_empty_frame(
         paths: Sequence[Path],
         contract_columns: Sequence[str],
@@ -227,6 +255,14 @@ def _scan_parquet_paths_or_empty_frame(
     if not paths:
         return empty_contract_frame(contract_columns)
     return pl.scan_parquet([path.as_posix() for path in paths])
+
+
+def _concat_recommendation_parts(parts: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    """Concat recommendation chunks while preserving optional diagnostic columns."""
+    if not parts:
+        return empty_contract_frame(schemas.RECOMMENDATIONS_COLUMNS)
+
+    return pl.concat(parts, how="diagonal_relaxed")
 
 
 def _load_clean_and_write_daily_events(
@@ -328,6 +364,16 @@ class DailyPairStatsPaths:
     raw_pair_rows: int
 
 
+def _with_weighted_count_columns(frame: pl.DataFrame) -> pl.DataFrame:
+    expressions = []
+    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
+        if weighted_column in frame.columns:
+            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
+        else:
+            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
+    return frame.with_columns(expressions)
+
+
 def _merge_daily_pair_counts(
         existing: pl.DataFrame,
         new: pl.DataFrame,
@@ -357,14 +403,65 @@ def _merge_daily_pair_counts(
     )
 
 
-def _with_weighted_count_columns(frame: pl.DataFrame) -> pl.DataFrame:
-    expressions = []
-    for raw_column, weighted_column in schemas.WEIGHTED_COUNT_BY_RAW_COLUMN.items():
-        if weighted_column in frame.columns:
-            expressions.append(pl.col(weighted_column).cast(pl.Float64).alias(weighted_column))
-        else:
-            expressions.append(pl.col(raw_column).cast(pl.Float64).alias(weighted_column))
-    return frame.with_columns(expressions)
+def _combine_daily_pair_stats(stats_list: Sequence[DailyPairStats]) -> DailyPairStats:
+    """Combine compact pair stats from multiple session batches."""
+    non_empty_stats = [
+        stats for stats in stats_list
+        if not stats.counts.is_empty()
+    ]
+
+    raw_pair_rows = sum(stats.raw_pair_rows for stats in stats_list)
+
+    if not non_empty_stats:
+        return DailyPairStats(
+            counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
+            user_keys=empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS),
+            session_keys=empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS),
+            raw_pair_rows=raw_pair_rows,
+        )
+
+    counts = (
+        pl.concat(
+            [_with_weighted_count_columns(stats.counts) for stats in non_empty_stats],
+            how="vertical",
+        )
+        .group_by(["pair_date", "item_id", "similar_item_id"])
+        .agg(
+            pl.col("pair_count").sum().alias("pair_count"),
+            pl.col("view_count").sum().alias("view_count"),
+            pl.col("click_count").sum().alias("click_count"),
+            pl.col("favorite_count").sum().alias("favorite_count"),
+            pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
+        )
+        .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+        .sort(["pair_date", "item_id", "similar_item_id"])
+    )
+
+    user_keys = (
+        pl.concat([stats.user_keys for stats in non_empty_stats], how="vertical")
+        .select(schemas.DAILY_PAIR_USER_KEYS_COLUMNS)
+        .unique()
+        .sort(["pair_date", "item_id", "similar_item_id", "user_id"])
+    )
+
+    session_keys = (
+        pl.concat([stats.session_keys for stats in non_empty_stats], how="vertical")
+        .select(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS)
+        .unique()
+        .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
+    )
+
+    return DailyPairStats(
+        counts=counts,
+        user_keys=user_keys,
+        session_keys=session_keys,
+        raw_pair_rows=raw_pair_rows,
+    )
 
 
 def _merge_daily_pair_keys(
@@ -382,6 +479,44 @@ def _merge_daily_pair_keys(
         .unique()
         .sort(sort_columns)
     )
+
+
+def _user_bucket_filter(bucket_id: int, bucket_count: int) -> pl.Expr:
+    """Return deterministic user bucket filter."""
+    return (pl.col("user_id") % bucket_count) == bucket_id
+
+
+def _iter_session_batches(
+        sessions: pl.DataFrame,
+        batch_size: int,
+) -> list[pl.DataFrame]:
+    """Split session rows into batches without splitting individual sessions."""
+    if batch_size <= 0:
+        raise ValueError("session batch_size must be a positive integer")
+
+    if sessions.is_empty():
+        return []
+
+    session_keys = (
+        sessions
+        .select(["user_id", "session_index"])
+        .unique()
+        .sort(["user_id", "session_index"])
+    )
+
+    batches: list[pl.DataFrame] = []
+    session_count = session_keys.height
+
+    for start in range(0, session_count, batch_size):
+        batch_keys = session_keys.slice(start, batch_size)
+        batch = sessions.join(
+            batch_keys,
+            on=["user_id", "session_index"],
+            how="inner",
+        )
+        batches.append(batch)
+
+    return batches
 
 
 def _write_daily_pair_stats(
@@ -433,13 +568,38 @@ def _write_daily_pair_stats(
     return count_path, user_key_path, session_key_path
 
 
+def _build_daily_pair_stats_in_memory(
+        *,
+        daily_sessions: Sequence[tuple[str, pl.DataFrame]],
+        pair_builder: ItemPairBuilder,
+        session_batch_size: int = 10_000,
+) -> DailyPairStats:
+    """Build compact daily pair stats from sessions without writing artifacts."""
+    batch_stats: list[DailyPairStats] = []
+
+    for partition_date, sessions in daily_sessions:
+        session_batches = _iter_session_batches(
+            sessions=sessions,
+            batch_size=session_batch_size,
+        )
+
+        for batch_index, session_batch in enumerate(session_batches, start=1):
+
+            stats = pair_builder.build_daily_pair_stats(session_batch)
+
+            batch_stats.append(stats)
+
+    return _combine_daily_pair_stats(batch_stats)
+
+
 def _build_and_write_daily_pair_stats(
         *,
         daily_sessions: Sequence[tuple[str, pl.DataFrame]],
         pair_builder: ItemPairBuilder,
         output_dir: Path,
+        session_batch_size: int = 10_000,
 ) -> DailyPairStatsPaths:
-    """Build compact daily pair stats for each sessions partition and write them."""
+    """Build compact daily pair stats for each sessions partition and write once per day."""
     count_paths: list[Path] = []
     user_key_paths: list[Path] = []
     session_key_paths: list[Path] = []
@@ -448,11 +608,26 @@ def _build_and_write_daily_pair_stats(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for partition_date, sessions in daily_sessions:
-        stats = pair_builder.build_daily_pair_stats(sessions)
-        raw_pair_rows += stats.raw_pair_rows
+        batch_stats: list[DailyPairStats] = []
+        session_batches = _iter_session_batches(
+            sessions=sessions,
+            batch_size=session_batch_size,
+        )
+
+        for batch_index, session_batch in enumerate(session_batches, start=1):
+
+            stats = pair_builder.build_daily_pair_stats(session_batch)
+
+            batch_stats.append(stats)
+            raw_pair_rows += stats.raw_pair_rows
+
+        if not batch_stats:
+            continue
+
+        combined_stats = _combine_daily_pair_stats(batch_stats)
 
         count_path, user_key_path, session_key_path = _write_daily_pair_stats(
-            stats=stats,
+            stats=combined_stats,
             partition_date=partition_date,
             output_dir=output_dir,
         )
@@ -460,6 +635,9 @@ def _build_and_write_daily_pair_stats(
         count_paths.append(count_path)
         user_key_paths.append(user_key_path)
         session_key_paths.append(session_key_path)
+
+        del batch_stats
+        del combined_stats
 
     return DailyPairStatsPaths(
         count_paths=count_paths,
@@ -650,6 +828,7 @@ def _append_daily_session_partitions(
 
         frame_to_write.write_parquet(output_path)
 
+
 def _unique_paths(paths: Sequence[Path]) -> list[Path]:
     return list(dict.fromkeys(paths))
 
@@ -661,6 +840,8 @@ def _build_streaming_sessions_and_pair_stats(
         pair_builder: ItemPairBuilder,
         daily_pairs_output_dir: Path,
         sessions_output_dir: Path | None,
+        session_batch_size: int = 10_000,
+        session_user_buckets: int = 256,
 ) -> tuple[int, DailyPairStatsPaths]:
     """Stream clean-event partitions into sessions and compact pair stats.
 
@@ -681,6 +862,7 @@ def _build_streaming_sessions_and_pair_stats(
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
     sessions_rows = 0
+    daily_stats_by_partition: dict[str, list[DailyPairStats]] = {}
 
     active_clean_events = empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
     active_sessions = empty_contract_frame(schemas.SESSIONS_COLUMNS)
@@ -694,61 +876,121 @@ def _build_streaming_sessions_and_pair_stats(
 
         clean_day = pl.read_parquet(clean_event_path).select(schemas.CLEAN_EVENTS_COLUMNS)
 
-        if active_clean_events.is_empty():
-            session_input = clean_day
-        else:
-            session_input = pl.concat(
-                [active_clean_events, clean_day],
-                how="vertical",
-            ).select(schemas.CLEAN_EVENTS_COLUMNS)
+        next_active_session_chunks: list[pl.DataFrame] = []
+        completed_session_chunks_for_output: list[pl.DataFrame] = []
 
-        relative_sessions = session_builder.transform_day(session_input)
-        active_session_indices = (
-            active_sessions.group_by("user_id").agg(
-                pl.col("session_index").max().alias("active_session_index")
+        for bucket_id in range(session_user_buckets):
+            bucket_filter = _user_bucket_filter(bucket_id, session_user_buckets)
+
+            clean_bucket = clean_day.filter(bucket_filter)
+            active_clean_bucket = (
+                active_clean_events.filter(bucket_filter)
+                if not active_clean_events.is_empty()
+                else active_clean_events
             )
-            if not active_sessions.is_empty()
-            else _empty_active_session_offsets()
-        )
-        offsets = _session_index_offsets(
-            max_session_indices=max_session_indices,
-            active_session_indices=active_session_indices,
-        )
-        sessions = _apply_session_index_offsets(relative_sessions, offsets)
 
-        completed_sessions, active_sessions = _split_completed_and_active_sessions(
-            sessions=sessions,
-            partition_date=partition_date,
-            timeout_minutes=session_builder.timeout_minutes,
-            is_final_partition=is_final_partition,
-        )
+            if clean_bucket.is_empty() and active_clean_bucket.is_empty():
+                continue
 
-        if sessions_output_dir is not None:
+            if active_clean_bucket.is_empty():
+                session_input = clean_bucket
+            elif clean_bucket.is_empty():
+                session_input = active_clean_bucket
+            else:
+                session_input = pl.concat(
+                    [active_clean_bucket, clean_bucket],
+                    how="vertical",
+                ).select(schemas.CLEAN_EVENTS_COLUMNS)
+
+            relative_sessions = session_builder.transform_day(session_input)
+
+            active_sessions_bucket = (
+                active_sessions.filter(bucket_filter)
+                if not active_sessions.is_empty()
+                else active_sessions
+            )
+            active_session_indices = (
+                active_sessions_bucket.group_by("user_id").agg(
+                    pl.col("session_index").max().alias("active_session_index")
+                )
+                if not active_sessions_bucket.is_empty()
+                else _empty_active_session_offsets()
+            )
+            offsets = _session_index_offsets(
+                max_session_indices=max_session_indices,
+                active_session_indices=active_session_indices,
+            )
+            sessions = _apply_session_index_offsets(relative_sessions, offsets)
+
+            completed_sessions, active_sessions_bucket = _split_completed_and_active_sessions(
+                sessions=sessions,
+                partition_date=partition_date,
+                timeout_minutes=session_builder.timeout_minutes,
+                is_final_partition=is_final_partition,
+            )
+
+            if not completed_sessions.is_empty():
+                completed_session_chunks_for_output.append(completed_sessions)
+
+                daily_sessions_for_pairs = _partition_sessions_by_session_start_date(
+                    completed_sessions
+                )
+
+                for stats_partition_date, partition_sessions in daily_sessions_for_pairs:
+                    daily_stats = _build_daily_pair_stats_in_memory(
+                        daily_sessions=[(stats_partition_date, partition_sessions)],
+                        pair_builder=pair_builder,
+                        session_batch_size=session_batch_size,
+                    )
+
+                    if daily_stats.raw_pair_rows > 0 or not daily_stats.counts.is_empty():
+                        daily_stats_by_partition.setdefault(stats_partition_date, []).append(daily_stats)
+                        raw_pair_rows += daily_stats.raw_pair_rows
+
+                sessions_rows += completed_sessions.height
+
+            if not active_sessions_bucket.is_empty():
+                next_active_session_chunks.append(active_sessions_bucket)
+
+            max_session_indices = _update_max_session_indices(
+                max_session_indices,
+                sessions,
+            )
+
+        if completed_session_chunks_for_output and sessions_output_dir is not None:
             _append_daily_session_partitions(
-                completed_sessions,
+                pl.concat(completed_session_chunks_for_output, how="vertical"),
                 sessions_output_dir,
             )
 
-        daily_sessions_for_pairs = _partition_sessions_by_session_start_date(
-            completed_sessions
-        )
-        daily_pair_stats_paths = _build_and_write_daily_pair_stats(
-            daily_sessions=daily_sessions_for_pairs,
-            pair_builder=pair_builder,
-            output_dir=daily_pairs_output_dir,
-        )
-
-        count_paths.extend(daily_pair_stats_paths.count_paths)
-        user_key_paths.extend(daily_pair_stats_paths.user_key_paths)
-        session_key_paths.extend(daily_pair_stats_paths.session_key_paths)
-        raw_pair_rows += daily_pair_stats_paths.raw_pair_rows
-        sessions_rows += completed_sessions.height
-
-        max_session_indices = _update_max_session_indices(
-            max_session_indices,
-            sessions,
+        active_sessions = (
+            pl.concat(next_active_session_chunks, how="vertical")
+            if next_active_session_chunks
+            else empty_contract_frame(schemas.SESSIONS_COLUMNS)
         )
         active_clean_events = _sessions_to_clean_events(active_sessions)
+
+        for stats_partition_date, stats_list in sorted(daily_stats_by_partition.items()):
+            logging.getLogger(__name__).info(
+                "[run_pipeline] write combined daily pair stats date=%s parts=%s",
+                stats_partition_date,
+                len(stats_list),
+            )
+
+            combined_stats = _combine_daily_pair_stats(stats_list)
+            count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+                stats=combined_stats,
+                partition_date=stats_partition_date,
+                output_dir=daily_pairs_output_dir,
+            )
+
+            count_paths.append(count_path)
+            user_key_paths.append(user_key_path)
+            session_key_paths.append(session_key_path)
+
+            del combined_stats
+
+        daily_stats_by_partition.clear()
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),
@@ -940,12 +1182,35 @@ def run_pipeline(
         else None
     )
 
+    session_batch_size = _as_positive_int(
+        value=pipeline_config.get("session_batch_size"),
+        default=10_000,
+        parameter_name="pipeline.session_batch_size",
+    )
+    logger.info("[run_pipeline] session batch size=%s", session_batch_size)
+
+    session_user_buckets = _as_positive_int(
+        value=pipeline_config.get("session_user_buckets"),
+        default=64,
+        parameter_name="pipeline.session_user_buckets",
+    )
+    logger.info("[run_pipeline] session user buckets=%s", session_user_buckets)
+
+    aggregation_item_buckets = _as_positive_int(
+        value=pipeline_config.get("aggregation_item_buckets"),
+        default=1,
+        parameter_name="pipeline.aggregation_item_buckets",
+    )
+    logger.info("[run_pipeline] aggregation item buckets=%s", aggregation_item_buckets)
+
     sessions_rows, daily_pair_stats_paths = _build_streaming_sessions_and_pair_stats(
         clean_event_paths=clean_event_paths,
         session_builder=session_builder,
         pair_builder=pair_builder,
         daily_pairs_output_dir=daily_pairs_output_dir,
         sessions_output_dir=sessions_output_dir,
+        session_batch_size=session_batch_size,
+        session_user_buckets=session_user_buckets,
     )
     daily_pairs_rows = daily_pair_stats_paths.raw_pair_rows
 
@@ -956,29 +1221,6 @@ def run_pipeline(
         len(daily_pair_stats_paths.count_paths),
         daily_pairs_output_dir,
     )
-
-    logger.info("[run_pipeline] aggregate pairs from compact daily stats")
-    pair_aggregates = _pair_aggregator_from_config(config).aggregate_window_from_daily_stats_paths(
-        count_paths=daily_pair_stats_paths.count_paths,
-        user_key_paths=daily_pair_stats_paths.user_key_paths,
-        session_key_paths=daily_pair_stats_paths.session_key_paths,
-        window_start=window_start,
-        window_end=window_end,
-    )
-    pair_aggregates_rows = pair_aggregates.height
-    logger.info(
-        "[run_pipeline] pair aggregates rows=%s",
-        pair_aggregates_rows,
-    )
-
-    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
-    if isinstance(pair_aggregates_dir, str | Path):
-        _write_window_artifact(
-            frame=pair_aggregates,
-            output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
-            window_start=window_start,
-            window_end=window_end,
-        )
 
     logger.info("[run_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
@@ -1017,7 +1259,7 @@ def run_pipeline(
             window_end=window_end,
         )
 
-    logger.info("[run_pipeline] score pairs")
+    logger.info("[run_pipeline] prepare scorer and top-k selector")
     scorer = CoVisitationScorer.from_config(config)
     if scorer.action_shares is None:
         derived_action_shares = _action_shares_from_distribution(action_distribution)
@@ -1025,20 +1267,6 @@ def run_pipeline(
             scorer = replace(scorer, action_shares=derived_action_shares)
 
     del action_distribution
-
-    if scorer.normalize_by_item_popularity:
-        pair_scores = scorer.score_lazy(pair_aggregates, item_popularity=item_popularity)
-    else:
-        pair_scores = scorer.score_lazy(pair_aggregates)
-
-    pair_scores_rows = pair_scores.select(pl.len()).collect().item()
-    del pair_aggregates
-
-    logger.info(
-        "[run_pipeline] pair scores rows=%s calibration_used=%s",
-        pair_scores_rows,
-        scorer.action_shares is not None,
-    )
 
     top_k = _as_positive_int(
         value=topk_config.get("top_k", pipeline_config.get("top_k")),
@@ -1056,9 +1284,142 @@ def run_pipeline(
         min_pair_count=_as_optional_int(topk_config.get("min_pair_count")),
         min_unique_users=_as_optional_int(topk_config.get("min_unique_users")),
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
+        deduplicate=False,
     )
-    recommendations = selector.select(pair_scores)
-    del pair_scores
+
+    pair_aggregates_rows = 0
+    pair_scores_rows = 0
+    recommendation_parts: list[pl.DataFrame] = []
+
+    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
+    if aggregation_item_buckets > 1 and isinstance(pair_aggregates_dir, str | Path):
+        logger.info(
+            "[run_pipeline] skip pair_aggregates artifact in bucketed aggregation mode"
+        )
+
+    for bucket_id in range(aggregation_item_buckets):
+        should_log_bucket = (
+            bucket_id == 0
+            or (bucket_id + 1) % 10 == 0
+            or bucket_id + 1 == aggregation_item_buckets
+        )
+
+        if should_log_bucket:
+            logger.info(
+                "[run_pipeline] aggregate/score/top-k item bucket=%s/%s",
+                bucket_id + 1,
+                aggregation_item_buckets,
+            )
+
+        aggregator = _pair_aggregator_from_config(config)
+
+        if aggregation_item_buckets == 1:
+            pair_aggregates = aggregator.aggregate_window_from_daily_stats_paths(
+                count_paths=daily_pair_stats_paths.count_paths,
+                user_key_paths=daily_pair_stats_paths.user_key_paths,
+                session_key_paths=daily_pair_stats_paths.session_key_paths,
+                window_start=window_start,
+                window_end=window_end,
+            )
+        else:
+            pair_aggregates = aggregator.aggregate_window_from_daily_stats_paths(
+                count_paths=daily_pair_stats_paths.count_paths,
+                user_key_paths=daily_pair_stats_paths.user_key_paths,
+                session_key_paths=daily_pair_stats_paths.session_key_paths,
+                window_start=window_start,
+                window_end=window_end,
+                item_bucket_id=bucket_id,
+                item_bucket_count=aggregation_item_buckets,
+            )
+
+        bucket_pair_aggregates_rows = pair_aggregates.height
+        pair_aggregates_rows += bucket_pair_aggregates_rows
+        if should_log_bucket:
+            logger.info(
+                "[run_pipeline] item bucket=%s/%s pair aggregates rows=%s",
+                bucket_id + 1,
+                aggregation_item_buckets,
+                bucket_pair_aggregates_rows,
+            )
+
+        if aggregation_item_buckets == 1 and isinstance(pair_aggregates_dir, str | Path):
+            _write_window_artifact(
+                frame=pair_aggregates,
+                output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
+                window_start=window_start,
+                window_end=window_end,
+            )
+
+        if scorer.normalize_by_item_popularity:
+            pair_scores_lazy = scorer.score_lazy(
+                pair_aggregates,
+                item_popularity=item_popularity,
+            )
+        else:
+            pair_scores_lazy = scorer.score_lazy(pair_aggregates)
+
+        pair_scores = pair_scores_lazy.collect()
+        pair_scores_rows += pair_scores.height
+        del pair_scores_lazy
+        del pair_aggregates
+
+        bucket_recommendations = selector.select(pair_scores)
+
+        score_detail_columns = [
+            column
+            for column in [
+                "pair_count",
+                "view_count",
+                "click_count",
+                "favorite_count",
+                "to_cart_count",
+                "weighted_pair_count",
+                "weighted_view_count",
+                "weighted_click_count",
+                "weighted_favorite_count",
+                "weighted_to_cart_count",
+                "unique_users",
+                "unique_sessions",
+                "base_score",
+            ]
+            if column in pair_scores.columns and column not in bucket_recommendations.columns
+        ]
+
+        if score_detail_columns and not bucket_recommendations.is_empty():
+            bucket_recommendations = bucket_recommendations.join(
+                pair_scores.select(
+                    ["item_id", "similar_item_id", *score_detail_columns]
+                ),
+                on=["item_id", "similar_item_id"],
+                how="left",
+            )
+
+        del pair_scores
+
+        if not bucket_recommendations.is_empty():
+            recommendation_parts.append(bucket_recommendations)
+
+        if should_log_bucket:
+            logger.info(
+                "[run_pipeline] item bucket=%s/%s recommendations rows=%s",
+                bucket_id + 1,
+                aggregation_item_buckets,
+                bucket_recommendations.height,
+            )
+
+    recommendations = _concat_recommendation_parts(recommendation_parts)
+    del recommendation_parts
+
+    logger.info(
+        "[run_pipeline] pair aggregates rows=%s",
+        pair_aggregates_rows,
+    )
+
+    logger.info(
+        "[run_pipeline] pair scores rows=%s calibration_used=%s",
+        pair_scores_rows,
+        scorer.action_shares is not None,
+    )
 
     fallback_config = FallbackConfig.from_config(config, top_k=top_k)
     if fallback_config.enabled:

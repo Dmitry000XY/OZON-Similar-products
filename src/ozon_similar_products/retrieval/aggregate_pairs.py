@@ -77,6 +77,26 @@ def _validate_window_bounds(window_start: str, window_end: str) -> tuple[date, d
     return start_date, end_date
 
 
+def _validate_item_bucket(
+        item_bucket_id: int | None,
+        item_bucket_count: int | None,
+) -> None:
+    """Validate optional item-id bucket parameters."""
+    if item_bucket_id is None and item_bucket_count is None:
+        return
+
+    if item_bucket_id is None or item_bucket_count is None:
+        raise ValueError(
+            "item_bucket_id and item_bucket_count must both be provided or both be null"
+        )
+
+    if item_bucket_count <= 0:
+        raise ValueError("item_bucket_count must be a positive integer")
+
+    if item_bucket_id < 0 or item_bucket_id >= item_bucket_count:
+        raise ValueError("item_bucket_id must be in range [0, item_bucket_count)")
+
+
 def _aggregate_pairs_lazy(
         pairs_window: pl.LazyFrame,
         window_start: str,
@@ -158,9 +178,12 @@ def _aggregate_daily_stats_lazy(
         window_start: str,
         window_end: str,
         time_decay: TimeDecayConfig,
+        item_bucket_id: int | None = None,
+        item_bucket_count: int | None = None,
 ) -> pl.DataFrame:
     """Aggregate compact daily pair stats into pair aggregates."""
     start_date, end_date = _validate_window_bounds(window_start, window_end)
+    _validate_item_bucket(item_bucket_id, item_bucket_count)
 
     filtered_counts = (
         _with_weighted_count_columns(counts_scan)
@@ -185,6 +208,11 @@ def _aggregate_daily_stats_lazy(
         .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
         .filter(pl.col("pair_date").is_between(start_date, end_date))
     )
+    if item_bucket_id is not None and item_bucket_count is not None:
+        item_bucket_filter = (pl.col("item_id") % item_bucket_count) == item_bucket_id
+        filtered_counts = filtered_counts.filter(item_bucket_filter)
+        filtered_user_keys = filtered_user_keys.filter(item_bucket_filter)
+        filtered_session_keys = filtered_session_keys.filter(item_bucket_filter)
 
     counts = (
         filtered_counts.group_by(["item_id", "similar_item_id"])
@@ -321,6 +349,9 @@ class PairAggregator:
             session_key_paths: Sequence[str | Path],
             window_start: str,
             window_end: str,
+            *,
+            item_bucket_id: int | None = None,
+            item_bucket_count: int | None = None,
     ) -> pl.DataFrame:
         """Aggregate compact daily pair-stat parquet files into pair aggregates.
 
@@ -329,6 +360,7 @@ class PairAggregator:
         deduplicated key artifacts.
         """
         _validate_window_bounds(window_start, window_end)
+        _validate_item_bucket(item_bucket_id, item_bucket_count)
 
         if not count_paths and not user_key_paths and not session_key_paths:
             empty = _empty_pair_aggregates()
@@ -357,4 +389,6 @@ class PairAggregator:
             window_start=window_start,
             window_end=window_end,
             time_decay=self.time_decay,
+            item_bucket_id=item_bucket_id,
+            item_bucket_count=item_bucket_count,
         )
