@@ -1276,6 +1276,19 @@ def run_pipeline(
         )
 
     for bucket_id in range(aggregation_item_buckets):
+        should_log_bucket = (
+            bucket_id == 0
+            or (bucket_id + 1) % 10 == 0
+            or bucket_id + 1 == aggregation_item_buckets
+        )
+
+        if should_log_bucket:
+            logger.info(
+                "[run_pipeline] aggregate/score/top-k item bucket=%s/%s",
+                bucket_id + 1,
+                aggregation_item_buckets,
+            )
+            _log_memory(logger, "before_aggregation_item_bucket")
 
         aggregator = PairAggregator()
 
@@ -1300,13 +1313,14 @@ def run_pipeline(
 
         bucket_pair_aggregates_rows = pair_aggregates.height
         pair_aggregates_rows += bucket_pair_aggregates_rows
-        logger.info(
-            "[run_pipeline] item bucket=%s/%s pair aggregates rows=%s",
-            bucket_id + 1,
-            aggregation_item_buckets,
-            bucket_pair_aggregates_rows,
-        )
-        _log_memory(logger, "after_aggregation_item_bucket")
+        if should_log_bucket:
+            logger.info(
+                "[run_pipeline] item bucket=%s/%s pair aggregates rows=%s",
+                bucket_id + 1,
+                aggregation_item_buckets,
+                bucket_pair_aggregates_rows,
+            )
+            _log_memory(logger, "after_aggregation_item_bucket")
 
         if aggregation_item_buckets == 1 and isinstance(pair_aggregates_dir, str | Path):
             _write_window_artifact(
@@ -1360,13 +1374,14 @@ def run_pipeline(
         if not bucket_recommendations.is_empty():
             recommendation_parts.append(bucket_recommendations)
 
-        logger.info(
-            "[run_pipeline] item bucket=%s/%s recommendations rows=%s",
-            bucket_id + 1,
-            aggregation_item_buckets,
-            bucket_recommendations.height,
-        )
-        _log_memory(logger, "after_topk_item_bucket")
+        if should_log_bucket:
+            logger.info(
+                "[run_pipeline] item bucket=%s/%s recommendations rows=%s",
+                bucket_id + 1,
+                aggregation_item_buckets,
+                bucket_recommendations.height,
+            )
+            _log_memory(logger, "after_topk_item_bucket")
 
     recommendations = _concat_recommendation_parts(recommendation_parts)
     del recommendation_parts
