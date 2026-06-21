@@ -6,7 +6,7 @@ import argparse
 import logging
 import shutil
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -26,7 +26,11 @@ from ozon_similar_products.evaluation import (
     metrics_to_flat_dict,
     write_json,
 )
-from ozon_similar_products.evaluation.metrics import OfflineMetrics
+from ozon_similar_products.evaluation.metrics import (
+    DEFAULT_MIN_RANKING_RELEVANCE,
+    DEFAULT_RANKING_RELEVANT_ACTION_TYPES,
+    OfflineMetrics,
+)
 from ozon_similar_products.evaluation.validation_cache import (
     load_or_build_validation_cache,
     validation_cache_metadata,
@@ -184,6 +188,36 @@ def _item_action_types(config: Mapping[str, Any]) -> list[str]:
         return [action_types]
 
     return list(action_types)
+
+
+def _ranking_evaluation_options(config: Mapping[str, Any]) -> tuple[tuple[str, ...], float | None]:
+    evaluation_config = config.get("evaluation", {})
+    if not isinstance(evaluation_config, Mapping):
+        evaluation_config = {}
+
+    relevant_actions = evaluation_config.get(
+        "ranking_relevant_action_types",
+        DEFAULT_RANKING_RELEVANT_ACTION_TYPES,
+    )
+    if isinstance(relevant_actions, str):
+        ranking_relevant_action_types = (relevant_actions,)
+    elif isinstance(relevant_actions, Sequence):
+        ranking_relevant_action_types = tuple(str(action) for action in relevant_actions)
+    else:
+        ranking_relevant_action_types = DEFAULT_RANKING_RELEVANT_ACTION_TYPES
+
+    min_relevance = evaluation_config.get(
+        "min_ranking_relevance",
+        DEFAULT_MIN_RANKING_RELEVANCE,
+    )
+    if min_relevance is None:
+        min_ranking_relevance = None
+    elif isinstance(min_relevance, bool):
+        raise ValueError("min_ranking_relevance must be numeric or null")
+    else:
+        min_ranking_relevance = float(min_relevance)
+
+    return ranking_relevant_action_types, min_ranking_relevance
 
 
 def _write_config_snapshot(config: Mapping[str, Any], path: Path) -> Path:
@@ -390,6 +424,7 @@ def execute_full_run(
     relevance_weights = evaluation_config.get("relevance_weights")
     if not isinstance(relevance_weights, Mapping):
         relevance_weights = None
+    ranking_relevant_action_types, min_ranking_relevance = _ranking_evaluation_options(config)
 
     resolved_run_id = run_id or make_run_id(
         train_until_date=train_until_date,
@@ -494,6 +529,8 @@ def execute_full_run(
         ground_truth=ground_truth,
         top_k=resolved_top_k,
         context=context,
+        ranking_relevant_action_types=ranking_relevant_action_types,
+        min_ranking_relevance=min_ranking_relevance,
     )
     metrics_seconds = time.perf_counter() - metrics_started
 

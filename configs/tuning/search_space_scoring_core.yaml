@@ -1,9 +1,9 @@
 objective:
   primary_metric: to_cart_hit_rate_at_k
   supporting_metrics:
-    - ndcg_at_k
-    - recall_at_k
-    - mrr_at_k
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
     - coverage_at_k
     - to_cart_recall_at_k
   penalty_metrics:
@@ -19,36 +19,36 @@ parameters:
 
   scoring.business_weights.view:
     type: choice
-    values: [0.5, 1.0, 1.5]
+    values: [ 0.5, 1.0, 1.5 ]
 
   scoring.business_weights.click:
     type: choice
-    values: [2.0, 3.0, 4.0]
+    values: [ 2.0, 3.0, 4.0 ]
 
   scoring.business_weights.favorite:
     type: choice
-    values: [4.0, 6.0, 8.0]
+    values: [ 4.0, 6.0, 8.0 ]
 
   scoring.business_weights.to_cart:
     type: choice
-    values: [6.0, 8.0, 10.0]
+    values: [ 6.0, 8.0, 10.0 ]
 
   scoring.beta:
     type: choice
-    values: [0.25, 0.5, 0.75]
+    values: [ 0.25, 0.5, 0.75 ]
 
   scoring.normalize_by_item_popularity:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
 
   scoring.popularity_normalization.power:
     type: choice
-    values: [0.25, 0.5, 0.75]
+    values: [ 0.25, 0.5, 0.75 ]
 
   topk.top_k:
     type: choice
-    values: [20]
+    values: [ 20 ]
 
   business.fallback.enabled:
     type: choice
-    values: [false]
+    values: [ false ]

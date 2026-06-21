@@ -530,6 +530,54 @@ def test_split_and_metrics_compute_real_values() -> None:
     assert metrics.fallback_to_cart_recall_at_k == pytest.approx(0.5)
 
 
+def test_offline_ranking_metrics_ignore_view_only_hits_by_default() -> None:
+    recommendations = pl.DataFrame(
+        {
+            "item_id": [1, 1],
+            "similar_item_id": [10, 11],
+            "score": [1.0, 0.9],
+            "rank": [1, 2],
+            "source": ["behavioral", "behavioral"],
+        }
+    )
+    ground_truth = pl.DataFrame(
+        {
+            "item_id": [1, 1],
+            "relevant_item_id": [10, 11],
+            "relevance": [1.0, 1.0],
+            "target_action_type": ["view", "click"],
+            "evidence_count": [1, 1],
+            "view_count": [1, 0],
+            "click_count": [0, 1],
+            "favorite_count": [0, 0],
+            "to_cart_count": [0, 0],
+        }
+    )
+
+    metrics = compute_offline_metrics(
+        recommendations=recommendations,
+        ground_truth=ground_truth,
+        top_k=2,
+    )
+
+    assert metrics.ground_truth_pairs == 2
+    assert metrics.ranking_ground_truth_pairs == 1
+    assert metrics.view_only_ground_truth_pairs == 1
+    assert metrics.all_evaluated_items == 1
+    assert metrics.evaluated_items == 1
+    assert metrics.ranking_evaluated_items == 1
+    assert metrics.hit_rate_at_k == 1.0
+    assert metrics.recall_at_k == 1.0
+    assert metrics.mrr_at_k == pytest.approx(0.5)
+    assert metrics.ndcg_at_k == pytest.approx(1 / 1.584962500721156)
+    assert metrics.strong_hit_rate_at_k == metrics.hit_rate_at_k
+    assert metrics.strong_recall_at_k == metrics.recall_at_k
+    assert metrics.strong_mrr_at_k == metrics.mrr_at_k
+    assert metrics.strong_ndcg_at_k == metrics.ndcg_at_k
+    assert metrics.view_hit_rate_at_k == 1.0
+    assert metrics.click_hit_rate_at_k == 1.0
+
+
 def test_offline_metrics_report_fallback_layer_shares_and_quality() -> None:
     recommendations = pl.DataFrame(
         {
@@ -575,7 +623,7 @@ def test_offline_metrics_report_fallback_layer_shares_and_quality() -> None:
     assert metrics.fallback_type_share_at_k == pytest.approx(1 / 8)
     assert metrics.fallback_brand_share_at_k == pytest.approx(1 / 8)
     assert metrics.fallback_global_share_at_k == pytest.approx(2 / 8)
-    assert metrics.fallback_hit_rate_at_k == 1.0
-    assert metrics.fallback_recall_at_k == pytest.approx(0.75)
+    assert metrics.fallback_hit_rate_at_k == pytest.approx(0.5)
+    assert metrics.fallback_recall_at_k == pytest.approx(0.5)
     assert metrics.fallback_to_cart_hit_rate_at_k == pytest.approx(0.5)
     assert metrics.fallback_to_cart_recall_at_k == pytest.approx(0.5)
