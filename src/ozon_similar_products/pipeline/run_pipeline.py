@@ -980,26 +980,36 @@ def _build_streaming_sessions_and_pair_stats(
         )
         active_clean_events = _sessions_to_clean_events(active_sessions)
 
-    for partition_date, stats_list in sorted(daily_stats_by_partition.items()):
-        logging.getLogger(__name__).info(
-            "[run_pipeline] write combined daily pair stats date=%s parts=%s",
-            partition_date,
-            len(stats_list),
-        )
-        _log_memory(logging.getLogger(__name__), "before_write_combined_daily_pair_stats")
+        for stats_partition_date, stats_list in sorted(daily_stats_by_partition.items()):
+            logging.getLogger(__name__).info(
+                "[run_pipeline] write combined daily pair stats date=%s parts=%s",
+                stats_partition_date,
+                len(stats_list),
+            )
+            _log_memory(
+                logging.getLogger(__name__),
+                "before_write_combined_daily_pair_stats",
+            )
 
-        combined_stats = _combine_daily_pair_stats(stats_list)
-        count_path, user_key_path, session_key_path = _write_daily_pair_stats(
-            stats=combined_stats,
-            partition_date=partition_date,
-            output_dir=daily_pairs_output_dir,
-        )
+            combined_stats = _combine_daily_pair_stats(stats_list)
+            count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+                stats=combined_stats,
+                partition_date=stats_partition_date,
+                output_dir=daily_pairs_output_dir,
+            )
 
-        count_paths.append(count_path)
-        user_key_paths.append(user_key_path)
-        session_key_paths.append(session_key_path)
+            count_paths.append(count_path)
+            user_key_paths.append(user_key_path)
+            session_key_paths.append(session_key_path)
 
-        _log_memory(logging.getLogger(__name__), "after_write_combined_daily_pair_stats")
+            _log_memory(
+                logging.getLogger(__name__),
+                "after_write_combined_daily_pair_stats",
+            )
+
+            del combined_stats
+
+        daily_stats_by_partition.clear()
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),
