@@ -263,12 +263,14 @@ def _daily_pair_stats_fingerprint(
         config: Mapping[str, Any],
         action_types: Sequence[str],
         partition_date: str,
+        processed_through_date: str,
 ) -> str:
     return fingerprint_payload(
         {
             "schema_version": SCHEMA_VERSION,
             "stage": "daily_pair_stats",
             "date": partition_date,
+            "processed_through_date": processed_through_date,
             "session_state": _session_state_fingerprint(
                 config=config,
                 action_types=action_types,
@@ -604,6 +606,7 @@ def _plan_reusable_daily_pair_stats(
         partition_dates: Sequence[str],
         daily_pairs_output_dir: Path,
         session_state_output_dir: Path,
+        processed_through_date: str,
 ) -> PairStatsPlan:
     count_paths: list[Path] = []
     user_key_paths: list[Path] = []
@@ -617,6 +620,7 @@ def _plan_reusable_daily_pair_stats(
             config=config,
             action_types=action_types,
             partition_date=partition_date,
+            processed_through_date=processed_through_date,
         )
         pair_status = validate_manifest(
             manifest_path=_daily_pair_stats_manifest_path(daily_pairs_output_dir, partition_date),
@@ -638,7 +642,12 @@ def _plan_reusable_daily_pair_stats(
             ),
             required_path_keys=("active_sessions", "max_session_indices"),
         )
-        if not pair_status.valid or not session_status.valid or pair_status.manifest is None:
+        if (
+            not pair_status.valid
+            or not session_status.valid
+            or pair_status.manifest is None
+            or pair_status.manifest.metadata.get("processed_through_date") != processed_through_date
+        ):
             invalid_days.append(partition_date)
             continue
 
@@ -1358,10 +1367,19 @@ def _build_streaming_sessions_and_pair_stats(
                     else None
                 )
                 raw_pair_rows_for_date = sum(stats.raw_pair_rows for stats in stats_list)
+                processed_through_date = partition_date
                 if previous_manifest is not None:
                     raw_pair_rows_for_date += int(
                         previous_manifest.rows.get("raw_pair_rows", 0)
                     )
+                    previous_processed_through_date = previous_manifest.metadata.get(
+                        "processed_through_date"
+                    )
+                    if isinstance(previous_processed_through_date, str):
+                        processed_through_date = max(
+                            previous_processed_through_date,
+                            partition_date,
+                        )
                 manifest = ArtifactManifest(
                     artifact_type="daily_pair_stats",
                     date=stats_partition_date,
@@ -1369,6 +1387,7 @@ def _build_streaming_sessions_and_pair_stats(
                         config=config,
                         action_types=action_types,
                         partition_date=stats_partition_date,
+                        processed_through_date=processed_through_date,
                     ),
                     paths={
                         "counts": _relative_to_root(count_path, daily_pairs_output_dir),
@@ -1381,6 +1400,7 @@ def _build_streaming_sessions_and_pair_stats(
                         "session_keys": int(pl.read_parquet(session_key_path).height),
                         "raw_pair_rows": raw_pair_rows_for_date,
                     },
+                    metadata={"processed_through_date": processed_through_date},
                 )
                 write_manifest(manifest_path, manifest)
 
@@ -1638,6 +1658,7 @@ def run_pipeline(
             partition_dates=partition_dates,
             daily_pairs_output_dir=daily_pairs_output_dir,
             session_state_output_dir=session_state_output_dir,
+            processed_through_date=window_end,
         )
         if update_strategy == "incremental" and not clean_events_result.rebuilt_days
         else None

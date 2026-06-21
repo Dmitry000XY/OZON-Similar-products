@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -47,6 +47,7 @@ class ArtifactManifest:
     fingerprint: str
     paths: dict[str, str]
     rows: dict[str, int]
+    metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
     created_at: str | None = None
 
@@ -59,6 +60,7 @@ class ArtifactManifest:
             "created_at": self.created_at or datetime.now(UTC).isoformat(),
             "paths": dict(self.paths),
             "rows": dict(self.rows),
+            "metadata": dict(self.metadata),
         }
 
     @classmethod
@@ -75,6 +77,7 @@ class ArtifactManifest:
             ),
             paths={str(key): str(value) for key, value in dict(payload.get("paths", {})).items()},
             rows={str(key): int(value) for key, value in dict(payload.get("rows", {})).items()},
+            metadata=dict(payload.get("metadata", {})),
         )
 
 

@@ -33,7 +33,8 @@ data/processed/item_pairs/session_keys/date=YYYY-MM-DD.parquet
 
 Each layer has a JSON sidecar manifest under `manifests/date=YYYY-MM-DD.json`.
 Manifests record the artifact type, date, schema version, fingerprint, relative
-paths, and row counts.
+paths, row counts, and metadata such as `processed_through_date` for daily pair
+stats.
 
 ## Fingerprints
 
@@ -44,7 +45,8 @@ Clean event fingerprints include the clean stage schema, date, and event action
 types. Session state fingerprints include the clean fingerprint plus session
 builder settings such as timeout, max items per session, and user bucket count.
 Daily pair stat fingerprints include session state semantics, item-pair builder
-settings, and graph distance decay settings.
+settings, graph distance decay settings, and the processed-through date used to
+build the artifact.
 
 Scoring, top-K, fallback, and graph time decay settings do not invalidate daily
 clean/session/pair artifacts. Time decay is applied during rolling aggregation,
@@ -64,7 +66,24 @@ second or later write for date D in the same run:
 
 This prevents repeated full retrains on the same self-hosted runner from
 double-counting old pair stats, while preserving cross-midnight sessions that can
-produce pair stats for an earlier session-start date later in the same run.
+produce pair stats for an earlier session-start date later in the same run. In
+those cases the artifact date / `pair_date` can be earlier than the
+`processed_through_date` recorded in the manifest.
+
+## Cutoff-Aware Pair Stat Reuse
+
+Daily pair stats are cutoff-aware. A `date=D` artifact may be written while the
+streaming session builder is processing a later day because cross-midnight
+sessions can emit pairs whose `pair_date` is less than the current
+`processed_through_date`. Reusing that artifact for a backfill ending at `D`
+would leak future-day events into an earlier training cutoff.
+
+To avoid that leakage, incremental reuse requires the daily pair stat
+manifest's `metadata.processed_through_date` and fingerprint to match the
+current window end. If the manifest is missing this metadata, or if the stored
+processed-through date differs from the requested cutoff, the artifact is marked
+invalid and the current implementation rebuilds conservatively from
+`window_start`.
 
 ## Why Not Global Cleanup
 

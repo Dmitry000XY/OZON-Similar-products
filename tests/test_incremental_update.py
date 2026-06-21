@@ -488,6 +488,95 @@ def test_scoring_only_config_change_reuses_daily_artifacts(
     assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == []
 
 
+def test_pair_artifact_with_future_processed_through_date_rebuilds(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    _write_raw_events(tmp_path)
+    _write_products(tmp_path)
+    config_path = _write_project_configs(tmp_path, update_strategy="full_retrain")
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    run_pipeline.run_pipeline(
+        train_until_date="2026-05-10",
+        lookback_days=1,
+        config_path=config_path,
+        run_id="full",
+        update_latest=False,
+    )
+
+    manifest_path = (
+        tmp_path
+        / "data"
+        / "processed"
+        / "item_pairs"
+        / "manifests"
+        / "date=2026-05-10.json"
+    )
+    manifest = run_pipeline.read_manifest(manifest_path)
+    assert manifest is not None
+    future_cutoff_manifest = run_pipeline.ArtifactManifest(
+        artifact_type=manifest.artifact_type,
+        date=manifest.date,
+        fingerprint=run_pipeline._daily_pair_stats_fingerprint(
+            config=yaml.safe_load(config_path.read_text(encoding="utf-8")),
+            action_types=["view", "click", "favorite", "to_cart"],
+            partition_date="2026-05-10",
+            processed_through_date="2026-05-11",
+        ),
+        paths=manifest.paths,
+        rows=manifest.rows,
+        metadata={"processed_through_date": "2026-05-11"},
+    )
+    run_pipeline.write_manifest(manifest_path, future_cutoff_manifest)
+
+    incremental_config_path = _write_project_configs(tmp_path, update_strategy="incremental")
+    incremental = run_pipeline.run_pipeline(
+        train_until_date="2026-05-10",
+        lookback_days=1,
+        config_path=incremental_config_path,
+        run_id="future-cutoff-rebuild",
+        update_latest=False,
+    )
+
+    assert incremental.manifest["incremental"]["reused_pair_stat_days"] == []
+    assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == ["2026-05-10"]
+    assert incremental.manifest["incremental"]["earliest_affected_date"] == "2026-05-10"
+    rebuilt_manifest = run_pipeline.read_manifest(manifest_path)
+    assert rebuilt_manifest is not None
+    assert rebuilt_manifest.metadata["processed_through_date"] == "2026-05-10"
+
+
+def test_pair_artifact_with_matching_processed_through_date_is_reused(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    _write_raw_events(tmp_path)
+    _write_products(tmp_path)
+    _run_pipeline_fixture(monkeypatch, tmp_path, update_strategy="full_retrain", run_id="full")
+
+    manifest_path = (
+        tmp_path
+        / "data"
+        / "processed"
+        / "item_pairs"
+        / "manifests"
+        / "date=2026-05-10.json"
+    )
+    manifest = run_pipeline.read_manifest(manifest_path)
+    assert manifest is not None
+    assert manifest.metadata["processed_through_date"] == "2026-05-10"
+
+    incremental = _run_pipeline_fixture(
+        monkeypatch,
+        tmp_path,
+        update_strategy="incremental",
+        run_id="matching-cutoff",
+    )
+
+    assert incremental.manifest["incremental"]["reused_pair_stat_days"] == ["2026-05-10"]
+    assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == []
+
+
 def test_update_strategy_is_not_tuned() -> None:
     for path in Path("configs/tuning").glob("*.yaml"):
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
