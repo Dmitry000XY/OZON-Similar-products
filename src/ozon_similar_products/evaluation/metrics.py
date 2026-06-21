@@ -520,11 +520,12 @@ def compute_offline_metrics(
     top_recommendations = recommendations_frame.filter(pl.col("rank") <= top_k)
     fallback_shares = _fallback_shares(top_recommendations)
     popularity_bias = _popularity_bias(top_recommendations, context)
-    relevant_action_types = (
-        tuple(ranking_relevant_action_types)
-        if ranking_relevant_action_types is not None
-        else DEFAULT_RANKING_RELEVANT_ACTION_TYPES
-    )
+    if ranking_relevant_action_types is None:
+        relevant_action_types = DEFAULT_RANKING_RELEVANT_ACTION_TYPES
+    elif isinstance(ranking_relevant_action_types, str):
+        relevant_action_types = (ranking_relevant_action_types,)
+    else:
+        relevant_action_types = tuple(ranking_relevant_action_types)
     resolved_min_relevance = (
         None if min_ranking_relevance is None else float(min_ranking_relevance)
     )

@@ -115,6 +115,8 @@ def _trial_artifacts_from_metrics_path(sweep_dir: Path, metrics_path: Path) -> T
         return None
     trial_id = relative_parts[trials_index + 1]
     run_dir = metrics_path.parent
+    if run_dir.name == "evaluation":
+        run_dir = run_dir.parent
     stage = None
     if run_dir.name.startswith("stage_"):
         try:
@@ -134,12 +136,16 @@ def _trial_artifacts_from_metrics_path(sweep_dir: Path, metrics_path: Path) -> T
 
 
 def discover_trial_artifacts(sweep_dir: Path) -> list[TrialArtifacts]:
-    artifacts: list[TrialArtifacts] = []
+    artifacts_by_run_dir: dict[str, TrialArtifacts] = {}
     for metrics_path in sorted((sweep_dir / TRIALS_DIR_NAME).rglob("metrics.json")):
         item = _trial_artifacts_from_metrics_path(sweep_dir, metrics_path)
-        if item is not None:
-            artifacts.append(item)
-    return artifacts
+        if item is None:
+            continue
+        key = item.run_dir.relative_to(sweep_dir).as_posix()
+        current = artifacts_by_run_dir.get(key)
+        if current is None or item.metrics_path.parent == item.run_dir:
+            artifacts_by_run_dir[key] = item
+    return list(artifacts_by_run_dir.values())
 
 
 def _objective_config(search_space: Mapping[str, Any]) -> Mapping[str, Any]:

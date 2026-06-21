@@ -58,3 +58,18 @@ def test_omitted_min_ranking_relevance_uses_default_threshold() -> None:
     assert metrics.ranking_ground_truth_pairs == 3
     assert metrics.mrr_at_k == 1.0
     assert metrics.recall_at_k == 1.0
+
+def test_string_ranking_relevant_action_type_is_treated_as_single_action() -> None:
+    metrics = compute_offline_metrics(
+        recommendations=_recommendations_for_explicit_null_threshold(),
+        ground_truth=_mixed_action_ground_truth(),
+        top_k=3,
+        ranking_relevant_action_types="to_cart",
+        min_ranking_relevance=None,
+    )
+
+    assert metrics.ranking_ground_truth_pairs == 1
+    assert metrics.ranking_evaluated_items == 1
+    assert metrics.mrr_at_k == pytest.approx(1 / 3)
+    assert metrics.recall_at_k == 1.0
+

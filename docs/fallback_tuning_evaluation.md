@@ -64,7 +64,7 @@ prebuilt pair aggregates -> scoring -> top-K -> fallback -> evaluation
 Компактный быстрый search space для подбора scoring-параметров. Fallback в нём зафиксирован как выключенный:
 
 ```yaml
-business.fallback.enabled: [false]
+business.fallback.enabled: [ false ]
 ```
 
 Используйте его, когда нужно быстро сравнить веса действий, `beta` и normalization без влияния fallback.
@@ -75,13 +75,13 @@ Fast-safe search space для совместного подбора scoring и f
 fallback-переключатели:
 
 ```yaml
-business.fallback.enabled: [false, true]
-business.fallback.enable_brand: [false, true]
-business.fallback.include_cold_start_items: [false, true]
-business.fallback.include_catalog_only_sources: [false]
-business.fallback.min_item_events: [1, 2, 5]
-business.fallback.metadata_candidate_pool_size: [50, 100, 200]
-business.fallback.global_candidate_pool_size: [100, 200, 500]
+business.fallback.enabled: [ false, true ]
+business.fallback.enable_brand: [ false, true ]
+business.fallback.include_cold_start_items: [ false, true ]
+business.fallback.include_catalog_only_sources: [ false ]
+business.fallback.min_item_events: [ 1, 2, 5 ]
+business.fallback.metadata_candidate_pool_size: [ 50, 100, 200 ]
+business.fallback.global_candidate_pool_size: [ 100, 200, 500 ]
 ```
 
 `include_catalog_only_sources` намеренно зафиксирован в `false`, потому что этот режим может сильно увеличить runtime и
