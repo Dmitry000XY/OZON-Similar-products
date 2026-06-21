@@ -5,6 +5,7 @@ pipeline:
   lookback_days: 30
   session_batch_size: 500
   session_user_buckets: 256
+  aggregation_item_buckets: 64
 
 events:
   item_action_types:

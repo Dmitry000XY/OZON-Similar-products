@@ -255,6 +255,14 @@ def _scan_parquet_paths_or_empty_frame(
     return pl.scan_parquet([path.as_posix() for path in paths])
 
 
+def _concat_recommendation_parts(parts: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    """Concat recommendation chunks while preserving optional diagnostic columns."""
+    if not parts:
+        return empty_contract_frame(schemas.RECOMMENDATIONS_COLUMNS)
+
+    return pl.concat(parts, how="diagonal_relaxed")
+
+
 def _load_clean_and_write_daily_events(
         *,
         data_config: dict[str, Any],
@@ -1209,6 +1217,13 @@ def run_pipeline(
     )
     logger.info("[run_pipeline] session user buckets=%s", session_user_buckets)
 
+    aggregation_item_buckets = _as_positive_int(
+        value=pipeline_config.get("aggregation_item_buckets"),
+        default=1,
+        parameter_name="pipeline.aggregation_item_buckets",
+    )
+    logger.info("[run_pipeline] aggregation item buckets=%s", aggregation_item_buckets)
+
     sessions_rows, daily_pair_stats_paths = _build_streaming_sessions_and_pair_stats(
         clean_event_paths=clean_event_paths,
         session_builder=session_builder,
@@ -1228,30 +1243,6 @@ def run_pipeline(
         daily_pairs_output_dir,
     )
     _log_memory(logger, "after_sessions_and_daily_pairs")
-
-    logger.info("[run_pipeline] aggregate pairs from compact daily stats")
-    pair_aggregates = PairAggregator().aggregate_window_from_daily_stats_paths(
-        count_paths=daily_pair_stats_paths.count_paths,
-        user_key_paths=daily_pair_stats_paths.user_key_paths,
-        session_key_paths=daily_pair_stats_paths.session_key_paths,
-        window_start=window_start,
-        window_end=window_end,
-    )
-    pair_aggregates_rows = pair_aggregates.height
-    logger.info(
-        "[run_pipeline] pair aggregates rows=%s",
-        pair_aggregates_rows,
-    )
-
-    _log_memory(logger, "after_pair_aggregation")
-    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
-    if isinstance(pair_aggregates_dir, str | Path):
-        _write_window_artifact(
-            frame=pair_aggregates,
-            output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
-            window_start=window_start,
-            window_end=window_end,
-        )
 
     logger.info("[run_pipeline] build item popularity and action distribution")
     popularity_builder = ItemPopularityBuilder(item_action_types=action_types)
@@ -1291,7 +1282,7 @@ def run_pipeline(
             window_end=window_end,
         )
 
-    logger.info("[run_pipeline] score pairs")
+    logger.info("[run_pipeline] prepare scorer and top-k selector")
     scorer = CoVisitationScorer.from_config(config)
     if scorer.action_shares is None:
         derived_action_shares = _action_shares_from_distribution(action_distribution)
@@ -1299,21 +1290,6 @@ def run_pipeline(
             scorer = replace(scorer, action_shares=derived_action_shares)
 
     del action_distribution
-
-    if scorer.normalize_by_item_popularity:
-        pair_scores = scorer.score_lazy(pair_aggregates, item_popularity=item_popularity)
-    else:
-        pair_scores = scorer.score_lazy(pair_aggregates)
-
-    pair_scores_rows = pair_scores.select(pl.len()).collect().item()
-    del pair_aggregates
-
-    logger.info(
-        "[run_pipeline] pair scores rows=%s calibration_used=%s",
-        pair_scores_rows,
-        scorer.action_shares is not None,
-    )
-    _log_memory(logger, "after_scoring")
 
     top_k = _as_positive_int(
         value=topk_config.get("top_k", pipeline_config.get("top_k")),
@@ -1333,8 +1309,131 @@ def run_pipeline(
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
         deduplicate=False,
     )
-    recommendations = selector.select(pair_scores)
-    del pair_scores
+
+    pair_aggregates_rows = 0
+    pair_scores_rows = 0
+    recommendation_parts: list[pl.DataFrame] = []
+
+    pair_aggregates_dir = artifacts_config.get("pair_aggregates_dir")
+    if aggregation_item_buckets > 1 and isinstance(pair_aggregates_dir, str | Path):
+        logger.info(
+            "[run_pipeline] skip pair_aggregates artifact in bucketed aggregation mode"
+        )
+
+    for bucket_id in range(aggregation_item_buckets):
+        logger.info(
+            "[run_pipeline] aggregate/score/top-k item bucket=%s/%s",
+            bucket_id + 1,
+            aggregation_item_buckets,
+        )
+        _log_memory(logger, "before_aggregation_item_bucket")
+
+        aggregator = PairAggregator()
+
+        if aggregation_item_buckets == 1:
+            pair_aggregates = aggregator.aggregate_window_from_daily_stats_paths(
+                count_paths=daily_pair_stats_paths.count_paths,
+                user_key_paths=daily_pair_stats_paths.user_key_paths,
+                session_key_paths=daily_pair_stats_paths.session_key_paths,
+                window_start=window_start,
+                window_end=window_end,
+            )
+        else:
+            pair_aggregates = aggregator.aggregate_window_from_daily_stats_paths(
+                count_paths=daily_pair_stats_paths.count_paths,
+                user_key_paths=daily_pair_stats_paths.user_key_paths,
+                session_key_paths=daily_pair_stats_paths.session_key_paths,
+                window_start=window_start,
+                window_end=window_end,
+                item_bucket_id=bucket_id,
+                item_bucket_count=aggregation_item_buckets,
+            )
+
+        bucket_pair_aggregates_rows = pair_aggregates.height
+        pair_aggregates_rows += bucket_pair_aggregates_rows
+        logger.info(
+            "[run_pipeline] item bucket=%s/%s pair aggregates rows=%s",
+            bucket_id + 1,
+            aggregation_item_buckets,
+            bucket_pair_aggregates_rows,
+        )
+        _log_memory(logger, "after_aggregation_item_bucket")
+
+        if aggregation_item_buckets == 1 and isinstance(pair_aggregates_dir, str | Path):
+            _write_window_artifact(
+                frame=pair_aggregates,
+                output_dir=_as_path(pair_aggregates_dir, "data/processed/pair_aggregates"),
+                window_start=window_start,
+                window_end=window_end,
+            )
+
+        if scorer.normalize_by_item_popularity:
+            pair_scores_lazy = scorer.score_lazy(
+                pair_aggregates,
+                item_popularity=item_popularity,
+            )
+        else:
+            pair_scores_lazy = scorer.score_lazy(pair_aggregates)
+
+        pair_scores = pair_scores_lazy.collect()
+        pair_scores_rows += pair_scores.height
+        del pair_scores_lazy
+        del pair_aggregates
+
+        bucket_recommendations = selector.select(pair_scores)
+
+        score_detail_columns = [
+            column
+            for column in [
+                "pair_count",
+                "view_count",
+                "click_count",
+                "favorite_count",
+                "to_cart_count",
+                "unique_users",
+                "unique_sessions",
+                "base_score",
+            ]
+            if column in pair_scores.columns
+        ]
+
+        if score_detail_columns and not bucket_recommendations.is_empty():
+            bucket_recommendations = bucket_recommendations.join(
+                pair_scores.select(
+                    ["item_id", "similar_item_id", *score_detail_columns]
+                ),
+                on=["item_id", "similar_item_id"],
+                how="left",
+            )
+
+        del pair_scores
+
+        if not bucket_recommendations.is_empty():
+            recommendation_parts.append(bucket_recommendations)
+
+        logger.info(
+            "[run_pipeline] item bucket=%s/%s recommendations rows=%s",
+            bucket_id + 1,
+            aggregation_item_buckets,
+            bucket_recommendations.height,
+        )
+        _log_memory(logger, "after_topk_item_bucket")
+
+    recommendations = _concat_recommendation_parts(recommendation_parts)
+    del recommendation_parts
+
+    logger.info(
+        "[run_pipeline] pair aggregates rows=%s",
+        pair_aggregates_rows,
+    )
+    _log_memory(logger, "after_pair_aggregation")
+
+    logger.info(
+        "[run_pipeline] pair scores rows=%s calibration_used=%s",
+        pair_scores_rows,
+        scorer.action_shares is not None,
+    )
+    _log_memory(logger, "after_scoring")
 
     fallback_config = FallbackConfig.from_config(config, top_k=top_k)
     if fallback_config.enabled:
