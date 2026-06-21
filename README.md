@@ -124,24 +124,31 @@ uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days
 uv run python scripts/run_tune.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
 ```
 
-На текущем этапе `full` и `tune` безопаснее запускать с `lookback_days=1`: 7-day OOM в pair aggregation считается отдельной задачей и в этот change set не входит.
+На текущем этапе `full` и `tune` безопаснее запускать с `lookback_days=1`: 7-day OOM в pair aggregation считается
+отдельной задачей и в этот change set не входит.
 
-Офлайн-оценка по умолчанию использует `evaluation.relevance_mode: binary`: любая наблюдаемая validation pair считается релевантной с `relevance=1.0`, а информация о действиях сохраняется в ground truth через `view_count`, `click_count`, `favorite_count`, `to_cart_count`. Graded relevance с ручными весами остается опциональным диагностическим режимом.
+Офлайн-оценка по умолчанию использует `evaluation.relevance_mode: binary`: любая наблюдаемая validation pair считается
+релевантной с `relevance=1.0`, а информация о действиях сохраняется в ground truth через `view_count`, `click_count`,
+`favorite_count`, `to_cart_count`. Graded relevance с ручными весами остается опциональным диагностическим режимом.
 
 Основные offline metrics теперь делятся на три слоя:
 
 - general ranking metrics: `hit_rate_at_k`, `recall_at_k`, `ndcg_at_k`, `mrr_at_k`, `coverage_at_k`;
-- action-specific metrics: `view_*`, `click_*`, `favorite_*`, `to_cart_*`, где business-фокусом остаются `to_cart_hit_rate_at_k` и `to_cart_recall_at_k`.
-- fallback-метрики: `fallback_*_share_at_k`, `fallback_hit_rate_at_k`, `fallback_recall_at_k`, `fallback_to_cart_hit_rate_at_k`, `fallback_to_cart_recall_at_k`.
+- action-specific metrics: `view_*`, `click_*`, `favorite_*`, `to_cart_*`, где business-фокусом остаются
+  `to_cart_hit_rate_at_k` и `to_cart_recall_at_k`.
+- fallback-метрики: `fallback_*_share_at_k`, `fallback_hit_rate_at_k`, `fallback_recall_at_k`,
+  `fallback_to_cart_hit_rate_at_k`, `fallback_to_cart_recall_at_k`.
 
 Tuning использует balanced objective:
 
 - основная метрика: `to_cart_hit_rate_at_k`;
-- вспомогательные метрики: `ndcg_at_k`, `recall_at_k`, `mrr_at_k`, `coverage_at_k`, `to_cart_recall_at_k`, `fallback_hit_rate_at_k`;
+- вспомогательные метрики: `ndcg_at_k`, `recall_at_k`, `mrr_at_k`, `coverage_at_k`, `to_cart_recall_at_k`,
+  `fallback_hit_rate_at_k`;
 - штрафные метрики: `popularity_bias_at_k`, `fallback_global_share_at_k`;
 - итоговый `objective_score` считается как primary-gated geometric mean и пишется в `results.csv`, `best_metrics.json`.
 
-`configs/tuning/search_space.yaml` теперь поддерживает `choice`, `int_range`, `float_range`, `log_float_range`, а `run_tune.py` умеет `grid`, truly-random `random`, `successive_halving` и `simulated_annealing`.
+`configs/tuning/search_space.yaml` теперь поддерживает `choice`, `int_range`, `float_range`, `log_float_range`, а
+`run_tune.py` умеет `grid`, truly-random `random`, `successive_halving` и `simulated_annealing`.
 Тюнинг fallback подробнее описан в `docs/fallback_tuning_evaluation.md`.
 
 Основные outputs:
@@ -153,7 +160,8 @@ outputs/latest/                 # latest full run snapshot
 outputs/tuning/<sweep_id>/      # tuning results, best_config.yaml, best_metrics.json
 ```
 
-`configs/production.yaml` изначально совпадает с baseline. После tuning выбранный `outputs/tuning/<sweep_id>/best_config.yaml`
+`configs/production.yaml` изначально совпадает с baseline. После tuning выбранный
+`outputs/tuning/<sweep_id>/best_config.yaml`
 можно перенести в `configs/production.yaml` отдельным осознанным изменением.
 
 В GitHub Actions доступны только режимы `full` и `tune`.

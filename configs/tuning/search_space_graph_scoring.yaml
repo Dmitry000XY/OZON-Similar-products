@@ -15,64 +15,64 @@ objective:
 parameters:
   graph.distance_decay.enabled:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
 
   graph.distance_decay.strategy:
     type: choice
-    values: [none, weight_table, exponential]
+    values: [ none, weight_table, exponential ]
 
   graph.distance_decay.max_distance:
     type: choice
-    values: [null, 10]
+    values: [ null, 10 ]
 
   graph.distance_decay.exponential.alpha:
     type: choice
-    values: [0.25, 0.5, 1.0]
+    values: [ 0.25, 0.5, 1.0 ]
 
   graph.distance_decay.exponential.min_weight:
     type: choice
-    values: [0.01, 0.05]
+    values: [ 0.01, 0.05 ]
 
   graph.time_decay.enabled:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
 
   graph.time_decay.strategy:
     type: choice
-    values: [none, weight_table, exponential]
+    values: [ none, weight_table, exponential ]
 
   graph.time_decay.exponential.half_life_days:
     type: choice
-    values: [3, 7, 14]
+    values: [ 3, 7, 14 ]
 
   graph.time_decay.exponential.min_weight:
     type: choice
-    values: [0.01, 0.05]
+    values: [ 0.01, 0.05 ]
 
   scoring.count_source:
     type: choice
-    values: [raw, weighted]
+    values: [ raw, weighted ]
 
   scoring.count_transform.method:
     type: choice
-    values: [log, sqrt, linear]
+    values: [ log, sqrt, linear ]
 
   scoring.count_transform.smoothing:
     type: choice
-    values: [0.5, 1.0, 2.0]
+    values: [ 0.5, 1.0, 2.0 ]
 
   scoring.min_pair_count:
     type: choice
-    values: [1, 2, 3]
+    values: [ 1, 2, 3 ]
 
   scoring.min_unique_sessions:
     type: choice
-    values: [1, 2, 3]
+    values: [ 1, 2, 3 ]
 
   scoring.min_weighted_pair_count:
     type: choice
-    values: [null, 0.5, 1.0]
+    values: [ null, 0.5, 1.0 ]
 
   scoring.min_score:
     type: choice
-    values: [null, 0.01, 0.1]
+    values: [ null, 0.01, 0.1 ]

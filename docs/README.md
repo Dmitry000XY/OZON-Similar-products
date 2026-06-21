@@ -1,18 +1,27 @@
 # Документация проекта
 
-Эта папка хранит русскоязычную документацию по архитектуре MVP, контрактам данных и отдельным production-модулям pipeline.
+Эта папка хранит русскоязычную документацию по архитектуре MVP, контрактам данных и отдельным production-модулям
+pipeline.
 
 ## Основные документы
 
-- [Контракты данных](data_contract.md) — актуальные таблицы pipeline, обязательные колонки и границы ответственности слоёв.
+- [Контракты данных](data_contract.md) — актуальные таблицы pipeline, обязательные колонки и границы ответственности
+  слоёв.
 - [Слой данных](modules/data_layer.md) — границы слоя данных и его публичный API.
-- [Calibrated multi-channel веса](calibrated_multichannel_weights.md) — подробное решение по весам `view`, `click`, `favorite`, `to_cart`, частотной калибровке и тому, почему веса применяются только в `CoVisitationScorer`.
-- [ItemPairBuilder](item_pair_builder.md) — как из сессий строятся directed item-item pairs, почему `signal_type` равен target action type, и почему приоритеты сигналов живут в config.
-- [PairAggregator](aggregate_pairs.md) — как дневные пары агрегируются за rolling window и почему агрегатор считает только channel counts, без весов и score.
-- [Graph scoring improvements](graph_scoring_improvements.md) — distance decay, time decay, weighted counts, weighted scoring и full graph/scoring tuning.
-- [Evaluation metrics](evaluation_metrics.md) — разделение `full_ground_truth` и `ranking_ground_truth`, strong-action метрики и диагностика view-only пар.
-- [ItemPopularityBuilder](item_popularity_builder.md) — как считаются факты популярности товаров и статистика action type для будущей калибровки scorer-а.
-- [Тюнинг и оценка fallback](fallback_tuning_evaluation.md) — fallback-метрики, пространство перебора параметров и логика целевой функции.
+- [Calibrated multi-channel веса](calibrated_multichannel_weights.md) — подробное решение по весам `view`, `click`,
+  `favorite`, `to_cart`, частотной калибровке и тому, почему веса применяются только в `CoVisitationScorer`.
+- [ItemPairBuilder](item_pair_builder.md) — как из сессий строятся directed item-item pairs, почему `signal_type` равен
+  target action type, и почему приоритеты сигналов живут в config.
+- [PairAggregator](aggregate_pairs.md) — как дневные пары агрегируются за rolling window и почему агрегатор считает
+  только channel counts, без весов и score.
+- [Graph scoring improvements](graph_scoring_improvements.md) — distance decay, time decay, weighted counts, weighted
+  scoring и full graph/scoring tuning.
+- [Evaluation metrics](evaluation_metrics.md) — разделение `full_ground_truth` и `ranking_ground_truth`, strong-action
+  метрики и диагностика view-only пар.
+- [ItemPopularityBuilder](item_popularity_builder.md) — как считаются факты популярности товаров и статистика action
+  type для будущей калибровки scorer-а.
+- [Тюнинг и оценка fallback](fallback_tuning_evaluation.md) — fallback-метрики, пространство перебора параметров и
+  логика целевой функции.
 - [Работа с данными](data_io.md) — как распаковать архивы и читать parquet через data readers.
 - [Архив EDA](archive/README.md) — где хранится legacy EDA-код и почему он не должен попадать в runtime.
 
