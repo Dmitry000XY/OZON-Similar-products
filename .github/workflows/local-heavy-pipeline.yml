@@ -65,6 +65,12 @@ on:
           - successive_halving
           - simulated_annealing
 
+      fast_scoring_only:
+        description: Reuse train artifacts and tune only scoring/top-K/fallback parameters
+        required: true
+        default: false
+        type: boolean
+
       halving_reduction_factor:
         description: Successive halving reduction factor
         required: true
@@ -102,6 +108,7 @@ permissions:
 concurrency:
   group: ozon-local-heavy-pipeline
   cancel-in-progress: false
+  queue: max
 
 jobs:
   local-heavy:
@@ -199,6 +206,7 @@ jobs:
           $searchSpacePath = '${{ inputs.search_space_path }}'
           $maxTrials = '${{ inputs.max_trials }}'
           $tuningStrategy = '${{ inputs.tuning_strategy }}'
+          $fastScoringOnly = [System.Convert]::ToBoolean('${{ inputs.fast_scoring_only }}')
           $halvingReductionFactor = '${{ inputs.halving_reduction_factor }}'
           $annealingTemperatureStart = '${{ inputs.annealing_temperature_start }}'
           $annealingTemperatureEnd = '${{ inputs.annealing_temperature_end }}'
@@ -229,6 +237,10 @@ jobs:
               if ([string]::IsNullOrWhiteSpace($value)) {
                 throw 'Required tuning workflow input must not be empty.'
               }
+            }
+
+            if ($fastScoringOnly -and $tuningStrategy -eq 'successive_halving') {
+              throw 'fast_scoring_only cannot be used with successive_halving.'
             }
           }
           
@@ -272,24 +284,30 @@ jobs:
                 '--run-name', $runLabel
               )
           } elseif ($runMode -eq 'tune') {
+            $tuneArgs = @(
+              'uv', 'run', '--no-dev', 'python', 'scripts/run_tune.py',
+              $trainUntilDate,
+              '--lookback-days', $lookbackDays,
+              '--validation-days', $validationDays,
+              '--top-k', $topK,
+              '--config-path', $configPath,
+              '--search-space-path', $searchSpacePath,
+              '--max-trials', $maxTrials,
+              '--tuning-strategy', $tuningStrategy,
+              '--halving-reduction-factor', $halvingReductionFactor,
+              '--annealing-temperature-start', $annealingTemperatureStart,
+              '--annealing-temperature-end', $annealingTemperatureEnd,
+              '--annealing-neighbor-mutations', $annealingNeighborMutations,
+              '--sweep-name', $runLabel
+            )
+
+            if ($fastScoringOnly) {
+              $tuneArgs += '--fast-scoring-only'
+            }
+
             Invoke-PipelineContainer `
               -StepName 'tune' `
-              -ContainerArgs @(
-                'uv', 'run', '--no-dev', 'python', 'scripts/run_tune.py',
-                $trainUntilDate,
-                '--lookback-days', $lookbackDays,
-                '--validation-days', $validationDays,
-                '--top-k', $topK,
-                '--config-path', $configPath,
-                '--search-space-path', $searchSpacePath,
-                '--max-trials', $maxTrials,
-                '--tuning-strategy', $tuningStrategy,
-                '--halving-reduction-factor', $halvingReductionFactor,
-                '--annealing-temperature-start', $annealingTemperatureStart,
-                '--annealing-temperature-end', $annealingTemperatureEnd,
-                '--annealing-neighbor-mutations', $annealingNeighborMutations,
-                '--sweep-name', $runLabel
-              )
+              -ContainerArgs $tuneArgs
           } else {
             throw "Unsupported run_mode: $runMode"
           }
@@ -398,6 +416,7 @@ jobs:
               search_space_path = '${{ inputs.search_space_path }}'
               max_trials = '${{ inputs.max_trials }}'
               tuning_strategy = '${{ inputs.tuning_strategy }}'
+              fast_scoring_only = '${{ inputs.fast_scoring_only }}'
               halving_reduction_factor = '${{ inputs.halving_reduction_factor }}'
               annealing_temperature_start = '${{ inputs.annealing_temperature_start }}'
               annealing_temperature_end = '${{ inputs.annealing_temperature_end }}'

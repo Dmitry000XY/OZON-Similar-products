@@ -1,8 +1,14 @@
+# Defense experiment config.
+# Use the same train_until_date, lookback_days, validation_days and top_k for fair comparison.
+# Recommended run:
+# uv run python scripts/run_full.py 2024-04-23 --lookback-days 7 --validation-days 3 --top-k 20 --config-path <this_file>
+
+
 pipeline:
-  session_timeout_minutes: 15
+  session_timeout_minutes: 20
   max_items_per_session: 50
   top_k: 20
-  lookback_days: 30
+  lookback_days: 1
   update_strategy: full_retrain
   session_batch_size: 500
   session_user_buckets: 256
@@ -16,9 +22,8 @@ events:
     - to_cart
   search_action_type: search
 
-# ItemPairBuilder does not apply weights. The priority only decides which
-# action_type is the strongest item-level signal inside one session.
 item_pair_builder:
+  # Inside one session the strongest item action wins: to_cart > favorite > click > view.
   signal_priority:
     view: 1
     click: 2
@@ -30,6 +35,7 @@ graph:
     enabled: false
     strategy: none
     max_distance: null
+    # Numeric keys are quoted to keep artifact fingerprints stable.
     weight_by_distance:
       "1": 1.0
       "2": 0.8
@@ -55,20 +61,15 @@ graph:
       min_weight: 0.05
 
   widget_context:
-    # Widget weights affect scoring when scoring.count_source is set to weighted.
-    # Baseline keeps this disabled; use production.yaml for the first widget experiment.
     enabled: false
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
-    # Direct item-action widgets observed in notebooks/01_eda.ipynb.
-    # Initial tunable values: keep catalog neutral, give product page a small boost.
-    weights:
-      search_catalog_listing: 1.0
-      product_detailed_page: 1.1
+    weights: {}
 
-# Final calibrated recommendation scoring is done only in CoVisitationScorer.
-# Earlier layers preserve action_type and channel counts, but do not assign weights.
+# Experiment purpose:
+# Pure co-visitation baseline: score is raw pair_count; no action-channel weights, no graph decay, no fallback.
+
 scoring:
   method: pair_count
   count_source: raw
@@ -77,16 +78,16 @@ scoring:
     smoothing: 1.0
   business_weights:
     view: 1.0
-    click: 3.0
-    favorite: 6.0
-    to_cart: 8.0
-  beta: 0.5
+    click: 1.0
+    favorite: 1.0
+    to_cart: 1.0
+  beta: 0.0
   reference_action_type: view
   max_frequency_boost:
     view: 1.0
-    click: 10.0
-    favorite: 15.0
-    to_cart: 30.0
+    click: 1.0
+    favorite: 1.0
+    to_cart: 1.0
   min_pair_count: 1
   min_unique_users: 1
   min_unique_sessions: 1
@@ -116,7 +117,7 @@ outputs:
   latest_dir: outputs/latest
 
 evaluation:
-  relevance_mode: graded
+  relevance_mode: binary
   relevance_weights:
     view: 0.1
     click: 0.3
@@ -133,12 +134,16 @@ business:
     enabled: false
     top_k: 20
     candidate_pool_size: 200
-    global_candidate_pool_size: 200
+    global_candidate_pool_size: 500
     metadata_candidate_pool_size: 200
-    min_item_events: 1
+    min_item_events: 2
     enable_category_type: true
     enable_category: true
     enable_type: true
-    enable_brand: false
+    enable_brand: true
     enable_global: true
+    include_cold_start_items: false
     include_catalog_only_sources: false
+
+topk:
+  top_k: 20
