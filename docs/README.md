@@ -18,6 +18,8 @@ pipeline.
   scoring и full graph/scoring tuning.
 - [Evaluation metrics](evaluation_metrics.md) — разделение `full_ground_truth` и `ranking_ground_truth`, strong-action
   метрики и диагностика view-only пар.
+- [Incremental update](incremental_update.md) — daily artifact manifests, idempotent pair stats writes и стратегия
+  `pipeline.update_strategy`.
 - [ItemPopularityBuilder](item_popularity_builder.md) — как считаются факты популярности товаров и статистика action
   type для будущей калибровки scorer-а.
 - [Тюнинг и оценка fallback](fallback_tuning_evaluation.md) — fallback-метрики, пространство перебора параметров и

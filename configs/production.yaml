@@ -3,6 +3,7 @@ pipeline:
   max_items_per_session: 50
   top_k: 20
   lookback_days: 30
+  update_strategy: full_retrain
   session_batch_size: 500
   session_user_buckets: 256
   aggregation_item_buckets: 128
@@ -99,6 +100,7 @@ scoring:
 artifacts:
   events_clean_dir: data/processed/events_clean
   sessions_dir: null
+  session_state_dir: data/processed/session_state
   item_popularity_dir: data/processed/item_popularity
   action_type_distribution_dir: data/processed/action_type_distribution
   daily_pairs_dir: data/processed/item_pairs

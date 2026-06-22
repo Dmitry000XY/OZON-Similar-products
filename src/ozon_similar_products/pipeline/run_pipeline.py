@@ -18,11 +18,21 @@ from ozon_similar_products.business.fallback import (
     FallbackConfig,
     FallbackLayer,
 )
-from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
+from ozon_similar_products.config import PROJECT_ROOT, get_path_from_config, load_yaml_config
 from ozon_similar_products.data import load_configs, load_events, load_products, schemas
 from ozon_similar_products.data.frames import empty_contract_frame
+from ozon_similar_products.data.partitions import collect_event_parquet_files
+from ozon_similar_products.data.readers import find_parquet_payload_dir
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 from ozon_similar_products.output.writers import RecommendationWriter
+from ozon_similar_products.pipeline.artifact_manifest import (
+    SCHEMA_VERSION,
+    ArtifactManifest,
+    fingerprint_payload,
+    read_manifest,
+    validate_manifest,
+    write_manifest,
+)
 from ozon_similar_products.preprocessing.build_sessions import SessionBuilder
 from ozon_similar_products.preprocessing.clean_events import EventCleaner
 from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
@@ -119,6 +129,14 @@ def _as_bool(value: Any, default: bool, parameter_name: str) -> bool:
     raise TypeError(f"{parameter_name} must be a boolean")
 
 
+def _update_strategy(config: Mapping[str, Any]) -> str:
+    pipeline_config = _as_mapping(config.get("pipeline", {}))
+    strategy = str(pipeline_config.get("update_strategy", "full_retrain"))
+    if strategy not in {"full_retrain", "incremental"}:
+        raise ValueError("pipeline.update_strategy must be 'full_retrain' or 'incremental'")
+    return strategy
+
+
 def _item_action_types(config: Mapping[str, Any]) -> list[str]:
     """Read item action types from config."""
     events_config = _as_mapping(config.get("events", {}))
@@ -176,6 +194,152 @@ def _date_range_strings(window_start: str, window_end: str) -> list[str]:
     ]
 
 
+def _relative_to_root(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _clean_events_manifest_path(output_dir: Path, partition_date: str) -> Path:
+    return output_dir / "manifests" / f"date={partition_date}.json"
+
+
+def _daily_pair_stats_manifest_path(output_dir: Path, partition_date: str) -> Path:
+    return output_dir / "manifests" / f"date={partition_date}.json"
+
+
+def _session_state_manifest_path(output_dir: Path, partition_date: str) -> Path:
+    return output_dir / "manifests" / f"date={partition_date}.json"
+
+
+def _clean_events_fingerprint(
+        *,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        partition_date: str,
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    return fingerprint_payload(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "stage": "clean_events",
+            "date": partition_date,
+            "events": {
+                "item_action_types": list(action_types),
+                "search_action_type": _as_mapping(config.get("events", {})).get(
+                    "search_action_type",
+                ),
+            },
+            "raw_input_identity": [dict(item) for item in (raw_input_identity or [])],
+        }
+    )
+
+
+def _session_state_fingerprint(
+        *,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        partition_date: str,
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    pipeline_config = _as_mapping(config.get("pipeline", {}))
+    return fingerprint_payload(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "stage": "session_state",
+            "date": partition_date,
+            "clean_events": _clean_events_fingerprint(
+                config=config,
+                action_types=action_types,
+                partition_date=partition_date,
+                raw_input_identity=raw_input_identity,
+            ),
+            "pipeline": {
+                "session_timeout_minutes": pipeline_config.get("session_timeout_minutes"),
+                "max_items_per_session": pipeline_config.get("max_items_per_session"),
+                "session_user_buckets": pipeline_config.get("session_user_buckets"),
+            },
+        }
+    )
+
+
+def _daily_pair_stats_fingerprint(
+        *,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        partition_date: str,
+        processed_through_date: str,
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    graph_config = _as_mapping(config.get("graph", {}))
+    return fingerprint_payload(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "stage": "daily_pair_stats",
+            "date": partition_date,
+            "processed_through_date": processed_through_date,
+            "session_state": _session_state_fingerprint(
+                config=config,
+                action_types=action_types,
+                partition_date=partition_date,
+                raw_input_identity=raw_input_identity,
+            ),
+            "item_pair_builder": _as_mapping(config.get("item_pair_builder", {})),
+            "graph_distance_decay": _as_mapping(graph_config.get("distance_decay", {})),
+            "graph_widget_context": _as_mapping(graph_config.get("widget_context", {})),
+        }
+    )
+
+
+def _finalize_daily_pair_stat_manifests(
+        *,
+        count_paths: Sequence[Path],
+        daily_pairs_output_dir: Path,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        processed_through_date: str,
+        raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> None:
+    """Finalize built pair-stat manifests to the full processed cutoff."""
+
+    for count_path in count_paths:
+        partition_date = count_path.stem.removeprefix("date=")
+        manifest_path = _daily_pair_stats_manifest_path(
+            daily_pairs_output_dir,
+            partition_date,
+        )
+        manifest = read_manifest(manifest_path)
+        if manifest is None:
+            raise FileNotFoundError(
+                "missing daily pair-stat manifest for built artifact "
+                f"date={partition_date}: {manifest_path}"
+            )
+
+        write_manifest(
+            manifest_path,
+            ArtifactManifest(
+                artifact_type=manifest.artifact_type,
+                date=manifest.date,
+                fingerprint=_daily_pair_stats_fingerprint(
+                    config=config,
+                    action_types=action_types,
+                    partition_date=manifest.date,
+                    processed_through_date=processed_through_date,
+                    raw_input_identity=raw_input_identity_by_date.get(manifest.date, []),
+                ),
+                paths=dict(manifest.paths),
+                rows=dict(manifest.rows),
+                metadata={
+                    **manifest.metadata,
+                    "processed_through_date": processed_through_date,
+                },
+                schema_version=manifest.schema_version,
+                created_at=manifest.created_at,
+            ),
+        )
+
+
 def _partition_frame_by_date_column(
         frame: pl.DataFrame,
         date_column: str,
@@ -196,6 +360,43 @@ def _partition_frame_by_date_column(
 
     daily_frames.sort(key=lambda item: item[0])
     return daily_frames
+
+
+def _raw_event_input_identity(
+        *,
+        data_config: dict[str, Any],
+        partition_date: str,
+        action_types: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Describe the raw parquet files contributing to one event partition."""
+    user_actions_base_dir = get_path_from_config(
+        config=data_config,
+        section="data",
+        key="user_actions_dir",
+    )
+    user_actions_config = data_config["data"]["user_actions"]
+    events_dir = find_parquet_payload_dir(
+        base_dir=user_actions_base_dir,
+        payload_root_names=user_actions_config["payload_root_names"],
+        parquet_glob=user_actions_config["parquet_glob"],
+    )
+    parquet_files = collect_event_parquet_files(
+        events_dir=events_dir,
+        dates=[partition_date],
+        action_types=action_types,
+    )
+
+    identity: list[dict[str, Any]] = []
+    for parquet_file in sorted(parquet_files):
+        stat = parquet_file.stat()
+        identity.append(
+            {
+                "path": parquet_file.relative_to(PROJECT_ROOT).as_posix(),
+                "size_bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    return identity
 
 
 def _write_daily_partitions(
@@ -363,6 +564,242 @@ class DailyPairStatsPaths:
     user_key_paths: list[Path]
     session_key_paths: list[Path]
     raw_pair_rows: int
+
+
+@dataclass(frozen=True)
+class CleanEventsResult:
+    paths: list[Path]
+    raw_events_rows: int
+    clean_events_rows: int
+    reused_days: list[str]
+    rebuilt_days: list[str]
+    raw_input_identity_by_date: dict[str, list[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class PairStatsPlan:
+    paths: DailyPairStatsPaths
+    sessions_rows: int
+    reused_days: list[str]
+    invalid_days: list[str]
+
+
+def _clean_events_path(output_dir: Path, partition_date: str) -> Path:
+    return output_dir / f"date={partition_date}.parquet"
+
+
+def _daily_pair_stats_paths_for_date(output_dir: Path, partition_date: str) -> tuple[Path, Path, Path, Path]:
+    return (
+        output_dir / "counts" / f"date={partition_date}.parquet",
+        output_dir / "widget_counts" / f"date={partition_date}.parquet",
+        output_dir / "user_keys" / f"date={partition_date}.parquet",
+        output_dir / "session_keys" / f"date={partition_date}.parquet",
+    )
+
+
+def _load_or_build_clean_events(
+        *,
+        config: Mapping[str, Any],
+        data_config: dict[str, Any],
+        cleaner: EventCleaner,
+        action_types: Sequence[str],
+        window_start: str,
+        window_end: str,
+        output_dir: Path,
+        allow_empty_input: bool,
+        update_strategy: str,
+        logger: logging.Logger,
+) -> CleanEventsResult:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    raw_events_rows = 0
+    clean_events_rows = 0
+    reused_days: list[str] = []
+    rebuilt_days: list[str] = []
+    raw_input_identity_by_date: dict[str, list[dict[str, Any]]] = {}
+    last_missing_error: FileNotFoundError | None = None
+    missing_dates: list[str] = []
+
+    for partition_date in _date_range_strings(window_start, window_end):
+        output_path = _clean_events_path(output_dir, partition_date)
+        try:
+            raw_input_identity = _raw_event_input_identity(
+                data_config=data_config,
+                partition_date=partition_date,
+                action_types=action_types,
+            )
+        except (KeyError, TypeError):
+            raw_input_identity = []
+        except FileNotFoundError as error:
+            last_missing_error = error
+            missing_dates.append(partition_date)
+            continue
+        raw_input_identity_by_date[partition_date] = raw_input_identity
+        fingerprint = _clean_events_fingerprint(
+            config=config,
+            action_types=action_types,
+            partition_date=partition_date,
+            raw_input_identity=raw_input_identity,
+        )
+        status = validate_manifest(
+            manifest_path=_clean_events_manifest_path(output_dir, partition_date),
+            artifact_root=output_dir,
+            artifact_type="clean_events",
+            partition_date=partition_date,
+            expected_fingerprint=fingerprint,
+            required_path_keys=("events",),
+        )
+        if update_strategy == "incremental" and status.valid and status.manifest is not None:
+            paths.append(output_path)
+            reused_days.append(partition_date)
+            raw_events_rows += int(status.manifest.rows.get("raw_events", 0))
+            clean_events_rows += int(status.manifest.rows.get("clean_events", 0))
+            continue
+
+        try:
+            raw_day = load_events(
+                config=data_config,
+                use_sample=False,
+                dates=[partition_date],
+                action_types=action_types,
+            )
+        except FileNotFoundError as error:
+            last_missing_error = error
+            missing_dates.append(partition_date)
+            continue
+
+        raw_events_rows += raw_day.height
+        clean_day = cleaner.transform_day(raw_day)
+        clean_events_rows += clean_day.height
+        clean_day.write_parquet(output_path)
+        paths.append(output_path)
+        rebuilt_days.append(partition_date)
+        write_manifest(
+            _clean_events_manifest_path(output_dir, partition_date),
+            ArtifactManifest(
+                artifact_type="clean_events",
+                date=partition_date,
+                fingerprint=fingerprint,
+                paths={"events": _relative_to_root(output_path, output_dir)},
+                rows={"raw_events": raw_day.height, "clean_events": clean_day.height},
+                metadata={"raw_input_identity": raw_input_identity},
+            ),
+        )
+
+    if not paths:
+        if not allow_empty_input:
+            raise FileNotFoundError(
+                "Input events were not found for run_pipeline: "
+                f"date_window=[{window_start}..{window_end}], "
+                f"action_types={list(action_types)}, "
+                f"allow_empty_input={allow_empty_input}. "
+                f"Missing dates: {missing_dates}"
+            ) from last_missing_error
+
+        logger.warning(
+            "[run_pipeline] missing raw events; continuing with empty input "
+            "allow_empty_input=%s",
+            allow_empty_input,
+        )
+
+    return CleanEventsResult(
+        paths=paths,
+        raw_events_rows=raw_events_rows,
+        clean_events_rows=clean_events_rows,
+        reused_days=reused_days,
+        rebuilt_days=rebuilt_days,
+        raw_input_identity_by_date=raw_input_identity_by_date,
+    )
+
+
+def _plan_reusable_daily_pair_stats(
+        *,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        partition_dates: Sequence[str],
+        daily_pairs_output_dir: Path,
+        session_state_output_dir: Path,
+        processed_through_date: str,
+        raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> PairStatsPlan:
+    count_paths: list[Path] = []
+    widget_count_paths: list[Path] = []
+    user_key_paths: list[Path] = []
+    session_key_paths: list[Path] = []
+    raw_pair_rows = 0
+    reused_days: list[str] = []
+    invalid_days: list[str] = []
+
+    for partition_date in partition_dates:
+        raw_input_identity = raw_input_identity_by_date.get(partition_date, [])
+        pair_fingerprint = _daily_pair_stats_fingerprint(
+            config=config,
+            action_types=action_types,
+            partition_date=partition_date,
+            processed_through_date=processed_through_date,
+            raw_input_identity=raw_input_identity,
+        )
+        pair_status = validate_manifest(
+            manifest_path=_daily_pair_stats_manifest_path(daily_pairs_output_dir, partition_date),
+            artifact_root=daily_pairs_output_dir,
+            artifact_type="daily_pair_stats",
+            partition_date=partition_date,
+            expected_fingerprint=pair_fingerprint,
+            required_path_keys=("counts", "widget_counts", "user_keys", "session_keys"),
+        )
+        session_status = validate_manifest(
+            manifest_path=_session_state_manifest_path(session_state_output_dir, partition_date),
+            artifact_root=session_state_output_dir,
+            artifact_type="session_state",
+            partition_date=partition_date,
+            expected_fingerprint=_session_state_fingerprint(
+                config=config,
+                action_types=action_types,
+                partition_date=partition_date,
+                raw_input_identity=raw_input_identity,
+            ),
+            required_path_keys=("active_sessions", "max_session_indices"),
+        )
+        if (
+            not pair_status.valid
+            or not session_status.valid
+            or pair_status.manifest is None
+            or pair_status.manifest.metadata.get("processed_through_date") != processed_through_date
+        ):
+            invalid_days.append(partition_date)
+            continue
+
+        count_path, widget_count_path, user_key_path, session_key_path = _daily_pair_stats_paths_for_date(
+            daily_pairs_output_dir,
+            partition_date,
+        )
+        count_paths.append(count_path)
+        widget_count_paths.append(widget_count_path)
+        user_key_paths.append(user_key_path)
+        session_key_paths.append(session_key_path)
+        raw_pair_rows += int(pair_status.manifest.rows.get("raw_pair_rows", 0))
+        reused_days.append(partition_date)
+
+    sessions_rows = 0
+    for partition_date in reused_days:
+        session_manifest = read_manifest(
+            _session_state_manifest_path(session_state_output_dir, partition_date)
+        )
+        if session_manifest is not None:
+            sessions_rows += int(session_manifest.rows.get("completed_sessions_rows", 0))
+
+    return PairStatsPlan(
+        paths=DailyPairStatsPaths(
+            count_paths=count_paths,
+            widget_count_paths=widget_count_paths,
+            user_key_paths=user_key_paths,
+            session_key_paths=session_key_paths,
+            raw_pair_rows=raw_pair_rows,
+        ),
+        sessions_rows=sessions_rows,
+        reused_days=reused_days,
+        invalid_days=invalid_days,
+    )
 
 
 def _with_weighted_count_columns(frame: pl.DataFrame) -> pl.DataFrame:
@@ -588,6 +1025,7 @@ def _write_daily_pair_stats(
         stats: DailyPairStats,
         partition_date: str,
         output_dir: Path,
+        merge_existing: bool = False,
 ) -> tuple[Path, Path, Path, Path]:
     """Write compact daily pair-stat artifacts and return their paths."""
     counts_dir = output_dir / "counts"
@@ -610,24 +1048,24 @@ def _write_daily_pair_stats(
     user_keys = stats.user_keys
     session_keys = stats.session_keys
 
-    if count_path.exists():
+    if merge_existing and count_path.exists():
         counts = _merge_daily_pair_counts(
             pl.read_parquet(count_path),
             counts,
         )
-    if widget_count_path.exists():
+    if merge_existing and widget_count_path.exists():
         widget_counts = _merge_daily_pair_widget_counts(
             pl.read_parquet(widget_count_path),
             widget_counts,
         )
-    if user_key_path.exists():
+    if merge_existing and user_key_path.exists():
         user_keys = _merge_daily_pair_keys(
             pl.read_parquet(user_key_path),
             user_keys,
             schemas.DAILY_PAIR_USER_KEYS_COLUMNS,
             ["pair_date", "item_id", "similar_item_id", "user_id"],
         )
-    if session_key_path.exists():
+    if merge_existing and session_key_path.exists():
         session_keys = _merge_daily_pair_keys(
             pl.read_parquet(session_key_path),
             session_keys,
@@ -679,6 +1117,7 @@ def _build_and_write_daily_pair_stats(
     user_key_paths: list[Path] = []
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
+    written_pair_dates: set[str] = set()
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -705,7 +1144,9 @@ def _build_and_write_daily_pair_stats(
             stats=combined_stats,
             partition_date=partition_date,
             output_dir=output_dir,
+            merge_existing=partition_date in written_pair_dates,
         )
+        written_pair_dates.add(partition_date)
 
         count_paths.append(count_path)
         widget_count_paths.append(widget_count_path)
@@ -907,6 +1348,52 @@ def _append_daily_session_partitions(
         frame_to_write.write_parquet(output_path)
 
 
+def _write_session_state_artifacts(
+        *,
+        active_sessions: pl.DataFrame,
+        max_session_indices: pl.DataFrame,
+        completed_sessions_rows: int,
+        partition_date: str,
+        output_dir: Path,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[Path, Path]:
+    """Persist lightweight state needed to continue sessionization after a day."""
+    active_dir = output_dir / "active_sessions"
+    indices_dir = output_dir / "max_session_indices"
+    active_dir.mkdir(parents=True, exist_ok=True)
+    indices_dir.mkdir(parents=True, exist_ok=True)
+
+    active_path = active_dir / f"date={partition_date}.parquet"
+    indices_path = indices_dir / f"date={partition_date}.parquet"
+
+    active_sessions.select(schemas.SESSIONS_COLUMNS).write_parquet(active_path)
+    max_session_indices.select(["user_id", "max_session_index"]).write_parquet(indices_path)
+
+    manifest = ArtifactManifest(
+        artifact_type="session_state",
+        date=partition_date,
+        fingerprint=_session_state_fingerprint(
+            config=config,
+            action_types=action_types,
+            partition_date=partition_date,
+            raw_input_identity=raw_input_identity,
+        ),
+        paths={
+            "active_sessions": _relative_to_root(active_path, output_dir),
+            "max_session_indices": _relative_to_root(indices_path, output_dir),
+        },
+        rows={
+            "active_sessions": active_sessions.height,
+            "max_session_indices": max_session_indices.height,
+            "completed_sessions_rows": completed_sessions_rows,
+        },
+    )
+    write_manifest(_session_state_manifest_path(output_dir, partition_date), manifest)
+    return active_path, indices_path
+
+
 def _unique_paths(paths: Sequence[Path]) -> list[Path]:
     return list(dict.fromkeys(paths))
 
@@ -918,6 +1405,10 @@ def _build_streaming_sessions_and_pair_stats(
         pair_builder: ItemPairBuilder,
         daily_pairs_output_dir: Path,
         sessions_output_dir: Path | None,
+        session_state_output_dir: Path | None = None,
+        config: Mapping[str, Any] | None = None,
+        action_types: Sequence[str] | None = None,
+        raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
         session_batch_size: int = 10_000,
         session_user_buckets: int = 256,
 ) -> tuple[int, DailyPairStatsPaths]:
@@ -942,6 +1433,7 @@ def _build_streaming_sessions_and_pair_stats(
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
     sessions_rows = 0
+    written_pair_dates: set[str] = set()
 
     active_clean_events = empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
     active_sessions = empty_contract_frame(schemas.SESSIONS_COLUMNS)
@@ -1023,14 +1515,88 @@ def _build_streaming_sessions_and_pair_stats(
                     )
 
                     if daily_stats.raw_pair_rows > 0 or not daily_stats.counts.is_empty():
+                        merge_existing = stats_partition_date in written_pair_dates
+                        manifest_path = _daily_pair_stats_manifest_path(
+                            daily_pairs_output_dir,
+                            stats_partition_date,
+                        )
+                        previous_manifest = (
+                            read_manifest(manifest_path)
+                            if merge_existing and config is not None and action_types is not None
+                            else None
+                        )
                         count_path, widget_count_path, user_key_path, session_key_path = (
                             _write_daily_pair_stats(
                                 stats=daily_stats,
                                 partition_date=stats_partition_date,
                                 output_dir=daily_pairs_output_dir,
+                                merge_existing=merge_existing,
                             )
                         )
 
+                        if config is not None and action_types is not None:
+                            raw_pair_rows_for_date = daily_stats.raw_pair_rows
+                            processed_through_date = partition_date
+                            if previous_manifest is not None:
+                                raw_pair_rows_for_date += int(
+                                    previous_manifest.rows.get("raw_pair_rows", 0)
+                                )
+                                previous_processed_through_date = previous_manifest.metadata.get(
+                                    "processed_through_date"
+                                )
+                                if isinstance(previous_processed_through_date, str):
+                                    processed_through_date = max(
+                                        previous_processed_through_date,
+                                        partition_date,
+                                    )
+
+                            manifest = ArtifactManifest(
+                                artifact_type="daily_pair_stats",
+                                date=stats_partition_date,
+                                fingerprint=_daily_pair_stats_fingerprint(
+                                    config=config,
+                                    action_types=action_types,
+                                    partition_date=stats_partition_date,
+                                    processed_through_date=processed_through_date,
+                                    raw_input_identity=(raw_input_identity_by_date or {}).get(
+                                        stats_partition_date,
+                                        [],
+                                    ),
+                                ),
+                                paths={
+                                    "counts": _relative_to_root(
+                                        count_path,
+                                        daily_pairs_output_dir,
+                                    ),
+                                    "widget_counts": _relative_to_root(
+                                        widget_count_path,
+                                        daily_pairs_output_dir,
+                                    ),
+                                    "user_keys": _relative_to_root(
+                                        user_key_path,
+                                        daily_pairs_output_dir,
+                                    ),
+                                    "session_keys": _relative_to_root(
+                                        session_key_path,
+                                        daily_pairs_output_dir,
+                                    ),
+                                },
+                                rows={
+                                    "counts": int(pl.read_parquet(count_path).height),
+                                    "widget_counts": int(
+                                        pl.read_parquet(widget_count_path).height
+                                    ),
+                                    "user_keys": int(pl.read_parquet(user_key_path).height),
+                                    "session_keys": int(
+                                        pl.read_parquet(session_key_path).height
+                                    ),
+                                    "raw_pair_rows": raw_pair_rows_for_date,
+                                },
+                                metadata={"processed_through_date": processed_through_date},
+                            )
+                            write_manifest(manifest_path, manifest)
+
+                        written_pair_dates.add(stats_partition_date)
                         count_paths.append(count_path)
                         widget_count_paths.append(widget_count_path)
                         user_key_paths.append(user_key_path)
@@ -1059,6 +1625,24 @@ def _build_streaming_sessions_and_pair_stats(
             else empty_contract_frame(schemas.SESSIONS_COLUMNS)
         )
         active_clean_events = _sessions_to_clean_events(active_sessions)
+
+        if session_state_output_dir is not None and config is not None and action_types is not None:
+            completed_sessions_rows_for_day = sum(
+                frame.height for frame in completed_session_chunks_for_output
+            )
+            _write_session_state_artifacts(
+                active_sessions=active_sessions,
+                max_session_indices=max_session_indices,
+                completed_sessions_rows=completed_sessions_rows_for_day,
+                partition_date=partition_date,
+                output_dir=session_state_output_dir,
+                config=config,
+                action_types=action_types,
+                raw_input_identity=(raw_input_identity_by_date or {}).get(
+                    partition_date,
+                    [],
+                ),
+            )
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),
@@ -1174,15 +1758,18 @@ def run_pipeline(
     artifacts_config = _as_mapping(config.get("artifacts", {}))
     outputs_config = _as_mapping(config.get("outputs", {}))
     topk_config = _as_mapping(config.get("topk", {}))
+    update_strategy = _update_strategy(config)
 
     window_start, window_end = _window_bounds(train_until_date, lookback_days)
+    partition_dates = _date_range_strings(window_start, window_end)
     action_types = _item_action_types(config)
     logger.info(
-        "[run_pipeline] window=%s..%s lookback_days=%s action_types=%s",
+        "[run_pipeline] window=%s..%s lookback_days=%s action_types=%s update_strategy=%s",
         window_start,
         window_end,
         lookback_days,
         action_types,
+        update_strategy,
     )
     allow_empty_input = _as_bool(
         pipeline_config.get("allow_empty_input"),
@@ -1202,8 +1789,9 @@ def run_pipeline(
         "data/processed/events_clean",
     )
 
-    logger.info("[run_pipeline] load and clean raw events by day")
-    clean_event_paths, raw_events_rows, clean_events_rows = _load_clean_and_write_daily_events(
+    logger.info("[run_pipeline] load/reuse clean raw events by day")
+    clean_events_result = _load_or_build_clean_events(
+        config=config,
         data_config=data_config,
         cleaner=cleaner,
         action_types=action_types,
@@ -1211,8 +1799,13 @@ def run_pipeline(
         window_end=window_end,
         output_dir=events_clean_output_dir,
         allow_empty_input=allow_empty_input,
+        update_strategy=update_strategy,
         logger=logger,
     )
+    clean_event_paths = clean_events_result.paths
+    raw_events_rows = clean_events_result.raw_events_rows
+    clean_events_rows = clean_events_result.clean_events_rows
+    raw_input_identity_by_date = clean_events_result.raw_input_identity_by_date
 
     if raw_events_rows == 0:
         logger.warning(
@@ -1243,6 +1836,10 @@ def run_pipeline(
         artifacts_config.get("daily_pairs_dir"),
         "data/processed/item_pairs",
     )
+    session_state_output_dir = _as_path(
+        artifacts_config.get("session_state_dir"),
+        "data/processed/session_state",
+    )
 
     sessions_dir = artifacts_config.get("sessions_dir")
     sessions_output_dir = (
@@ -1272,15 +1869,73 @@ def run_pipeline(
     )
     logger.info("[run_pipeline] aggregation item buckets=%s", aggregation_item_buckets)
 
-    sessions_rows, daily_pair_stats_paths = _build_streaming_sessions_and_pair_stats(
-        clean_event_paths=clean_event_paths,
-        session_builder=session_builder,
-        pair_builder=pair_builder,
-        daily_pairs_output_dir=daily_pairs_output_dir,
-        sessions_output_dir=sessions_output_dir,
-        session_batch_size=session_batch_size,
-        session_user_buckets=session_user_buckets,
+    pair_stats_plan = (
+        _plan_reusable_daily_pair_stats(
+            config=config,
+            action_types=action_types,
+            partition_dates=partition_dates,
+            daily_pairs_output_dir=daily_pairs_output_dir,
+            session_state_output_dir=session_state_output_dir,
+            processed_through_date=window_end,
+            raw_input_identity_by_date=raw_input_identity_by_date,
+        )
+        if update_strategy == "incremental" and not clean_events_result.rebuilt_days
+        else None
     )
+    can_reuse_pair_stats = (
+        pair_stats_plan is not None
+        and not pair_stats_plan.invalid_days
+        and len(pair_stats_plan.reused_days) == len(partition_dates)
+    )
+
+    if can_reuse_pair_stats and pair_stats_plan is not None:
+        logger.info(
+            "[run_pipeline] reuse daily pair stats days=%s",
+            pair_stats_plan.reused_days,
+        )
+        sessions_rows = pair_stats_plan.sessions_rows
+        daily_pair_stats_paths = pair_stats_plan.paths
+        rebuilt_pair_stat_days: list[str] = []
+        reused_pair_stat_days = pair_stats_plan.reused_days
+        earliest_affected_date: str | None = None
+    else:
+        invalid_days = pair_stats_plan.invalid_days if pair_stats_plan is not None else []
+        logger.info(
+            "[run_pipeline] rebuild daily pair stats from window_start invalid_days=%s clean_rebuilt_days=%s",
+            invalid_days,
+            clean_events_result.rebuilt_days,
+        )
+        sessions_rows, daily_pair_stats_paths = _build_streaming_sessions_and_pair_stats(
+            clean_event_paths=clean_event_paths,
+            session_builder=session_builder,
+            pair_builder=pair_builder,
+            daily_pairs_output_dir=daily_pairs_output_dir,
+            sessions_output_dir=sessions_output_dir,
+            session_state_output_dir=session_state_output_dir,
+            config=config,
+            action_types=action_types,
+            raw_input_identity_by_date=raw_input_identity_by_date,
+            session_batch_size=session_batch_size,
+            session_user_buckets=session_user_buckets,
+        )
+        _finalize_daily_pair_stat_manifests(
+            count_paths=daily_pair_stats_paths.count_paths,
+            daily_pairs_output_dir=daily_pairs_output_dir,
+            config=config,
+            action_types=action_types,
+            processed_through_date=window_end,
+            raw_input_identity_by_date=raw_input_identity_by_date,
+        )
+        rebuilt_pair_stat_days = [
+            path.stem.removeprefix("date=")
+            for path in daily_pair_stats_paths.count_paths
+        ]
+        reused_pair_stat_days = []
+        affected_candidates = [
+            *clean_events_result.rebuilt_days,
+            *invalid_days,
+        ]
+        earliest_affected_date = min(affected_candidates) if affected_candidates else window_start
     daily_pairs_rows = daily_pair_stats_paths.raw_pair_rows
 
     logger.info(
@@ -1556,6 +2211,7 @@ def run_pipeline(
         "lookback_days": lookback_days,
         "window_start": window_start,
         "window_end": window_end,
+        "update_strategy": update_strategy,
         "score_method": scorer.method,
         "top_k": top_k,
         "calibration_used": scorer.action_shares is not None,
@@ -1586,6 +2242,13 @@ def run_pipeline(
             "pair_scores": pair_scores_rows,
             "recommendations": recommendations_rows,
             "fallback_recommendations": fallback_rows,
+        },
+        "incremental": {
+            "reused_clean_event_days": clean_events_result.reused_days,
+            "rebuilt_clean_event_days": clean_events_result.rebuilt_days,
+            "reused_pair_stat_days": reused_pair_stat_days,
+            "rebuilt_pair_stat_days": rebuilt_pair_stat_days,
+            "earliest_affected_date": earliest_affected_date,
         },
     }
     run_manifest_path = writer.save_manifest(manifest, run_dir)
