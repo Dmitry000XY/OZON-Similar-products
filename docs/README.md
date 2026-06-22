@@ -1,49 +1,150 @@
 # Документация проекта
 
-Эта папка хранит русскоязычную документацию по архитектуре MVP, контрактам данных и отдельным production-модулям
-pipeline.
+Эта папка содержит подробные документы по проекту **OZON Similar Products**.
+
+Главный README в корне репозитория объясняет проект в целом: что он делает, как его запустить и где находятся основные части кода. Этот документ нужен как карта: он помогает быстро понять, куда идти за подробностями по разным аспектам проекта.
+
+## С чего начать
+
+Если вы впервые открыли проект, лучше читать документы в таком порядке:
+
+1. `../README.md` — общее описание проекта и быстрый запуск.
+2. `architecture.md` — общая архитектура и путь данных от сырых событий до рекомендаций.
+3. `data_contract.md` — таблицы, поля, форматы и границы ответственности между слоями.
+4. `data_io.md` — подготовка локальных данных из исходных архивов.
+5. README внутри модулей `src/ozon_similar_products/` — подробности по отдельным частям кода.
 
 ## Основные документы
 
-- [Контракты данных](data_contract.md) — актуальные таблицы pipeline, обязательные колонки и границы ответственности
-  слоёв.
-- [Слой данных](modules/data_layer.md) — границы слоя данных и его публичный API.
-- [Calibrated multi-channel веса](calibrated_multichannel_weights.md) — подробное решение по весам `view`, `click`,
-  `favorite`, `to_cart`, частотной калибровке и тому, почему веса применяются только в `CoVisitationScorer`.
-- [ItemPairBuilder](item_pair_builder.md) — как из сессий строятся directed item-item pairs, почему `signal_type` равен
-  target action type, и почему приоритеты сигналов живут в config.
-- [PairAggregator](aggregate_pairs.md) — как дневные пары агрегируются за rolling window и почему агрегатор считает
-  только channel counts, без весов и score.
-- [Graph scoring improvements](graph_scoring_improvements.md) — distance decay, time decay, weighted counts, weighted
-  scoring и full graph/scoring tuning.
-- [Evaluation metrics](evaluation_metrics.md) — разделение `full_ground_truth` и `ranking_ground_truth`, strong-action
-  метрики и диагностика view-only пар.
-- [Incremental update](incremental_update.md) — daily artifact manifests, idempotent pair stats writes и стратегия
-  `pipeline.update_strategy`.
-- [ItemPopularityBuilder](item_popularity_builder.md) — как считаются факты популярности товаров и статистика action
-  type для будущей калибровки scorer-а.
-- [Тюнинг и оценка fallback](fallback_tuning_evaluation.md) — fallback-метрики, пространство перебора параметров и
-  логика целевой функции.
-- [Работа с данными](data_io.md) — как распаковать архивы и читать parquet через data readers.
-- [Архив EDA](archive/README.md) — где хранится legacy EDA-код и почему он не должен попадать в runtime.
+| Документ                     | Зачем читать                                                                             |
+| ---------------------------- | ---------------------------------------------------------------------------------------- |
+| `architecture.md`            | Чтобы понять, как устроен проект и из каких этапов состоит построение рекомендаций       |
+| `data_contract.md`           | Чтобы разобраться в таблицах, колонках, форматах и правилах передачи данных между слоями |
+| `data_io.md`                 | Чтобы подготовить локальные данные и понять, какие файлы ожидает проект                  |
+| `local_runner.md`            | Чтобы запустить проект локально и проверить результат на небольшом объёме данных         |
+| `item_popularity_builder.md` | Чтобы понять, как считается популярность товаров и статистика по действиям               |
+| `item_pair_builder.md`       | Чтобы понять, как строятся пары товаров внутри пользовательских сессий                   |
+| `aggregate_pairs.md`         | Чтобы понять, как пары товаров объединяются за выбранный период                          |
 
-## Главный принцип текущей архитектуры
+## Документация по модулям
 
-До scoring-слоя мы не применяем веса:
+Подробности по конкретным частям кода хранятся рядом с самими модулями.
+
+| Документ                                            | Что объясняет                                                          |
+| --------------------------------------------------- | ---------------------------------------------------------------------- |
+| `src/ozon_similar_products/data/README.md`          | чтение данных, схемы, валидация и базовые проверки                     |
+| `src/ozon_similar_products/preprocessing/README.md` | очистка событий и построение пользовательских сессий                   |
+| `src/ozon_similar_products/features/README.md`      | расчёт популярности товаров и вспомогательных статистик                |
+| `src/ozon_similar_products/retrieval/README.md`     | построение пар товаров, агрегация, расчёт похожести и выбор кандидатов |
+| `src/ozon_similar_products/business/README.md`      | резервные рекомендации и бизнес-правила качества                       |
+| `src/ozon_similar_products/evaluation/README.md`    | проверка качества рекомендаций на будущих действиях пользователей      |
+| `src/ozon_similar_products/pipeline/README.md`      | полный запуск конвейера обработки и связь между этапами                |
+| `src/ozon_similar_products/output/README.md`        | сохранение результатов, служебные файлы и структура выходных данных    |
+| `src/ozon_similar_products/serving/README.md`       | получение готового списка похожих товаров из сохранённого результата   |
+| `src/ozon_similar_products/diagnostics/README.md`   | проверки данных, исследовательские функции и повторяемая диагностика   |
+
+## Куда идти за подробностями
+
+### Хочу быстро запустить проект
+
+Читайте:
+
+1. `../README.md`
+2. `data_io.md`
+3. `local_runner.md`
+
+Этих документов достаточно, чтобы подготовить данные, запустить построение рекомендаций и посмотреть результат.
+
+### Хочу понять архитектуру
+
+Читайте:
+
+1. `architecture.md`
+2. `data_contract.md`
+3. `src/ozon_similar_products/pipeline/README.md`
+
+Эти документы объясняют, как данные проходят через проект, где появляются промежуточные таблицы и за что отвечает каждый слой.
+
+### Хочу разобраться с данными
+
+Читайте:
+
+1. `data_io.md`
+2. `data_contract.md`
+3. `src/ozon_similar_products/data/README.md`
+4. `src/ozon_similar_products/preprocessing/README.md`
+
+Здесь описаны исходные данные, подготовка parquet-файлов, очистка событий и построение пользовательских сессий.
+
+### Хочу понять построение похожих товаров
+
+Читайте:
+
+1. `item_pair_builder.md`
+2. `aggregate_pairs.md`
+3. `src/ozon_similar_products/retrieval/README.md`
+4. `src/ozon_similar_products/features/README.md`
+
+Эти документы объясняют, как из пользовательских сессий получаются пары товаров, как пары агрегируются и как считается похожесть.
+
+### Хочу понять резервные рекомендации
+
+Читайте:
+
+1. `src/ozon_similar_products/business/README.md`
+2. `src/ozon_similar_products/retrieval/README.md`
+3. `src/ozon_similar_products/output/README.md`
+
+Здесь описано, что происходит с товарами, которым не хватило поведенческих данных для обычных рекомендаций.
+
+### Хочу проверить качество рекомендаций
+
+Читайте:
+
+1. `src/ozon_similar_products/evaluation/README.md`
+2. `configs/evaluation.yaml`
+3. раздел про оценку качества в `../README.md`
+
+Эти материалы объясняют, как проект проверяет рекомендации на будущих действиях пользователей и какие метрики используются.
+
+### Хочу изменить конкретный модуль
+
+Читайте README внутри нужного модуля:
 
 ```text
-EventCleaner
-→ SessionBuilder
-→ ItemPairBuilder
-→ PairAggregator
+src/ozon_similar_products/<module>/README.md
 ```
 
-Эти слои сохраняют факты: `action_type`, `signal_type`, `view_count`, `click_count`, `favorite_count`, `to_cart_count`.
+Например:
 
-И только затем:
+* меняется чтение данных — `src/ozon_similar_products/data/README.md`;
+* меняется очистка событий или построение сессий — `src/ozon_similar_products/preprocessing/README.md`;
+* меняется расчёт похожести — `src/ozon_similar_products/retrieval/README.md`;
+* меняется сохранение результата — `src/ozon_similar_products/output/README.md`;
+* меняется проверка качества — `src/ozon_similar_products/evaluation/README.md`.
+
+### Хочу запустить готовый сценарий
+
+Читайте:
+
+1. `../README.md`
+2. `scripts/README.md`
+3. `configs/README.md`
+
+Там описаны основные команды, настройки запуска и сценарии для локальной проверки.
+
+## Коротко
 
 ```text
-CoVisitationScorer
+хочу понять проект целиком → README.md в корне
+хочу понять архитектуру → docs/architecture.md
+хочу понять таблицы → docs/data_contract.md
+хочу подготовить данные → docs/data_io.md
+хочу запустить проект локально → docs/local_runner.md
+хочу понять пары товаров → docs/item_pair_builder.md
+хочу понять агрегацию пар → docs/aggregate_pairs.md
+хочу понять популярность товаров → docs/item_popularity_builder.md
+хочу изменить модуль → README внутри нужного модуля
+хочу запустить команды → scripts/README.md
+хочу изменить настройки → configs/README.md
 ```
-
-применяет `business_weights`, inverse-frequency calibration и считает финальный `score`.
