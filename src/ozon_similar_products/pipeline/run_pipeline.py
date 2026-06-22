@@ -942,7 +942,6 @@ def _build_streaming_sessions_and_pair_stats(
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
     sessions_rows = 0
-    daily_stats_by_partition: dict[str, list[DailyPairStats]] = {}
 
     active_clean_events = empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
     active_sessions = empty_contract_frame(schemas.SESSIONS_COLUMNS)
@@ -1024,7 +1023,18 @@ def _build_streaming_sessions_and_pair_stats(
                     )
 
                     if daily_stats.raw_pair_rows > 0 or not daily_stats.counts.is_empty():
-                        daily_stats_by_partition.setdefault(stats_partition_date, []).append(daily_stats)
+                        count_path, widget_count_path, user_key_path, session_key_path = (
+                            _write_daily_pair_stats(
+                                stats=daily_stats,
+                                partition_date=stats_partition_date,
+                                output_dir=daily_pairs_output_dir,
+                            )
+                        )
+
+                        count_paths.append(count_path)
+                        widget_count_paths.append(widget_count_path)
+                        user_key_paths.append(user_key_path)
+                        session_key_paths.append(session_key_path)
                         raw_pair_rows += daily_stats.raw_pair_rows
 
                 sessions_rows += completed_sessions.height
@@ -1049,29 +1059,6 @@ def _build_streaming_sessions_and_pair_stats(
             else empty_contract_frame(schemas.SESSIONS_COLUMNS)
         )
         active_clean_events = _sessions_to_clean_events(active_sessions)
-
-        for stats_partition_date, stats_list in sorted(daily_stats_by_partition.items()):
-            logging.getLogger(__name__).info(
-                "[run_pipeline] write combined daily pair stats date=%s parts=%s",
-                stats_partition_date,
-                len(stats_list),
-            )
-
-            combined_stats = _combine_daily_pair_stats(stats_list)
-            count_path, widget_count_path, user_key_path, session_key_path = _write_daily_pair_stats(
-                stats=combined_stats,
-                partition_date=stats_partition_date,
-                output_dir=daily_pairs_output_dir,
-            )
-
-            count_paths.append(count_path)
-            widget_count_paths.append(widget_count_path)
-            user_key_paths.append(user_key_path)
-            session_key_paths.append(session_key_path)
-
-            del combined_stats
-
-        daily_stats_by_partition.clear()
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),

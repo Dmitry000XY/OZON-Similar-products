@@ -78,21 +78,6 @@ def _as_str(value: Any, *, default: str, name: str) -> str:
     raise TypeError(f"{name} must be a string")
 
 
-def _as_string_tuple(value: Any, *, name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, str):
-        values = (value,)
-    elif isinstance(value, list | tuple):
-        values = tuple(value)
-    else:
-        raise TypeError(f"{name} must be a string or a sequence of strings")
-
-    if any(not isinstance(item, str) or not item for item in values):
-        raise ValueError(f"{name} must contain non-empty strings")
-    return values
-
-
 def _parse_widget_weights(raw_weights: Any) -> dict[str, float]:
     if raw_weights is None:
         return {}
@@ -255,14 +240,13 @@ class DistanceDecayConfig:
 
 @dataclass(frozen=True)
 class WidgetContextConfig:
-    """Configurable widget-name filtering and graph weighting."""
+    """Configurable widget-name graph weighting."""
 
     enabled: bool = False
     use: str = "target"
     default_weight: float = 1.0
     unknown_weight: float = 1.0
     weights: Mapping[str, float] = field(default_factory=dict)
-    blocked_widgets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.use not in _VALID_WIDGET_CONTEXT_USES:
@@ -281,6 +265,11 @@ class WidgetContextConfig:
     def from_config(cls, config: Mapping[str, Any]) -> "WidgetContextConfig":
         graph = _as_mapping(config.get("graph", {}))
         raw = _as_mapping(graph.get("widget_context", {}))
+        if "blocked_widgets" in raw:
+            raise ValueError(
+                "graph.widget_context.blocked_widgets is not supported; "
+                "use widget weights instead"
+            )
         return cls(
             enabled=_as_bool(
                 raw.get("enabled"),
@@ -303,10 +292,6 @@ class WidgetContextConfig:
                 name="graph.widget_context.unknown_weight",
             ),
             weights=_parse_widget_weights(raw.get("weights")),
-            blocked_widgets=_as_string_tuple(
-                raw.get("blocked_widgets"),
-                name="graph.widget_context.blocked_widgets",
-            ),
         )
 
     @property
@@ -314,11 +299,6 @@ class WidgetContextConfig:
         if self.use == "source":
             return "source_widget_name"
         return "target_widget_name"
-
-    def filter_expr(self, widget_expr: pl.Expr) -> pl.Expr:
-        if not self.enabled or not self.blocked_widgets:
-            return pl.lit(True)
-        return ~_normalized_widget_expr(widget_expr).is_in(list(self.blocked_widgets))
 
     def weight_expr(self, widget_expr: pl.Expr) -> pl.Expr:
         if not self.enabled:

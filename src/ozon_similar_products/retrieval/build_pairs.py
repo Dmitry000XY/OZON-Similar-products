@@ -229,11 +229,6 @@ class ItemPairBuilder:
                 .alias("position_distance")
             )
             .filter(_max_distance_filter(self.distance_decay))
-            .filter(
-                self.widget_context.filter_expr(
-                    pl.col(self.widget_context.context_column_name)
-                )
-            )
             .with_columns(
                 self.distance_decay.weight_expr(pl.col("position_distance"))
                 .cast(pl.Float64)

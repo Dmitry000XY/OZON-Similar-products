@@ -409,7 +409,7 @@ def test_widget_context_weights_target_widget_in_weighted_counts() -> None:
     assert target_product["weighted_pair_count"] == pytest.approx(1.0)
 
 
-def test_widget_context_blocks_noisy_target_widgets() -> None:
+def test_widget_context_weight_can_downweight_but_not_remove_target_widget() -> None:
     sessions = _sessions(
         [
             {
@@ -439,18 +439,35 @@ def test_widget_context_blocks_noisy_target_widgets() -> None:
         widget_context=WidgetContextConfig(
             enabled=True,
             use="target",
-            blocked_widgets=("noisy_recommendations",),
+            weights={"noisy_recommendations": 0.5},
         )
     ).transform_day(sessions)
 
-    assert pairs.filter(
+    noisy_target = pairs.filter(
         (pl.col("item_id") == 10)
         & (pl.col("similar_item_id") == 20)
-    ).is_empty()
-    assert pairs.filter(
+    ).row(0, named=True)
+    product_target = pairs.filter(
         (pl.col("item_id") == 20)
         & (pl.col("similar_item_id") == 10)
-    ).height == 1
+    ).row(0, named=True)
+
+    assert noisy_target["widget_weight"] == pytest.approx(0.5)
+    assert noisy_target["graph_weight"] == pytest.approx(0.5)
+    assert product_target["widget_weight"] == pytest.approx(1.0)
+
+
+def test_widget_context_from_config_rejects_blocked_widgets() -> None:
+    with pytest.raises(ValueError, match="blocked_widgets is not supported"):
+        WidgetContextConfig.from_config(
+            {
+                "graph": {
+                    "widget_context": {
+                        "blocked_widgets": ["catalog"],
+                    }
+                }
+            }
+        )
 
 
 @pytest.mark.parametrize(
