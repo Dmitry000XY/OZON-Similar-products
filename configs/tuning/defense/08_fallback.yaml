@@ -1,0 +1,51 @@
+# Tune fallback after behavioral scoring is selected.
+# Fallback can improve coverage but may increase popularity bias, especially global fallback.
+objective:
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+    - fallback_to_cart_hit_rate_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+    - fallback_global_share_at_k
+    - fallback_share_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+    max_fallback_global_share_at_k: 0.50
+parameters:
+  business.fallback.enabled:
+    type: choice
+    values: [true]
+  business.fallback.candidate_pool_size:
+    type: choice
+    values: [100, 200, 500]
+  business.fallback.metadata_candidate_pool_size:
+    type: choice
+    values: [100, 200, 500]
+  business.fallback.global_candidate_pool_size:
+    type: choice
+    values: [100, 500, 1000]
+  business.fallback.min_item_events:
+    type: choice
+    values: [1, 2, 5]
+  business.fallback.enable_category_type:
+    type: choice
+    values: [true]
+  business.fallback.enable_category:
+    type: choice
+    values: [true]
+  business.fallback.enable_type:
+    type: choice
+    values: [false, true]
+  business.fallback.enable_brand:
+    type: choice
+    values: [false, true]
+  business.fallback.enable_global:
+    type: choice
+    values: [false, true]
+  business.fallback.include_cold_start_items:
+    type: choice
+    values: [false, true]

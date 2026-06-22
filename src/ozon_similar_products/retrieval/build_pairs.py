@@ -188,62 +188,8 @@ class ItemPairBuilder:
 
     def transform_day(self, sessions: FrameLike) -> pl.DataFrame:
         """Build directed item-item pairs for one sessions partition."""
-        validate_sessions(sessions)
-
-        session_items = self._build_session_items(sessions)
-        valid_sessions = self._build_valid_sessions(session_items)
-
-        valid_session_items = session_items.join(
-            valid_sessions,
-            on=["user_id", "session_index"],
-            how="inner",
-        )
-
         pairs = (
-            valid_session_items
-            .join(
-                valid_session_items,
-                on=["user_id", "session_index"],
-                how="inner",
-                suffix="_similar",
-            )
-            .filter(pl.col("item_id") != pl.col("item_id_similar"))
-            .select(
-                pl.col("session_start_date").cast(pl.Date, strict=False).alias("pair_date"),
-                pl.col("item_id"),
-                pl.col("item_id_similar").alias("similar_item_id"),
-                pl.col("user_id"),
-                pl.col("session_index"),
-                pl.col("item_action_type").alias("source_action_type"),
-                pl.col("item_action_type_similar").alias("target_action_type"),
-                pl.col("item_widget_name").alias("source_widget_name"),
-                pl.col("item_widget_name_similar").alias("target_widget_name"),
-                pl.col("item_action_type_similar").alias("signal_type"),
-                pl.col("item_position").alias("source_position"),
-                pl.col("item_position_similar").alias("target_position"),
-            )
-            .with_columns(
-                (pl.col("target_position") - pl.col("source_position"))
-                .abs()
-                .cast(pl.Int64)
-                .alias("position_distance")
-            )
-            .filter(_max_distance_filter(self.distance_decay))
-            .with_columns(
-                self.distance_decay.weight_expr(pl.col("position_distance"))
-                .cast(pl.Float64)
-                .alias("distance_weight"),
-                self.widget_context.weight_expr(
-                    pl.col(self.widget_context.context_column_name)
-                )
-                .cast(pl.Float64)
-                .alias("widget_weight"),
-            )
-            .with_columns(
-                (pl.col("distance_weight") * pl.col("widget_weight"))
-                .cast(pl.Float64)
-                .alias("graph_weight")
-            )
+            self._build_pairs_lazy(sessions)
             .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
             .collect()
         )
@@ -261,22 +207,7 @@ class ItemPairBuilder:
         count aggregates, unique user keys and unique session keys. The raw pair
         rows count is preserved for pipeline manifests.
         """
-        pairs = self.transform_day(sessions)
-        raw_pair_rows = pairs.height
-
-        if pairs.is_empty():
-            stats = DailyPairStats(
-                counts=_empty_daily_pair_counts(),
-                widget_counts=_empty_daily_pair_widget_counts(),
-                user_keys=_empty_daily_pair_user_keys(),
-                session_keys=_empty_daily_pair_session_keys(),
-                raw_pair_rows=0,
-            )
-            validate_daily_pair_counts(stats.counts)
-            validate_daily_pair_widget_counts(stats.widget_counts)
-            validate_daily_pair_user_keys(stats.user_keys)
-            validate_daily_pair_session_keys(stats.session_keys)
-            return stats
+        pairs = self._build_pairs_lazy(sessions)
 
         counts = (
             pairs.group_by(["pair_date", "item_id", "similar_item_id"])
@@ -326,6 +257,21 @@ class ItemPairBuilder:
             .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
         )
 
+        counts, widget_counts, user_keys, session_keys = pl.collect_all(
+            [counts, widget_counts, user_keys, session_keys]
+        )
+
+        raw_pair_rows = int(counts["pair_count"].sum() or 0)
+
+        if counts.is_empty():
+            counts = _empty_daily_pair_counts()
+        if widget_counts.is_empty():
+            widget_counts = _empty_daily_pair_widget_counts()
+        if user_keys.is_empty():
+            user_keys = _empty_daily_pair_user_keys()
+        if session_keys.is_empty():
+            session_keys = _empty_daily_pair_session_keys()
+
         validate_daily_pair_counts(counts)
         validate_daily_pair_widget_counts(widget_counts)
         validate_daily_pair_user_keys(user_keys)
@@ -337,6 +283,66 @@ class ItemPairBuilder:
             user_keys=user_keys,
             session_keys=session_keys,
             raw_pair_rows=raw_pair_rows,
+        )
+
+    def _build_pairs_lazy(self, sessions: FrameLike) -> pl.LazyFrame:
+        """Build raw directed pairs lazily without sorting or materializing them."""
+        validate_sessions(sessions)
+
+        session_items = self._build_session_items(sessions)
+        valid_sessions = self._build_valid_sessions(session_items)
+
+        valid_session_items = session_items.join(
+            valid_sessions,
+            on=["user_id", "session_index"],
+            how="inner",
+        )
+
+        return (
+            valid_session_items
+            .join(
+                valid_session_items,
+                on=["user_id", "session_index"],
+                how="inner",
+                suffix="_similar",
+            )
+            .filter(pl.col("item_id") != pl.col("item_id_similar"))
+            .select(
+                pl.col("session_start_date").cast(pl.Date, strict=False).alias("pair_date"),
+                pl.col("item_id"),
+                pl.col("item_id_similar").alias("similar_item_id"),
+                pl.col("user_id"),
+                pl.col("session_index"),
+                pl.col("item_action_type").alias("source_action_type"),
+                pl.col("item_action_type_similar").alias("target_action_type"),
+                pl.col("item_widget_name").alias("source_widget_name"),
+                pl.col("item_widget_name_similar").alias("target_widget_name"),
+                pl.col("item_action_type_similar").alias("signal_type"),
+                pl.col("item_position").alias("source_position"),
+                pl.col("item_position_similar").alias("target_position"),
+            )
+            .with_columns(
+                (pl.col("target_position") - pl.col("source_position"))
+                .abs()
+                .cast(pl.Int64)
+                .alias("position_distance")
+            )
+            .filter(_max_distance_filter(self.distance_decay))
+            .with_columns(
+                self.distance_decay.weight_expr(pl.col("position_distance"))
+                .cast(pl.Float64)
+                .alias("distance_weight"),
+                self.widget_context.weight_expr(
+                    pl.col(self.widget_context.context_column_name)
+                )
+                .cast(pl.Float64)
+                .alias("widget_weight"),
+            )
+            .with_columns(
+                (pl.col("distance_weight") * pl.col("widget_weight"))
+                .cast(pl.Float64)
+                .alias("graph_weight")
+            )
         )
 
     def _build_session_items(self, sessions: FrameLike) -> pl.LazyFrame:

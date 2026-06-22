@@ -1,0 +1,46 @@
+# Small combined final sweep around reasonable defaults.
+# Keep this small: it is for final polishing, not broad search.
+objective:
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+    - fallback_global_share_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+parameters:
+  scoring.business_weights.view:
+    type: choice
+    values: [0.1, 0.25, 0.5]
+  scoring.business_weights.click:
+    type: choice
+    values: [2.0, 3.0]
+  scoring.business_weights.favorite:
+    type: choice
+    values: [4.0, 6.0]
+  scoring.business_weights.to_cart:
+    type: choice
+    values: [8.0, 12.0]
+  scoring.beta:
+    type: choice
+    values: [0.25, 0.5, 0.75]
+  scoring.count_transform.method:
+    type: choice
+    values: [sqrt, log]
+  scoring.normalize_by_item_popularity:
+    type: choice
+    values: [false, true]
+  scoring.popularity_normalization.power:
+    type: choice
+    values: [0.25, 0.5]
+  business.fallback.enabled:
+    type: choice
+    values: [false, true]
+  business.fallback.enable_global:
+    type: choice
+    values: [false, true]
