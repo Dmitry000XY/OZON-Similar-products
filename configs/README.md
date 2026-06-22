@@ -5,24 +5,27 @@
 Настройки вынесены в отдельные YAML-файлы, чтобы запускать один и тот же код с разными параметрами: для быстрой
 локальной проверки, полноценного построения рекомендаций, оценки качества и подбора параметров.
 
+Пользовательские команды запуска описаны в [`../scripts/README.md`](../scripts/README.md), а общий путь данных — в [
+`../docs/architecture.md`](../docs/architecture.md).
+
 ## Какие файлы здесь лежат
 
-| Файл                                        | За что отвечает                                                          |
-|---------------------------------------------|--------------------------------------------------------------------------|
-| `paths.yaml`                                | пути к данным, результатам, исходному коду и обязательным папкам проекта |
-| `data.yaml`                                 | ожидаемые архивы, названия колонок и известные типы действий             |
-| `baseline.yaml`                             | базовые параметры для обычного запуска и проверки идеи                   |
-| `production.yaml`                           | более строгие параметры для основного построения рекомендаций            |
-| `evaluation.yaml`                           | настройки оценки качества рекомендаций                                   |
-| `tuning/search_space.yaml`                  | общее пространство подбора параметров                                    |
-| `tuning/search_space_scoring_core.yaml`     | подбор параметров оценки похожести без резервных рекомендаций            |
-| `tuning/search_space_scoring_fallback.yaml` | подбор параметров оценки похожести вместе с резервными рекомендациями    |
+| Файл                                                                                     | За что отвечает                                                          |
+|------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
+| [`paths.yaml`](paths.yaml)                                                               | пути к данным, результатам, исходному коду и обязательным папкам проекта |
+| [`data.yaml`](data.yaml)                                                                 | ожидаемые архивы, названия колонок и известные типы действий             |
+| [`baseline.yaml`](baseline.yaml)                                                         | базовые параметры для обычного запуска и проверки идеи                   |
+| [`production.yaml`](production.yaml)                                                     | более строгие параметры для основного построения рекомендаций            |
+| [`evaluation.yaml`](evaluation.yaml)                                                     | настройки оценки качества рекомендаций                                   |
+| [`tuning/search_space.yaml`](tuning/search_space.yaml)                                   | общее пространство подбора параметров                                    |
+| [`tuning/search_space_scoring_core.yaml`](tuning/search_space_scoring_core.yaml)         | подбор параметров оценки похожести без резервных рекомендаций            |
+| [`tuning/search_space_scoring_fallback.yaml`](tuning/search_space_scoring_fallback.yaml) | подбор параметров оценки похожести вместе с резервными рекомендациями    |
 
 ## Какой файл использовать
 
 ### Для первого запуска
 
-Используйте `configs/baseline.yaml`.
+Используйте [`baseline.yaml`](baseline.yaml).
 
 Он подходит для проверки, что проект запускается, данные читаются, промежуточные таблицы создаются, а рекомендации
 сохраняются в ожидаемом формате.
@@ -30,12 +33,12 @@
 Пример:
 
 ```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
 ### Для основного запуска
 
-Используйте `configs/production.yaml`.
+Используйте [`production.yaml`](production.yaml).
 
 В нём находятся параметры, которые ближе к основному сценарию построения рекомендаций: больше итоговых рекомендаций,
 строже фильтры для пар товаров и включены резервные рекомендации.
@@ -43,28 +46,30 @@ uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --
 Пример:
 
 ```bash
-uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
 ```
 
 ### Для оценки качества
 
-Используйте `configs/evaluation.yaml`.
+Используйте [`evaluation.yaml`](evaluation.yaml).
 
 Этот файл описывает, какие действия считать релевантными, какие веса им назначать и какие метрики считать.
 
+Подробнее о метриках: [`../docs/evaluation_metrics.md`](../docs/evaluation_metrics.md).
+
 ### Для подбора параметров
 
-Используйте файлы из `configs/tuning/`.
+Используйте файлы из [`tuning/`](tuning/).
 
 Пример:
 
 ```bash
-uv run python scripts/run_tune.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
+uv run ozon-run-tune 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
 ```
 
 ## `paths.yaml`
 
-Файл `paths.yaml` задаёт основные пути проекта.
+Файл [`paths.yaml`](paths.yaml) задаёт основные пути проекта.
 
 В нём описаны:
 
@@ -78,11 +83,11 @@ uv run python scripts/run_tune.py 2024-04-23 --lookback-days 1 --validation-days
 
 Обычно его не нужно менять.
 
-Менять `paths.yaml` стоит только если меняется структура репозитория.
+Менять [`paths.yaml`](paths.yaml) стоит только если меняется структура репозитория.
 
 ## `data.yaml`
 
-Файл `data.yaml` описывает входные данные.
+Файл [`data.yaml`](data.yaml) описывает входные данные.
 
 В нём задаются:
 
@@ -109,9 +114,14 @@ raw_data
 Этот файл нужно менять осторожно: если изменить названия колонок или ожидаемые типы действий, нужно убедиться, что код
 чтения данных, валидация и дальнейшие этапы обработки поддерживают эти изменения.
 
+Подробнее:
+
+* [`../docs/data_contract.md`](../docs/data_contract.md);
+* [`../src/ozon_similar_products/data/README.md`](../src/ozon_similar_products/data/README.md).
+
 ## `baseline.yaml`
 
-Файл `baseline.yaml` содержит базовые параметры построения рекомендаций.
+Файл [`baseline.yaml`](baseline.yaml) содержит базовые параметры построения рекомендаций.
 
 Он подходит для разработки, локальной проверки и первых экспериментов.
 
@@ -133,9 +143,9 @@ raw_data
 
 ## `production.yaml`
 
-Файл `production.yaml` содержит параметры основного запуска.
+Файл [`production.yaml`](production.yaml) содержит параметры основного запуска.
 
-Он похож на `baseline.yaml`, но рассчитан на более строгий сценарий построения рекомендаций.
+Он похож на [`baseline.yaml`](baseline.yaml), но рассчитан на более строгий сценарий построения рекомендаций.
 
 В нём, например, могут отличаться:
 
@@ -162,6 +172,11 @@ raw_data
 * `lookback_days` — сколько дней брать в расчёт;
 * `update_strategy` — стратегия обновления;
 * размеры служебных пакетов и корзин для обработки данных.
+
+Подробнее:
+
+* [`../src/ozon_similar_products/pipeline/README.md`](../src/ozon_similar_products/pipeline/README.md);
+* [`../docs/incremental_update.md`](../docs/incremental_update.md).
 
 ### `events`
 
@@ -199,6 +214,11 @@ signal_priority:
 
 Важно: этот приоритет не является итоговым весом рекомендации. Он нужен только для выбора самого сильного сигнала внутри
 одной сессии.
+
+Подробнее:
+
+* [`../docs/data_contract.md`](../docs/data_contract.md);
+* [`../src/ozon_similar_products/retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md).
 
 ### `graph`
 
@@ -240,6 +260,8 @@ scoring.normalize_by_item_popularity
 scoring.popularity_normalization
 ```
 
+Подробнее: [`../src/ozon_similar_products/retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md).
+
 ### `artifacts`
 
 Пути к промежуточным данным.
@@ -255,6 +277,11 @@ scoring.popularity_normalization
 
 Обычно эти пути не нужно менять.
 
+Подробнее:
+
+* [`../docs/incremental_update.md`](../docs/incremental_update.md);
+* [`../src/ozon_similar_products/pipeline/README.md`](../src/ozon_similar_products/pipeline/README.md).
+
 ### `outputs`
 
 Пути к итоговым результатам.
@@ -268,6 +295,8 @@ outputs/latest/
 
 `outputs/latest/` хранит последнюю опубликованную версию рекомендаций.
 
+Подробнее: [`../src/ozon_similar_products/output/README.md`](../src/ozon_similar_products/output/README.md).
+
 ### `evaluation`
 
 Настройки оценки качества.
@@ -280,6 +309,12 @@ outputs/latest/
 * минимальный порог релевантности.
 
 Например, добавление в корзину обычно считается более сильным сигналом, чем просмотр.
+
+Подробнее:
+
+* [`evaluation.yaml`](evaluation.yaml);
+* [`../docs/evaluation_metrics.md`](../docs/evaluation_metrics.md);
+* [`../src/ozon_similar_products/evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md).
 
 ### `business.fallback`
 
@@ -296,9 +331,11 @@ outputs/latest/
 * использовать ли глобально популярные товары;
 * включать ли товары с малым числом событий.
 
+Подробнее: [`../src/ozon_similar_products/business/README.md`](../src/ozon_similar_products/business/README.md).
+
 ## `evaluation.yaml`
 
-Файл `evaluation.yaml` отдельно описывает оценку качества.
+Файл [`evaluation.yaml`](evaluation.yaml) отдельно описывает оценку качества.
 
 В нём задаются:
 
@@ -322,7 +359,7 @@ diversity
 
 ## `tuning/`
 
-Папка `tuning/` содержит пространства подбора параметров.
+Папка [`tuning/`](tuning/) содержит пространства подбора параметров.
 
 Каждый файл описывает:
 
@@ -335,21 +372,23 @@ diversity
 
 ### `search_space.yaml`
 
-Общее пространство подбора параметров.
+[`search_space.yaml`](tuning/search_space.yaml) — общее пространство подбора параметров.
 
 Подходит для широкого эксперимента, где одновременно подбираются параметры оценки похожести, количества рекомендаций и
 резервного слоя.
 
 ### `search_space_scoring_core.yaml`
 
-Более узкий подбор параметров оценки похожести.
+[`search_space_scoring_core.yaml`](tuning/search_space_scoring_core.yaml) — более узкий подбор параметров оценки
+похожести.
 
 Резервные рекомендации здесь отключены, поэтому такой запуск помогает понять качество основной поведенческой логики без
 дополнительного заполнения недостающих рекомендаций.
 
 ### `search_space_scoring_fallback.yaml`
 
-Подбор параметров оценки похожести вместе с резервными рекомендациями.
+[`search_space_scoring_fallback.yaml`](tuning/search_space_scoring_fallback.yaml) — подбор параметров оценки похожести
+вместе с резервными рекомендациями.
 
 Этот файл полезен, когда нужно настроить не только основную выдачу, но и поведение для товаров с малым количеством
 событий.
@@ -374,19 +413,19 @@ diversity
 
 | Что менять                          | Почему осторожно                                          |
 |-------------------------------------|-----------------------------------------------------------|
-| `data.expected_columns`             | Эти колонки проверяются при чтении данных                 |
-| `data.known_action_types`           | От этого зависит обработка пользовательских действий      |
-| `product_information.id_column`     | Этот идентификатор используется по всему проекту          |
-| `artifacts.*_dir`                   | Эти пути связывают этапы конвейера обработки              |
-| `outputs.latest_dir`                | На эту папку ориентируется просмотр последнего результата |
-| `item_pair_builder.signal_priority` | Это влияет на выбор самого сильного сигнала внутри сессии |
-| `graph.distance_decay`              | Это меняет силу связей между товарами внутри сессии       |
-| `graph.time_decay`                  | Это меняет вклад старых и новых событий                   |
-| `evaluation.relevance_weights`      | Это меняет смысл оценки качества                          |
+| `data.expected_columns`             | эти колонки проверяются при чтении данных                 |
+| `data.known_action_types`           | от этого зависит обработка пользовательских действий      |
+| `product_information.id_column`     | этот идентификатор используется по всему проекту          |
+| `artifacts.*_dir`                   | эти пути связывают этапы конвейера обработки              |
+| `outputs.latest_dir`                | на эту папку ориентируется просмотр последнего результата |
+| `item_pair_builder.signal_priority` | это влияет на выбор самого сильного сигнала внутри сессии |
+| `graph.distance_decay`              | это меняет силу связей между товарами внутри сессии       |
+| `graph.time_decay`                  | это меняет вклад старых и новых событий                   |
+| `evaluation.relevance_weights`      | это меняет смысл оценки качества                          |
 
 ## Что не стоит хранить в настройках
 
-В файлах из `configs/` не должно быть:
+В файлах из [`configs/`](./) не должно быть:
 
 * паролей;
 * токенов;
@@ -402,39 +441,41 @@ diversity
 ### Проверить, что проект запускается
 
 ```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
 ### Запустить основной сценарий
 
 ```bash
-uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
 ```
 
 ### Подобрать параметры
 
 ```bash
-uv run python scripts/run_tune.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
+uv run ozon-run-tune 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
 ```
 
 ### Посмотреть последний результат
 
 ```bash
-uv run python scripts/preview_latest_recommendations.py
+uv run ozon-preview-recommendations
 ```
 
 ## Связанные документы
 
-| Документ                                            | Что смотреть                                |
-|-----------------------------------------------------|---------------------------------------------|
-| `../README.md`                                      | общий запуск проекта                        |
-| `../docs/data_io.md`                                | подготовка исходных данных                  |
-| `../docs/data_contract.md`                          | контракты таблиц и колонок                  |
-| `../scripts/README.md`                              | команды запуска                             |
-| `../src/ozon_similar_products/pipeline/README.md`   | как настройки используются в полном запуске |
-| `../src/ozon_similar_products/retrieval/README.md`  | как параметры влияют на расчёт похожести    |
-| `../src/ozon_similar_products/business/README.md`   | как работают резервные рекомендации         |
-| `../src/ozon_similar_products/evaluation/README.md` | как считается качество рекомендаций         |
+| Документ                                                                                                 | Что смотреть                                |
+|----------------------------------------------------------------------------------------------------------|---------------------------------------------|
+| [`../README.md`](../README.md)                                                                           | общий запуск проекта                        |
+| [`../scripts/README.md`](../scripts/README.md)                                                           | команды запуска                             |
+| [`../docs/architecture.md`](../docs/architecture.md)                                                     | архитектура проекта                         |
+| [`../docs/data_contract.md`](../docs/data_contract.md)                                                   | контракты таблиц и колонок                  |
+| [`../docs/evaluation_metrics.md`](../docs/evaluation_metrics.md)                                         | метрики качества                            |
+| [`../docs/incremental_update.md`](../docs/incremental_update.md)                                         | incremental-режим                           |
+| [`../src/ozon_similar_products/pipeline/README.md`](../src/ozon_similar_products/pipeline/README.md)     | как настройки используются в полном запуске |
+| [`../src/ozon_similar_products/retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md)   | как параметры влияют на расчёт похожести    |
+| [`../src/ozon_similar_products/business/README.md`](../src/ozon_similar_products/business/README.md)     | как работают резервные рекомендации         |
+| [`../src/ozon_similar_products/evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md) | как считается качество рекомендаций         |
 
 ## Коротко
 
@@ -447,9 +488,9 @@ evaluation.yaml  → оценка качества
 tuning/          → подбор параметров
 ```
 
-Если нужно быстро проверить проект, используйте `baseline.yaml`.
+Если нужно быстро проверить проект, используйте [`baseline.yaml`](baseline.yaml).
 
-Если нужно строить основной результат, используйте `production.yaml`.
+Если нужно строить основной результат, используйте [`production.yaml`](production.yaml).
 
-Если нужно улучшать качество, меняйте параметры в `production.yaml` и проверяйте их через `evaluation.yaml` или файлы из
-`tuning/`.
+Если нужно улучшать качество, меняйте параметры в [`production.yaml`](production.yaml) и проверяйте их через [
+`evaluation.yaml`](evaluation.yaml) или файлы из [`tuning/`](tuning/).

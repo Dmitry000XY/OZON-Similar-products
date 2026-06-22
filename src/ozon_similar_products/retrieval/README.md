@@ -1,8 +1,8 @@
 # Построение похожих товаров
 
-В этом модуле мы строим основную поведенческую часть рекомендаций.
+В этом модуле строится основная поведенческая часть рекомендаций.
 
-На вход сюда приходят пользовательские сессии и статистики по товарам. На выходе получается ранжированный список похожих
+На вход приходят пользовательские сессии и статистики по товарам. На выходе получается ранжированный список похожих
 товаров для каждого `item_id`.
 
 Идея простая: если товары часто встречаются в одних пользовательских сессиях, между ними есть поведенческая связь. Чем
@@ -12,7 +12,7 @@
 
 Модуль `retrieval` отвечает за четыре этапа:
 
-```text id="ig1fhw"
+```text
 сессии
 → пары товаров
 → агрегированные пары
@@ -33,13 +33,13 @@
 
 ## Основные файлы
 
-| Файл                 | Что в нём находится                                    |
-|----------------------|--------------------------------------------------------|
-| `build_pairs.py`     | построение пар товаров из сессий                       |
-| `aggregate_pairs.py` | агрегация дневных пар за временное окно                |
-| `scoring.py`         | расчёт оценки похожести                                |
-| `topk.py`            | выбор лучших кандидатов для каждого товара             |
-| `decay.py`           | настройки дополнительных весов по расстоянию и времени |
+| Файл                                       | Что в нём находится                                    |
+|--------------------------------------------|--------------------------------------------------------|
+| [`build_pairs.py`](build_pairs.py)         | построение пар товаров из сессий                       |
+| [`aggregate_pairs.py`](aggregate_pairs.py) | агрегация дневных пар за временное окно                |
+| [`scoring.py`](scoring.py)                 | расчёт оценки похожести                                |
+| [`topk.py`](topk.py)                       | выбор лучших кандидатов для каждого товара             |
+| [`decay.py`](decay.py)                     | настройки дополнительных весов по расстоянию и времени |
 
 ## Построение пар товаров
 
@@ -49,7 +49,7 @@
 
 Если в одной сессии пользователь взаимодействовал с товарами A, B и C, то из этой сессии можно получить пары:
 
-```text id="bdw2xe"
+```text
 A → B
 A → C
 B → A
@@ -62,13 +62,13 @@ C → B
 
 Это важно, потому что в дальнейшем мы строим рекомендации вида:
 
-```text id="hily5z"
+```text
 для item_id найти похожие similar_item_id
 ```
 
 Пример использования:
 
-```python id="ku0pn5"
+```python
 from ozon_similar_products.retrieval.build_pairs import ItemPairBuilder
 
 builder = ItemPairBuilder(max_items_per_session=50)
@@ -82,7 +82,7 @@ daily_pairs = builder.transform_day(sessions)
 
 Например:
 
-```text id="pnv0i3"
+```text
 view
 click
 to_cart
@@ -93,7 +93,7 @@ to_cart
 
 Приоритет задаётся в настройках:
 
-```yaml id="qtze2x"
+```yaml
 item_pair_builder:
   signal_priority:
     view: 1
@@ -113,12 +113,14 @@ item_pair_builder:
 
 Сессия должна содержать хотя бы два разных товара. Слишком длинные сессии ограничиваются параметром:
 
-```yaml id="q9c4wj"
+```yaml
 pipeline:
   max_items_per_session: 50
 ```
 
 Это нужно, чтобы не создавать шумные связи из очень больших сессий, где товары могли оказаться рядом случайно.
+
+Подробнее о сессиях: [`../preprocessing/README.md`](../preprocessing/README.md).
 
 ## Дневные статистики пар
 
@@ -126,7 +128,7 @@ pipeline:
 
 На выходе получается объект `DailyPairStats`:
 
-```text id="5avrou"
+```text
 counts
 user_keys
 session_keys
@@ -144,6 +146,8 @@ raw_pair_rows
 
 Такой формат нужен, чтобы не хранить и не сканировать слишком много сырых строк при последующей агрегации.
 
+Контракты дневных статистик описаны в [`../../../docs/data_contract.md`](../../../docs/data_contract.md).
+
 ## Дополнительные веса связей
 
 В модуле есть два необязательных механизма, которые меняют вклад пары до финального расчёта `score`.
@@ -155,7 +159,7 @@ raw_pair_rows
 
 Оба механизма задаются в блоке `graph`:
 
-```yaml id="ta766x"
+```yaml
 graph:
   distance_decay:
     enabled: false
@@ -168,7 +172,7 @@ graph:
 
 Поддерживаемые стратегии:
 
-```text id="neyymw"
+```text
 none
 weight_table
 exponential
@@ -187,7 +191,7 @@ exponential
 
 Например, если запуск использует окно в 7 дней, агрегатор собирает пары за эти 7 дней и считает общие статистики.
 
-```python id="uih4ha"
+```python
 from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
 
 aggregator = PairAggregator()
@@ -201,7 +205,7 @@ pair_aggregates = aggregator.aggregate_window(
 
 На выходе получается таблица:
 
-```text id="xzo4gi"
+```text
 item_id
 similar_item_id
 pair_count
@@ -229,7 +233,7 @@ window_end
 
 `ItemPairBuilder` и `PairAggregator` сохраняют факты:
 
-```text id="j5qfry"
+```text
 сколько раз пара встретилась
 сколько было view
 сколько было click
@@ -253,7 +257,7 @@ window_end
 
 Пример:
 
-```python id="ga71rm"
+```python
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 
 scorer = CoVisitationScorer.from_config(config)
@@ -266,7 +270,7 @@ pair_scores = scorer.score(
 
 Поддерживаются два метода:
 
-```text id="wv2y2v"
+```text
 pair_count
 calibrated_multichannel
 ```
@@ -279,7 +283,7 @@ calibrated_multichannel
 
 В методе `calibrated_multichannel` мы считаем оценку по отдельным типам действий:
 
-```text id="u2mn98"
+```text
 view_count
 click_count
 favorite_count
@@ -289,7 +293,7 @@ to_cart_count
 
 Для каждого действия задаётся бизнес-вес:
 
-```yaml id="y7b9lt"
+```yaml
 scoring:
   business_weights:
     view: 1.0
@@ -300,7 +304,7 @@ scoring:
 
 Дальше счётчики могут быть преобразованы:
 
-```yaml id="05irov"
+```yaml
 scoring:
   count_transform:
     method: log
@@ -309,7 +313,7 @@ scoring:
 
 Поддерживаемые преобразования:
 
-```text id="2wtxpc"
+```text
 linear
 sqrt
 log
@@ -326,7 +330,7 @@ log
 
 За это отвечают параметры:
 
-```yaml id="d62xzn"
+```yaml
 scoring:
   beta: 0.5
   reference_action_type: view
@@ -344,11 +348,13 @@ scoring:
 * `beta` регулирует силу частотной калибровки;
 * `max_frequency_boost` не даёт редким действиям получить слишком большой множитель.
 
+Распределение действий считается в [`features`](../features/README.md).
+
 ## Сырые и взвешенные счётчики
 
-Скорер может использовать два источника счётчиков:
+Scorer может использовать два источника счётчиков:
 
-```text id="jf72ub"
+```text
 raw
 weighted
 ```
@@ -359,7 +365,7 @@ weighted
 
 Параметр задаётся так:
 
-```yaml id="3kk57k"
+```yaml
 scoring:
   count_source: raw
 ```
@@ -372,7 +378,7 @@ scoring:
 
 Основные параметры:
 
-```yaml id="j3qilt"
+```yaml
 scoring:
   min_pair_count: 1
   min_unique_users: 1
@@ -390,12 +396,12 @@ scoring:
 
 Очень популярные товары могут часто встречаться почти со всем каталогом.
 
-Чтобы такие товары не перетягивали выдачу на себя, скорер умеет делить оценку на популярность исходного товара и
+Чтобы такие товары не перетягивали выдачу на себя, scorer умеет делить оценку на популярность исходного товара и
 кандидата.
 
 Параметры:
 
-```yaml id="ssapf0"
+```yaml
 scoring:
   normalize_by_item_popularity: false
   popularity_normalization:
@@ -406,6 +412,8 @@ scoring:
 
 Если `normalize_by_item_popularity` включён, в `score` нужно передать `item_popularity`.
 
+Популярность товаров считается в [`features`](../features/README.md).
+
 ## Выбор top-K
 
 ### `TopKSelector`
@@ -414,7 +422,7 @@ scoring:
 
 `TopKSelector` превращает её в рекомендации:
 
-```python id="o30mr5"
+```python
 from ozon_similar_products.retrieval.topk import TopKSelector
 
 selector = TopKSelector(top_k=20)
@@ -436,7 +444,7 @@ recommendations = selector.select(pair_scores)
 
 На выходе получается таблица:
 
-```text id="1vki4e"
+```text
 item_id
 similar_item_id
 score
@@ -450,17 +458,17 @@ source
 
 Для рекомендаций, построенных по поведению пользователей, `TopKSelector` ставит:
 
-```text id="za740p"
+```text
 source = behavioral
 ```
 
-Позже модуль `business` может добавить резервные рекомендации с другими значениями `source`.
+Позже модуль [`business`](../business/README.md) может добавить резервные рекомендации с другими значениями `source`.
 
 Так в итоговой таблице можно отличить обычные поведенческие рекомендации от резервных.
 
 ## Полный путь внутри модуля
 
-```text id="e7vvji"
+```text
 sessions
 → ItemPairBuilder
 → daily pair stats
@@ -472,8 +480,8 @@ sessions
 → behavioral recommendations
 ```
 
-После этого рекомендации передаются в `business`, где при необходимости добавляются резервные кандидаты, а затем в
-`output`, где результат сохраняется.
+После этого рекомендации передаются в [`business`](../business/README.md), где при необходимости добавляются резервные
+кандидаты, а затем в [`output`](../output/README.md), где результат сохраняется.
 
 ## Границы ответственности
 
@@ -500,14 +508,14 @@ sessions
 
 Эти задачи находятся в других слоях:
 
-| Задача                         | Модуль          |
-|--------------------------------|-----------------|
-| чтение данных                  | `data`          |
-| очистка событий и сессии       | `preprocessing` |
-| популярность товаров           | `features`      |
-| резервные рекомендации         | `business`      |
-| сохранение результата          | `output`        |
-| получение готовых рекомендаций | `serving`       |
+| Задача                         | Модуль                                        |
+|--------------------------------|-----------------------------------------------|
+| чтение данных                  | [`data`](../data/README.md)                   |
+| очистка событий и сессии       | [`preprocessing`](../preprocessing/README.md) |
+| популярность товаров           | [`features`](../features/README.md)           |
+| резервные рекомендации         | [`business`](../business/README.md)           |
+| сохранение результата          | [`output`](../output/README.md)               |
+| получение готовых рекомендаций | [`serving`](../serving/README.md)             |
 
 ## Что менять осторожно
 
@@ -526,13 +534,13 @@ sessions
 | `normalize_by_item_popularity` | может сильно изменить выдачу популярных товаров  |
 | `top_k`                        | меняет размер итогового списка рекомендаций      |
 
-После изменения этих параметров лучше запускать `run_full.py` и смотреть метрики качества.
+После изменения этих параметров лучше запускать `ozon-run-full` и смотреть метрики качества.
 
 ## Быстрая проверка
 
 Пример ручной проверки на готовых сессиях:
 
-```python id="r3kcdu"
+```python
 from ozon_similar_products.retrieval.build_pairs import ItemPairBuilder
 from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
@@ -557,17 +565,20 @@ recommendations = selector.select(pair_scores)
 print(recommendations.head())
 ```
 
+Для полного запуска лучше использовать команды из [`../../../scripts/README.md`](../../../scripts/README.md).
+
 ## Связанные документы
 
-| Документ                         | Что смотреть                                                |
-|----------------------------------|-------------------------------------------------------------|
-| `../preprocessing/README.md`     | как строятся сессии                                         |
-| `../features/README.md`          | как считается популярность товаров и распределение действий |
-| `../business/README.md`          | как добавляются резервные рекомендации                      |
-| `../output/README.md`            | как сохраняется итоговая таблица                            |
-| `../pipeline/README.md`          | как этот слой используется в полном запуске                 |
-| `../../../configs/README.md`     | параметры пар, оценки похожести и top-K                     |
-| `../../../docs/data_contract.md` | контракты таблиц и колонок                                  |
+| Документ                                                                     | Что смотреть                                                |
+|------------------------------------------------------------------------------|-------------------------------------------------------------|
+| [`../preprocessing/README.md`](../preprocessing/README.md)                   | как строятся сессии                                         |
+| [`../features/README.md`](../features/README.md)                             | как считается популярность товаров и распределение действий |
+| [`../business/README.md`](../business/README.md)                             | как добавляются резервные рекомендации                      |
+| [`../output/README.md`](../output/README.md)                                 | как сохраняется итоговая таблица                            |
+| [`../pipeline/README.md`](../pipeline/README.md)                             | как этот слой используется в полном запуске                 |
+| [`../../../configs/README.md`](../../../configs/README.md)                   | параметры пар, оценки похожести и top-K                     |
+| [`../../../docs/data_contract.md`](../../../docs/data_contract.md)           | контракты таблиц и колонок                                  |
+| [`../../../docs/evaluation_metrics.md`](../../../docs/evaluation_metrics.md) | как проверять качество рекомендаций                         |
 
 ## Коротко
 

@@ -1,509 +1,477 @@
-# Конвейер обработки
+# Оценка качества
 
-В этом модуле мы собираем все части проекта в один рабочий запуск.
+В этом модуле мы проверяем, насколько хорошо построенные рекомендации совпадают с будущими действиями пользователей.
 
-Отдельные модули отвечают за свои этапы: `data` читает данные, `preprocessing` очищает события и строит сессии,
-`retrieval` строит похожие товары, `business` добавляет резервные рекомендации, `output` сохраняет результат. Модуль
-`pipeline` связывает эти шаги и следит, чтобы запуск был воспроизводимым.
+Основной конвейер строит похожие товары на одном временном периоде. После этого мы берём следующий период и смотрим,
+появились ли рекомендованные товары в реальных пользовательских действиях. Так мы получаем offline-оценку качества без
+запуска A/B-теста.
+
+Подробное описание метрик находится в [`../../../docs/evaluation_metrics.md`](../../../docs/evaluation_metrics.md).
 
 ## Что делает модуль
 
 ```text
-сырые события
-→ очищенные события
-→ сессии
-→ дневные статистики пар
-→ агрегированные пары
-→ score
-→ top-K
-→ fallback
-→ сохранённые рекомендации
+train period
+→ построение рекомендаций
+→ validation period
+→ ground truth
+→ offline metrics
+→ scorecard / tracking
 ```
 
-Главная функция модуля:
+Модуль `evaluation` отвечает за несколько задач:
 
-```python
-run_pipeline(...)
-```
-
-Она запускает построение рекомендаций за выбранное временное окно и возвращает `PipelineRunResult` с путями к
-сохранённым результатам.
+1. Разделить данные на обучающий и валидационный периоды.
+2. Построить ground truth по будущим действиям пользователей.
+3. Посчитать метрики качества рекомендаций.
+4. Сохранить результат эксперимента в удобном виде.
+5. Переиспользовать валидационные артефакты через локальный кэш.
 
 ## Основные файлы
 
-| Файл                   | Что в нём находится                                                          |
-|------------------------|------------------------------------------------------------------------------|
-| `run_pipeline.py`      | полный запуск построения рекомендаций                                        |
-| `artifact_manifest.py` | JSON-манифесты для переиспользуемых дневных артефактов                       |
-| `scoring_output.py`    | запуск scoring, top-K, fallback и output поверх уже готовых train-артефактов |
+| Файл                                                 | Что в нём находится                                      |
+|------------------------------------------------------|----------------------------------------------------------|
+| [`split.py`](split.py)                               | разбиение данных на train и validation по датам          |
+| [`ground_truth.py`](ground_truth.py)                 | построение эталонных релевантных пар из будущих действий |
+| [`metrics.py`](metrics.py)                           | расчёт offline-метрик                                    |
+| [`scorecard.py`](scorecard.py)                       | объект с результатом эксперимента                        |
+| [`tracking.py`](tracking.py)                         | сохранение JSON и CSV-индекса экспериментов              |
+| [`validation_cache.py`](validation_cache.py)         | кэширование валидационных пар и ground truth             |
+| [`validation_semantics.py`](validation_semantics.py) | фиксированные правила построения validation ground truth |
 
-## Главный сценарий
+## Общая идея проверки
 
-Обычный запуск идёт через скрипт:
+Мы не проверяем рекомендации на тех же данных, на которых они были построены.
 
-```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
-```
-
-Внутри вызывается `run_pipeline`.
-
-Пример прямого вызова из Python:
-
-```python
-from ozon_similar_products.pipeline.run_pipeline import run_pipeline
-
-result = run_pipeline(
-    train_until_date="2024-04-23",
-    lookback_days=7,
-    config_path="configs/baseline.yaml",
-)
-```
-
-На выходе `result` содержит:
+Вместо этого используем временное разбиение:
 
 ```text
-run_id
-run_dir
-manifest_path
-detailed_recommendations_path
-enriched_recommendations_path
-lookup_recommendations_path
-manifest
+прошлые действия пользователей → строим рекомендации
+будущие действия пользователей → проверяем, попали ли в них рекомендации
 ```
-
-## Временное окно
-
-Конвейер строит рекомендации на rolling window.
 
 Например:
 
 ```text
-train_until_date = 2024-04-23
-lookback_days = 7
+2024-04-01 ... 2024-04-22 → train
+2024-04-23                 → validation
 ```
 
-Значит, в расчёт попадут события за период:
+Если для товара `A` мы рекомендовали товар `B`, а в валидационном периоде пользователи действительно взаимодействовали с
+`A` и `B` в одном контексте, такая рекомендация считается попаданием.
+
+## Разбиение по времени
+
+### `TemporalSplitConfig`
+
+В [`split.py`](split.py) описано разбиение на обучающую и валидационную части.
+
+```python
+from datetime import date
+
+from ozon_similar_products.evaluation import (
+    TemporalSplitConfig,
+    split_train_validation,
+)
+
+split_config = TemporalSplitConfig(
+    train_until_date=date(2024, 4, 22),
+    validation_start_date=date(2024, 4, 23),
+    validation_end_date=date(2024, 4, 23),
+)
+
+train_events, validation_events = split_train_validation(
+    frame=events,
+    config=split_config,
+)
+```
+
+Обучающая часть содержит строки с датой меньше или равной `train_until_date`.
+
+Валидационная часть содержит строки от `validation_start_date` до `validation_end_date` включительно.
+
+Такой подход нужен, чтобы не подглядывать в будущее при построении рекомендаций.
+
+## Ground truth
+
+### `build_ground_truth_from_daily_pair_counts`
+
+Ground truth — это таблица пар товаров, которые считаются релевантными на валидационном периоде.
+
+Мы строим её не через полный повторный self-join сессий, а из компактных дневных счётчиков пар. Это быстрее и использует
+ту же семантику пар, что и основной конвейер.
+
+Пример:
+
+```python
+from ozon_similar_products.evaluation import build_ground_truth_from_daily_pair_counts
+
+ground_truth = build_ground_truth_from_daily_pair_counts(
+    daily_pair_counts=validation_pair_counts,
+    relevance_mode="graded",
+    action_weights={
+        "view": 0.1,
+        "click": 0.3,
+        "favorite": 0.6,
+        "to_cart": 1.0,
+    },
+    min_relevance=0.0,
+)
+```
+
+На выходе получается таблица:
+
+| Поле                 | Что означает                                         |
+|----------------------|------------------------------------------------------|
+| `item_id`            | исходный товар                                       |
+| `relevant_item_id`   | товар, который считаем релевантным в будущем периоде |
+| `relevance`          | сила релевантности                                   |
+| `target_action_type` | самый сильный тип действия по этой паре              |
+| `evidence_count`     | сколько раз пара встретилась                         |
+| `view_count`         | число просмотров                                     |
+| `click_count`        | число кликов                                         |
+| `favorite_count`     | число добавлений в избранное                         |
+| `to_cart_count`      | число добавлений в корзину                           |
+
+Контракт ground truth описан в [`../../../docs/data_contract.md`](../../../docs/data_contract.md).
+
+## Binary и graded relevance
+
+Ground truth можно строить в двух режимах:
 
 ```text
-2024-04-17 ... 2024-04-23
+binary
+graded
 ```
 
-Функция сама считает `window_start` и `window_end`, а потом использует эти даты на всех этапах: чтение событий,
-построение статистик, агрегация пар и сохранение манифеста.
+В режиме `binary` любая найденная пара считается релевантной с весом `1.0`.
 
-## Этапы запуска
-
-### 1. Чтение и очистка событий
-
-Сначала конвейер читает пользовательские события по дням.
-
-```text
-data/raw/user_actions/
-→ load_events
-→ EventCleaner
-→ clean events
-```
-
-События не загружаются одним большим куском за весь период. Конвейер идёт по дневным разделам, очищает каждый день и
-сохраняет результат в промежуточные parquet-файлы.
-
-Это снижает нагрузку на память и позволяет переиспользовать уже подготовленные дневные артефакты.
-
-### 2. Построение сессий
-
-После очистки событий строятся пользовательские сессии.
-
-```text
-clean events
-→ SessionBuilder
-→ sessions
-```
-
-В поточном режиме конвейер переносит активные сессии между днями. Это нужно для случаев, когда пользователь начал сессию
-в конце одного дня, а продолжил в начале следующего.
-
-Чтобы не держать всё в памяти, пользователи разбиваются на бакеты:
+В режиме `graded` сила релевантности зависит от действий:
 
 ```yaml
-pipeline:
-  session_user_buckets: 64
-  session_batch_size: 10000
+view: 0.1
+click: 0.3
+favorite: 0.6
+to_cart: 1.0
 ```
 
-### 3. Построение дневных статистик пар
+Так мы можем считать добавление в корзину более сильным подтверждением, чем просмотр.
 
-Из завершённых сессий строятся компактные дневные статистики пар.
+## Почему validation semantics вынесены отдельно
+
+В [`validation_semantics.py`](validation_semantics.py) фиксируются правила построения validation ground truth.
+
+Это нужно для честного сравнения экспериментов. Например, параметры графа и дополнительные веса могут меняться в
+train-части, но они не должны менять саму цель проверки.
+
+Иначе эксперимент мог бы улучшить метрику не потому, что рекомендации стали лучше, а потому что изменился способ
+построения ground truth.
+
+## Метрики
+
+### `compute_offline_metrics`
+
+Функция `compute_offline_metrics` сравнивает рекомендации с ground truth и возвращает объект `OfflineMetrics`.
+
+Пример:
+
+```python
+from ozon_similar_products.evaluation import compute_offline_metrics
+
+metrics = compute_offline_metrics(
+    recommendations=recommendations,
+    ground_truth=ground_truth,
+    top_k=20,
+    context={
+        "item_popularity": item_popularity,
+        "popularity_column": "events_count",
+    },
+    ranking_relevant_action_types=["click", "favorite", "to_cart"],
+    min_ranking_relevance=0.3,
+)
+```
+
+Основные группы метрик:
+
+| Метрика                | Что показывает                                              |
+|------------------------|-------------------------------------------------------------|
+| `hit_rate_at_k`        | долю товаров, у которых есть хотя бы одно попадание в top-K |
+| `recall_at_k`          | какую долю релевантных будущих пар удалось покрыть          |
+| `ndcg_at_k`            | насколько хорошо релевантные товары подняты вверх списка    |
+| `mrr_at_k`             | насколько рано встречается первое попадание                 |
+| `coverage_at_k`        | для какой доли оцениваемых товаров есть рекомендации        |
+| `popularity_bias_at_k` | насколько выдача смещена в сторону популярных товаров       |
+| `fallback_share_at_k`  | какая доля выдачи пришла из резервного слоя                 |
+
+Дополнительно считаются метрики по отдельным действиям:
 
 ```text
-sessions
-→ ItemPairBuilder
-→ daily pair stats
+view
+click
+favorite
+to_cart
 ```
 
-Конвейер сохраняет не только счётчики пар, но и ключи для точного подсчёта уникальных пользователей и сессий:
+И отдельные метрики для резервных рекомендаций:
 
 ```text
-counts
-user_keys
-session_keys
+fallback_hit_rate_at_k
+fallback_recall_at_k
+fallback_to_cart_hit_rate_at_k
+fallback_to_cart_recall_at_k
 ```
 
-Так последующая агрегация может работать с компактными артефактами, а не со всеми сырыми строками пар.
+Подробнее о смысле метрик: [`../../../docs/evaluation_metrics.md`](../../../docs/evaluation_metrics.md).
 
-### 4. Расчёт популярности товаров
+## Strong metrics
 
-По очищенным событиям считается популярность товаров и распределение типов действий.
+Для основных ranking-метрик мы не всегда хотим учитывать простые просмотры.
 
-```text
-clean events
-→ ItemPopularityBuilder
-→ item_popularity
-→ action_type_distribution
-```
-
-`item_popularity` нужен для резервных рекомендаций и возможной нормализации по популярности.
-
-`action_type_distribution` используется для калибровки весов действий в `CoVisitationScorer`.
-
-### 5. Агрегация пар
-
-Дневные статистики пар объединяются за всё окно.
-
-```text
-daily pair stats
-→ PairAggregator
-→ pair_aggregates
-```
-
-Если включена агрегация по бакетам товаров, конвейер обрабатывает `item_id` частями:
+В настройках можно указать, какие действия считаются сильными для ранжирования:
 
 ```yaml
-pipeline:
-  aggregation_item_buckets: 1
-```
-
-При значении больше `1` агрегация, scoring и top-K выполняются по бакетам, чтобы снизить пиковое потребление памяти.
-
-### 6. Расчёт score
-
-Для агрегированных пар считается оценка похожести.
-
-```text
-pair_aggregates
-→ CoVisitationScorer
-→ pair_scores
-```
-
-Если в конфиге не заданы готовые `action_shares`, конвейер берёт их из `action_type_distribution`.
-
-Так scoring может использовать фактическую частоту действий в текущем train-окне.
-
-### 7. Выбор top-K
-
-После scoring выбираются лучшие кандидаты для каждого товара.
-
-```text
-pair_scores
-→ TopKSelector
-→ behavioral recommendations
-```
-
-Параметры top-K берутся из блока `topk` или `pipeline`.
-
-### 8. Резервные рекомендации
-
-Если включён fallback, конвейер дополняет поведенческие рекомендации.
-
-```text
-behavioral recommendations
-+ item_popularity
-+ product_information
-→ final recommendations
-```
-
-Fallback применяется после top-K. Он не меняет поведенческий `score`, а добавляет недостающие кандидаты с отдельным
-`source`.
-
-### 9. Сохранение результата
-
-В конце конвейер сохраняет рекомендации в трёх форматах:
-
-```text
-detailed.parquet
-enriched.parquet
-lookup.parquet
-```
-
-И рядом сохраняет `manifest.json`.
-
-Если `update_latest=True`, результат также публикуется в `outputs/latest/`.
-
-## Что сохраняется после запуска
-
-Обычная структура результата:
-
-```text
-outputs/
-  runs/
-    <run_id>/
-      recommendations/
-        detailed.parquet
-        enriched.parquet
-        lookup.parquet
-      manifest.json
-
-  latest/
-    recommendations/
-      detailed.parquet
-      enriched.parquet
-      lookup.parquet
-    manifest.json
-```
-
-`outputs/runs/<run_id>/` хранит конкретный запуск.
-
-`outputs/latest/` хранит последнюю опубликованную версию рекомендаций.
-
-## Манифест запуска
-
-`manifest.json` описывает, что было построено.
-
-В нём сохраняются:
-
-```text
-run_id
-generated_at
-train_until_date
-lookback_days
-window_start
-window_end
-update_strategy
-score_method
-top_k
-calibration_used
-fallback_enabled
-paths
-rows
-incremental
-```
-
-Блок `rows` помогает быстро проверить объём данных на каждом этапе:
-
-```text
-raw_events
-clean_events
-sessions
-daily_pairs
-pair_aggregates
-pair_scores
-recommendations
-fallback_recommendations
-```
-
-Блок `incremental` показывает, какие дневные артефакты были переиспользованы, а какие построены заново.
-
-## Переиспользуемые дневные артефакты
-
-В `artifact_manifest.py` мы храним небольшие JSON-манифесты для дневных артефактов.
-
-Они нужны для режима `incremental`.
-
-Манифест содержит:
-
-```text
-artifact_type
-date
-schema_version
-fingerprint
-paths
-rows
-metadata
-```
-
-`fingerprint` строится из настроек, даты, входных файлов и параметров соответствующего этапа.
-
-Если манифест совпадает с текущим запуском и все файлы на месте, конвейер может переиспользовать дневной артефакт вместо
-пересборки.
-
-## Стратегии обновления
-
-В настройках есть параметр:
-
-```yaml
-pipeline:
-  update_strategy: full_retrain
-```
-
-Поддерживаются значения:
-
-```text
-full_retrain
-incremental
-```
-
-`full_retrain` пересобирает расчёт за всё выбранное окно.
-
-`incremental` пытается переиспользовать дневные артефакты, если их манифесты валидны.
-
-Для разработки и проверки проще использовать `full_retrain`.
-
-Для ускорения повторных запусков на похожих данных нужен `incremental`.
-
-## Почему pipeline не смешивает всю логику в себе
-
-`pipeline` не содержит бизнес-смысл каждого этапа.
-
-Он отвечает за порядок выполнения, пути, конфиги, промежуточные артефакты, манифесты и публикацию результата.
-
-Сама логика остаётся в модулях:
-
-```text
-data          → чтение данных
-preprocessing → очистка и сессии
-features      → статистики
-retrieval     → похожие товары
-business      → fallback
-output        → сохранение
-```
-
-Так проще менять отдельный этап, не переписывая весь запуск.
-
-## Scoring-only запуск
-
-В `scoring_output.py` есть helper `run_scoring_output_from_artifacts`.
-
-Он нужен, когда train-артефакты уже построены, а мы хотим быстро пересчитать только:
-
-```text
-score
-→ top-K
-→ fallback
-→ output
-```
-
-Это полезно для подбора параметров scoring и fallback: можно не пересобирать очистку событий, сессии и пары каждый раз.
-
-На вход этому helper передаются уже готовые:
-
-```text
-pair_aggregates
-item_popularity
-action_distribution
-```
-
-А на выходе получается такой же `PipelineRunResult`, как у полного `run_pipeline`.
-
-## Основные настройки
-
-Чаще всего на поведение конвейера влияют эти блоки:
-
-```yaml
-pipeline:
-  update_strategy: full_retrain
-  session_timeout_minutes: 20
-  max_items_per_session: 50
-  session_batch_size: 10000
-  session_user_buckets: 64
-  aggregation_item_buckets: 1
-  allow_empty_input: false
-  allow_empty_latest_update: false
-
-events:
-  item_action_types:
-    - view
+evaluation:
+  ranking_relevant_action_types:
     - click
     - favorite
     - to_cart
-
-topk:
-  top_k: 20
-  source: behavioral
+  min_ranking_relevance: 0.3
 ```
 
-Подробное описание настроек находится в `configs/README.md`.
+Так основные метрики меньше зависят от слабых просмотров и лучше отражают качество рекомендаций по более сильным
+действиям.
+
+## Метрики резервного слоя
+
+Резервный слой из [`business`](../business/README.md) добавляет рекомендации с `source`, отличным от `behavioral`.
+
+В [`metrics.py`](metrics.py) отдельно считаются доли таких рекомендаций:
+
+```text
+fallback_share_at_k
+fallback_category_type_share_at_k
+fallback_category_share_at_k
+fallback_type_share_at_k
+fallback_brand_share_at_k
+fallback_global_share_at_k
+```
+
+Это помогает понять, насколько итоговая выдача зависит от fallback.
+
+Если `fallback_global_share_at_k` слишком высокий, значит в рекомендациях много глобально популярных товаров и мало
+персонализированной поведенческой логики.
+
+## Scorecard
+
+### `EvaluationScorecard`
+
+[`scorecard.py`](scorecard.py) хранит компактное описание эксперимента.
+
+```python
+from ozon_similar_products.evaluation import build_scorecard
+
+scorecard = build_scorecard(
+    experiment_id="run_2024_04_23",
+    train_until_date="2024-04-22",
+    lookback_days=7,
+    top_k=20,
+    metrics=metrics,
+    notes="baseline run",
+)
+```
+
+В scorecard попадают:
+
+```text
+experiment_id
+train_until_date
+lookback_days
+top_k
+metrics
+notes
+metadata
+```
+
+Это удобно для сохранения результатов запуска и сравнения экспериментов между собой.
+
+## Tracking
+
+В [`tracking.py`](tracking.py) находятся функции для сохранения результатов.
+
+```python
+from ozon_similar_products.evaluation.tracking import (
+    append_experiment_index,
+    metrics_to_flat_dict,
+    write_json,
+)
+
+write_json(
+    "outputs/evaluation/run_2024_04_23/scorecard.json",
+    {"scorecard": scorecard},
+)
+
+append_experiment_index(
+    "outputs/evaluation/index.csv",
+    {
+        "experiment_id": "run_2024_04_23",
+        **metrics_to_flat_dict(metrics),
+    },
+)
+```
+
+`write_json` сохраняет JSON в стабильном формате.
+
+`append_experiment_index` добавляет строку в CSV-индекс экспериментов.
+
+## Кэш валидационных артефактов
+
+Построение validation pair counts и ground truth может занимать время.
+
+Чтобы не пересчитывать их при каждом подборе параметров, в [`validation_cache.py`](validation_cache.py) есть локальный
+кэш.
+
+Кэш сохраняет:
+
+```text
+validation_pair_counts.parquet
+ground_truth.parquet
+metadata.json
+```
+
+Ключ кэша строится по метаданным:
+
+* валидационные даты;
+* типы действий;
+* настройки построения validation ground truth;
+* входные файлы;
+* конфиги данных и путей;
+* версия схемы кэша;
+* текущий git sha, если он доступен.
+
+Если метаданные совпали и файлы кэша есть на диске, проект переиспользует готовые артефакты.
+
+## Где находится в полном запуске
+
+В полном сценарии оценка идёт после построения рекомендаций.
+
+```text
+train events
+→ pipeline builds recommendations
+→ validation events
+→ validation pair counts
+→ ground truth
+→ offline metrics
+→ scorecard / files
+```
+
+Обычно это запускается через:
+
+```bash
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+```
+
+Команды запуска описаны в [`../../../scripts/README.md`](../../../scripts/README.md).
 
 ## Границы ответственности
 
-Что делает `pipeline`:
+Что делает `evaluation`:
 
-* загружает конфиги;
-* рассчитывает временное окно;
-* вызывает этапы в правильном порядке;
-* пишет промежуточные артефакты;
-* валидирует возможность переиспользования артефактов;
-* управляет incremental-режимом;
-* собирает итоговый `manifest.json`;
-* публикует результат в `outputs/latest/`.
+* делит данные на train и validation;
+* строит ground truth по будущим действиям;
+* считает offline-метрики;
+* считает метрики по fallback-источникам;
+* считает смещение в сторону популярных товаров;
+* формирует scorecard эксперимента;
+* сохраняет JSON и CSV-индекс;
+* кэширует валидационные артефакты.
 
-Что не делает `pipeline`:
+Что не делает `evaluation`:
 
-* не определяет контракты таблиц;
-* не реализует очистку событий;
-* не реализует scoring;
-* не придумывает fallback-логику;
-* не форматирует результат вручную;
-* не читает готовые рекомендации для пользователя.
+* не читает исходные архивы;
+* не строит рекомендации;
+* не меняет параметры модели;
+* не выбирает лучшие параметры сам по себе;
+* не сохраняет итоговую таблицу рекомендаций для serving.
 
-Эти задачи остаются в соответствующих модулях.
+Эти задачи находятся в других слоях:
+
+| Задача                   | Модуль                                                                                  |
+|--------------------------|-----------------------------------------------------------------------------------------|
+| чтение данных            | [`data`](../data/README.md)                                                             |
+| очистка событий и сессии | [`preprocessing`](../preprocessing/README.md)                                           |
+| построение рекомендаций  | [`retrieval`](../retrieval/README.md)                                                   |
+| резервные рекомендации   | [`business`](../business/README.md)                                                     |
+| сохранение рекомендаций  | [`output`](../output/README.md)                                                         |
+| подбор параметров        | [`cli/run_tune.py`](../cli/run_tune.py) и [`configs/tuning/`](../../../configs/tuning/) |
 
 ## Что менять осторожно
 
-| Что менять                  | Почему осторожно                                           |
-|-----------------------------|------------------------------------------------------------|
-| `update_strategy`           | меняет поведение переиспользования артефактов              |
-| `session_user_buckets`      | влияет на потоковую сборку сессий                          |
-| `session_batch_size`        | влияет на память и скорость построения пар                 |
-| `aggregation_item_buckets`  | меняет режим агрегации и scoring                           |
-| fingerprints артефактов     | влияет на корректность incremental-режима                  |
-| структуру `manifest.json`   | от неё зависят диагностика и downstream-чтение результатов |
-| `update_latest`             | определяет, будет ли обновлён `outputs/latest/`            |
-| `allow_empty_latest_update` | может опубликовать пустой результат как latest             |
+| Что менять                      | Почему осторожно                                 |
+|---------------------------------|--------------------------------------------------|
+| `relevance_weights`             | меняет смысл ground truth                        |
+| `relevance_mode`                | меняет способ считать релевантность              |
+| `ranking_relevant_action_types` | меняет набор действий для основных метрик        |
+| `min_ranking_relevance`         | меняет, какие пары считаются достаточно сильными |
+| validation dates                | меняют период проверки                           |
+| `top_k`                         | влияет на все метрики `@k`                       |
+| validation semantics            | может сделать сравнение экспериментов нечестным  |
+| cache schema version            | инвалидирует старые кэши                         |
 
-Если меняется порядок этапов или структура промежуточных артефактов, нужно проверять `run_pipeline.py`, `run_full.py`,
-tuning-сценарии и serving-слой.
+Если меняется логика ground truth, старые эксперименты и новые эксперименты нельзя напрямую сравнивать без пометки о
+смене семантики.
 
 ## Быстрая проверка
 
-Полный запуск построения рекомендаций:
+Пример ручной проверки:
 
-```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
-```
+```python
+from ozon_similar_products.evaluation import (
+    build_ground_truth_from_daily_pair_counts,
+    compute_offline_metrics,
+)
 
-Посмотреть результат:
+ground_truth = build_ground_truth_from_daily_pair_counts(
+    daily_pair_counts=validation_pair_counts,
+    relevance_mode="graded",
+    action_weights={
+        "view": 0.1,
+        "click": 0.3,
+        "favorite": 0.6,
+        "to_cart": 1.0,
+    },
+)
 
-```bash
-uv run python scripts/preview_latest_recommendations.py
-```
+metrics = compute_offline_metrics(
+    recommendations=recommendations,
+    ground_truth=ground_truth,
+    top_k=20,
+    context={
+        "item_popularity": item_popularity,
+        "popularity_column": "events_count",
+    },
+)
 
-Проверить, что появился run:
-
-```text
-outputs/runs/<run_id>/recommendations/
-outputs/runs/<run_id>/manifest.json
-outputs/latest/recommendations/
-outputs/latest/manifest.json
+print(metrics)
 ```
 
 ## Связанные документы
 
-| Документ                     | Что смотреть                                  |
-|------------------------------|-----------------------------------------------|
-| `../data/README.md`          | чтение и подготовка входных данных            |
-| `../preprocessing/README.md` | очистка событий и построение сессий           |
-| `../features/README.md`      | популярность товаров и распределение действий |
-| `../retrieval/README.md`     | пары товаров, score и top-K                   |
-| `../business/README.md`      | резервные рекомендации                        |
-| `../output/README.md`        | сохранение результата                         |
-| `../evaluation/README.md`    | проверка качества после запуска               |
-| `../../../configs/README.md` | настройки конвейера                           |
-| `../../../scripts/README.md` | команды запуска                               |
+| Документ                                                                     | Что смотреть                                                  |
+|------------------------------------------------------------------------------|---------------------------------------------------------------|
+| [`../retrieval/README.md`](../retrieval/README.md)                           | как строятся рекомендации                                     |
+| [`../business/README.md`](../business/README.md)                             | как появляются fallback-рекомендации                          |
+| [`../pipeline/README.md`](../pipeline/README.md)                             | где оценка качества находится в полном запуске                |
+| [`../../../configs/README.md`](../../../configs/README.md)                   | настройки оценки и подбора параметров                         |
+| [`../../../scripts/README.md`](../../../scripts/README.md)                   | команды `ozon-run-full`, `ozon-run-tune`, `compare_tuning.py` |
+| [`../../../docs/data_contract.md`](../../../docs/data_contract.md)           | контракты таблиц и колонок                                    |
+| [`../../../docs/evaluation_metrics.md`](../../../docs/evaluation_metrics.md) | подробное описание метрик                                     |
 
 ## Коротко
 
-Мы используем `pipeline`, чтобы собрать все этапы проекта в один воспроизводимый запуск.
+Мы используем `evaluation`, чтобы проверить рекомендации на будущих действиях пользователей.
 
-Этот модуль не заменяет отдельные слои, а связывает их между собой.
+Сначала проект строит рекомендации на train-периоде.
 
-Он читает данные, вызывает нужные классы, сохраняет промежуточные и итоговые артефакты, пишет манифест и публикует
-последнюю версию рекомендаций.
+Потом validation-период превращается в ground truth.
+
+После этого мы сравниваем top-K рекомендаций с ground truth и сохраняем метрики эксперимента.

@@ -1,267 +1,175 @@
-# Контракты данных
+# Архитектура проекта
 
-Этот документ фиксирует основные таблицы проекта **OZON Similar Products** и правила передачи данных между слоями.
+Проект **OZON Similar Products** строит блок «Похожие товары» на основе пользовательского поведения.
 
-Здесь описаны именно контракты: какие поля ожидаются в таблицах, что они означают и какие инварианты нужно сохранять.
-Подробности о том, как конкретные модули строят эти таблицы, описаны в README соответствующих модулей.
-
-## Главное правило
-
-До `CoVisitationScorer` проект хранит факты о поведении пользователей.
-
-```text
-raw events
-→ clean events
-→ sessions
-→ item popularity
-→ daily pair stats
-→ pair aggregates
-```
-
-Итоговый `score` появляется только после scoring-слоя:
-
-```text
-pair aggregates
-→ CoVisitationScorer
-→ pair scores
-```
-
-Это нужно, чтобы не смешивать разные типы действий слишком рано и не применять веса дважды.
+Текущая архитектура — это пакетный offline-конвейер. Он берёт события пользователей за выбранное временное окно, очищает
+их, строит сессии, находит пары товаров, считает оценку похожести, выбирает лучшие кандидаты и сохраняет готовый
+результат.
 
 ## Общий путь данных
 
 ```text
+сырые события пользователей
+→ очистка событий
+→ построение сессий
+→ популярность товаров
+→ пары товаров внутри сессий
+→ агрегация пар за период
+→ оценка похожести
+→ выбор top-K кандидатов
+→ резервные рекомендации
+→ сохранение результата
+→ чтение готовых рекомендаций
+```
+
+В терминах классов это выглядит так:
+
+```text
+raw user actions
+→ EventCleaner
+→ SessionBuilder
+→ ItemPopularityBuilder
+→ ItemPairBuilder
+→ PairAggregator
+→ CoVisitationScorer
+→ TopKSelector
+→ FallbackLayer
+→ RecommendationWriter
+→ SimilarItemsLookup
+```
+
+Главный принцип: каждый слой отвечает за свою часть работы и не забирает ответственность соседнего слоя.
+
+## Зачем нужны отдельные слои
+
+Проект специально не строит рекомендации одним большим скриптом.
+
+Разделение на слои нужно, чтобы можно было отдельно проверить:
+
+* как читаются данные;
+* какие события остаются после очистки;
+* как строятся пользовательские сессии;
+* какие пары товаров появляются внутри сессий;
+* как пары агрегируются за период;
+* как считается итоговая оценка похожести;
+* как добавляются резервные рекомендации;
+* какие файлы сохраняются после запуска.
+
+Если качество рекомендаций стало хуже, такое разделение помогает понять, где именно появилась проблема.
+
+## Структура пакета
+
+Основной код лежит в [`../src/ozon_similar_products/`](../src/ozon_similar_products/).
+
+```text
+src/ozon_similar_products/
+  data/           # чтение данных, схемы, валидация
+  preprocessing/  # очистка событий и построение сессий
+  features/       # популярность товаров и вспомогательные статистики
+  retrieval/      # пары товаров, агрегация, scoring, top-K
+  business/       # резервные рекомендации и бизнес-правила
+  evaluation/     # offline-метрики, scorecard и tracking
+  output/         # сохранение результата и manifest
+  serving/        # чтение готовых рекомендаций
+  diagnostics/    # диагностика данных и повторяемые проверки
+  pipeline/       # управление полным запуском
+  cli/            # команды пакета
+```
+
+Документация по конкретным слоям лежит рядом с кодом:
+
+* [`data/README.md`](../src/ozon_similar_products/data/README.md);
+* [`preprocessing/README.md`](../src/ozon_similar_products/preprocessing/README.md);
+* [`features/README.md`](../src/ozon_similar_products/features/README.md);
+* [`retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md);
+* [`business/README.md`](../src/ozon_similar_products/business/README.md);
+* [`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md);
+* [`pipeline/README.md`](../src/ozon_similar_products/pipeline/README.md);
+* [`output/README.md`](../src/ozon_similar_products/output/README.md);
+* [`serving/README.md`](../src/ozon_similar_products/serving/README.md);
+* [`diagnostics/README.md`](../src/ozon_similar_products/diagnostics/README.md).
+
+## Слой данных
+
+Модуль [`data`](../src/ozon_similar_products/data/README.md) отвечает за чтение подготовленных parquet-данных, схемы и
+базовую валидацию.
+
+Он не очищает события и не строит рекомендации.
+
+Его задача — дать остальным слоям предсказуемые таблицы:
+
+```text
+product_information
+user_actions
+```
+
+Основные обязанности:
+
+* найти подготовленные parquet-файлы;
+* прочитать события и товары;
+* поддержать eager- и lazy-чтение через Polars;
+* проверить наличие ожидаемых колонок;
+* хранить общие схемы и контракты колонок.
+
+## Предобработка
+
+Модуль [`preprocessing`](../src/ozon_similar_products/preprocessing/README.md) отвечает за очистку событий и построение
+пользовательских сессий.
+
+```text
 raw events
+→ EventCleaner
 → clean events
+→ SessionBuilder
 → sessions
-→ item popularity
-→ action type distribution
-→ daily item pairs
-→ daily pair stats
-→ pair aggregates
-→ pair scores
-→ recommendations
-→ enriched recommendations
-→ lookup output
-→ manifest
 ```
 
-## Почему ранние таблицы хранят факты, а не score
+`EventCleaner` оставляет только товарные действия с валидным `item_id`, нормализует время события и готовит таблицу для
+дальнейшей обработки.
 
-В ранних таблицах не должно быть финального `score`.
+`SessionBuilder` группирует действия пользователя по времени. Если разрыв между действиями больше заданного таймаута,
+начинается новая сессия.
 
-Также в базовом контракте ранних слоёв не нужны поля вроде:
+На этом этапе не считается похожесть и не применяются финальные веса действий.
+
+## Статистики
+
+Модуль [`features`](../src/ozon_similar_products/features/README.md) считает статистики по очищенным событиям.
+
+Главный объект здесь — `ItemPopularityBuilder`.
+
+Он строит:
+
+* популярность товаров;
+* число уникальных пользователей по товарам;
+* счётчики по типам действий;
+* распределение действий для калибровки scoring.
+
+Эти статистики используются дальше в [`retrieval`](../src/ozon_similar_products/retrieval/README.md), [
+`business`](../src/ozon_similar_products/business/README.md), [
+`evaluation`](../src/ozon_similar_products/evaluation/README.md) и диагностике.
+
+## Построение похожих товаров
+
+Модуль [`retrieval`](../src/ozon_similar_products/retrieval/README.md) отвечает за поведенческое ядро рекомендаций.
 
 ```text
-action_weight
-pair_weight
-weight_sum
-weighted_events
+sessions
+→ ItemPairBuilder
+→ PairAggregator
+→ CoVisitationScorer
+→ TopKSelector
 ```
 
-Причина: высокая связь между товарами может появиться по разным причинам.
+### `ItemPairBuilder`
 
-```text
-300 просмотров
-20 кликов
-3 добавления в избранное
-1 добавление в корзину
-```
+Строит направленные пары товаров внутри пользовательских сессий.
 
-Если превратить это в один вес слишком рано, потом сложнее понять, почему рекомендация получила высокий результат.
+Если товары часто встречаются в одном пользовательском контексте, между ними появляется связь.
 
-Поэтому до scoring-слоя мы отдельно храним каналы:
+### `PairAggregator`
 
-```text
-view_count
-click_count
-favorite_count
-to_cart_count
-```
-
-А финальные веса задаются и применяются только в `CoVisitationScorer`.
-
-## Raw events
-
-**Создаётся:** входные пользовательские данные.
-
-**Назначение:** исходные события пользователей до очистки.
-
-Ожидаемые колонки задаются в `configs/data.yaml`.
-
-| Поле           | Что означает                                          |
-|----------------|-------------------------------------------------------|
-| `user_id`      | идентификатор пользователя                            |
-| `date`         | дата события или дата parquet-раздела                 |
-| `timestamp`    | точное время события                                  |
-| `action_type`  | тип действия пользователя                             |
-| `widget_name`  | интерфейсный контекст действия                        |
-| `search_query` | поисковый запрос, если он применим                    |
-| `item_id`      | идентификатор товара, если действие связано с товаром |
-
-Важное правило: raw events не используются напрямую для построения пар товаров. Сначала они проходят очистку.
-
-## Clean events
-
-**Создаётся:** `EventCleaner`.
-
-**Назначение:** очищенная таблица товарных событий для построения пользовательских сессий.
-
-| Поле           | Что означает                    |
-|----------------|---------------------------------|
-| `user_id`      | идентификатор пользователя      |
-| `event_date`   | дата события после нормализации |
-| `timestamp`    | точное время события            |
-| `action_type`  | тип товарного действия          |
-| `item_id`      | идентификатор товара            |
-| `search_query` | поисковый запрос, если он есть  |
-| `widget_name`  | интерфейсный контекст действия  |
-
-Важные правила:
-
-* в таблице остаются только события, которые можно связать с товаром;
-* `action_type` сохраняется как канал поведения;
-* финальный `score` здесь не появляется;
-* бизнес-веса здесь не применяются.
-
-## Sessions
-
-**Создаётся:** `SessionBuilder`.
-
-**Назначение:** события, сгруппированные в пользовательские сессии.
-
-| Поле                 | Что означает               |
-|----------------------|----------------------------|
-| `user_id`            | идентификатор пользователя |
-| `session_index`      | индекс сессии пользователя |
-| `session_start_date` | дата начала сессии         |
-| `event_date`         | дата события               |
-| `timestamp`          | точное время события       |
-| `action_type`        | тип товарного действия     |
-| `item_id`            | идентификатор товара       |
-
-Важные правила:
-
-* сессия задаёт контекст совместного появления товаров;
-* `action_type` сохраняется для построения пар;
-* сессия не содержит итоговую оценку похожести;
-* повторные действия одного товара внутри сессии ещё не обязаны быть схлопнуты.
-
-## Item popularity
-
-**Создаётся:** `ItemPopularityBuilder`.
-
-**Назначение:** фактическая популярность товаров за выбранное окно.
-
-| Поле              | Что означает                           |
-|-------------------|----------------------------------------|
-| `item_id`         | идентификатор товара                   |
-| `events_count`    | общее число товарных событий по товару |
-| `unique_users`    | число уникальных пользователей         |
-| `views_count`     | число событий `view`                   |
-| `clicks_count`    | число событий `click`                  |
-| `favorites_count` | число событий `favorite`               |
-| `to_cart_count`   | число событий `to_cart`                |
-
-Важное правило: популярность товара — это фактическая статистика, а не итоговый score.
-
-Она может использоваться для нормализации, fallback-рекомендаций и диагностики.
-
-## Action type distribution
-
-**Создаётся:** `ItemPopularityBuilder`.
-
-**Назначение:** распределение действий для частотной калибровки scoring.
-
-| Поле                | Что означает                              |
-|---------------------|-------------------------------------------|
-| `action_type`       | тип действия                              |
-| `events_count`      | число событий этого типа                  |
-| `event_share`       | доля действия среди всех товарных событий |
-| `unique_users`      | число пользователей, совершивших действие |
-| `unique_items`      | число товаров, по которым было действие   |
-| `calibration_start` | начало периода калибровки                 |
-| `calibration_end`   | конец периода калибровки                  |
-
-Важное правило: эта таблица не меняет события. Она только даёт scorer-у статистику частоты действий.
-
-## Daily item pairs
-
-**Создаётся:** `ItemPairBuilder`.
-
-**Назначение:** направленные пары товаров внутри пользовательских сессий.
-
-| Поле                 | Что означает                                        |
-|----------------------|-----------------------------------------------------|
-| `pair_date`          | дата пары                                           |
-| `item_id`            | исходный товар                                      |
-| `similar_item_id`    | товар-кандидат                                      |
-| `user_id`            | пользователь, у которого возникла связь             |
-| `session_index`      | индекс сессии пользователя                          |
-| `source_action_type` | самый сильный сигнал исходного товара внутри сессии |
-| `target_action_type` | самый сильный сигнал товара-кандидата внутри сессии |
-| `signal_type`        | канал сигнала пары                                  |
-
-Правило для `signal_type`:
-
-```text
-signal_type = target_action_type
-```
-
-Пример:
-
-```text
-session:
-A: view
-B: to_cart
-C: view
-
-pairs:
-A → B: signal_type = to_cart
-C → B: signal_type = to_cart
-B → A: signal_type = view
-B → C: signal_type = view
-```
-
-Важные правила:
-
-* пары направленные: `A → B` и `B → A` хранятся отдельно;
-* `signal_type` показывает канал связи пары;
-* финальный вес рекомендации здесь не считается.
-
-## Daily pair stats
-
-**Создаётся:** `ItemPairBuilder`.
-
-**Назначение:** компактные дневные статистики пар для последующей агрегации.
-
-Daily pair stats состоят из трёх частей:
-
-```text
-counts
-user_keys
-session_keys
-```
-
-### `counts`
-
-| Поле                      | Что означает                    |
-|---------------------------|---------------------------------|
-| `pair_date`               | дата пары                       |
-| `item_id`                 | исходный товар                  |
-| `similar_item_id`         | товар-кандидат                  |
-| `pair_count`              | число появлений пары            |
-| `view_count`              | число сигналов `view`           |
-| `click_count`             | число сигналов `click`          |
-| `favorite_count`          | число сигналов `favorite`       |
-| `to_cart_count`           | число сигналов `to_cart`        |
-| `weighted_pair_count`     | взвешенное число появлений пары |
-| `weighted_view_count`     | взвешенный счётчик `view`       |
-| `weighted_click_count`    | взвешенный счётчик `click`      |
-| `weighted_favorite_count` | взвешенный счётчик `favorite`   |
-| `weighted_to_cart_count`  | взвешенный счётчик `to_cart`    |
-
-Сырые счётчики:
+Объединяет дневные пары за выбранный период и считает статистики:
 
 ```text
 pair_count
@@ -269,299 +177,205 @@ view_count
 click_count
 favorite_count
 to_cart_count
-```
-
-Взвешенные счётчики:
-
-```text
-weighted_pair_count
-weighted_view_count
-weighted_click_count
-weighted_favorite_count
-weighted_to_cart_count
-```
-
-Важное правило: `weighted_*`-поля отражают технические поправки графа, например по расстоянию внутри сессии. Они не
-заменяют сырые фактические счётчики.
-
-### `user_keys`
-
-| Поле              | Что означает                  |
-|-------------------|-------------------------------|
-| `pair_date`       | дата пары                     |
-| `item_id`         | исходный товар                |
-| `similar_item_id` | товар-кандидат                |
-| `user_id`         | пользователь, создавший связь |
-
-Назначение: точный подсчёт уникальных пользователей для пары.
-
-### `session_keys`
-
-| Поле              | Что означает                  |
-|-------------------|-------------------------------|
-| `pair_date`       | дата пары                     |
-| `item_id`         | исходный товар                |
-| `similar_item_id` | товар-кандидат                |
-| `user_id`         | пользователь, создавший связь |
-| `session_index`   | индекс сессии пользователя    |
-
-Назначение: точный подсчёт уникальных сессий для пары.
-
-## Pair aggregates
-
-**Создаётся:** `PairAggregator`.
-
-**Назначение:** агрегированная статистика пары товаров за выбранное временное окно.
-
-| Поле                      | Что означает                                  |
-|---------------------------|-----------------------------------------------|
-| `item_id`                 | исходный товар                                |
-| `similar_item_id`         | товар-кандидат                                |
-| `pair_count`              | сколько раз пара встретилась в окне           |
-| `view_count`              | сколько сигналов пришло из `view`             |
-| `click_count`             | сколько сигналов пришло из `click`            |
-| `favorite_count`          | сколько сигналов пришло из `favorite`         |
-| `to_cart_count`           | сколько сигналов пришло из `to_cart`          |
-| `weighted_pair_count`     | взвешенный общий счётчик пары                 |
-| `weighted_view_count`     | взвешенный счётчик `view`                     |
-| `weighted_click_count`    | взвешенный счётчик `click`                    |
-| `weighted_favorite_count` | взвешенный счётчик `favorite`                 |
-| `weighted_to_cart_count`  | взвешенный счётчик `to_cart`                  |
-| `unique_users`            | сколько уникальных пользователей создали пару |
-| `unique_sessions`         | сколько уникальных сессий создали пару        |
-| `window_start`            | начало окна                                   |
-| `window_end`              | конец окна                                    |
-
-Важное правило: pair aggregates — это ещё не рекомендации, а факты о связи двух товаров.
-
-## Pair scores
-
-**Создаётся:** `CoVisitationScorer`.
-
-**Назначение:** пары товаров с рассчитанной оценкой похожести.
-
-| Поле                      | Что означает                    |
-|---------------------------|---------------------------------|
-| `item_id`                 | исходный товар                  |
-| `similar_item_id`         | товар-кандидат                  |
-| `score`                   | итоговая оценка похожести       |
-| `pair_count`              | число появлений пары            |
-| `view_count`              | число сигналов `view`           |
-| `click_count`             | число сигналов `click`          |
-| `favorite_count`          | число сигналов `favorite`       |
-| `to_cart_count`           | число сигналов `to_cart`        |
-| `weighted_pair_count`     | взвешенное число появлений пары |
-| `weighted_view_count`     | взвешенный счётчик `view`       |
-| `weighted_click_count`    | взвешенный счётчик `click`      |
-| `weighted_favorite_count` | взвешенный счётчик `favorite`   |
-| `weighted_to_cart_count`  | взвешенный счётчик `to_cart`    |
-| `unique_users`            | число уникальных пользователей  |
-| `unique_sessions`         | число уникальных сессий         |
-
-Важное правило: это первый слой, где появляется итоговый `score`.
-
-## Recommendations
-
-**Создаётся:** `TopKSelector`, затем может дополняться `FallbackLayer`.
-
-**Назначение:** ранжированный список похожих товаров.
-
-Минимальный контракт:
-
-| Поле              | Что означает                                 |
-|-------------------|----------------------------------------------|
-| `item_id`         | исходный товар                               |
-| `similar_item_id` | рекомендованный похожий товар                |
-| `score`           | итоговая оценка похожести                    |
-| `rank`            | позиция кандидата внутри списка рекомендаций |
-| `source`          | источник рекомендации                        |
-
-Примеры `source`:
-
-```text
-behavioral
-fallback_category_type_popular
-fallback_category_popular
-fallback_type_popular
-fallback_brand_popular
-fallback_global_popular
-```
-
-Допустимые диагностические поля:
-
-```text
-pair_count
-view_count
-click_count
-favorite_count
-to_cart_count
-weighted_pair_count
-weighted_view_count
-weighted_click_count
-weighted_favorite_count
-weighted_to_cart_count
 unique_users
 unique_sessions
-base_score
 ```
 
-Важное правило: минимальный контракт рекомендаций остаётся простым, даже если для отладки сохраняются дополнительные
-поля.
+### `CoVisitationScorer`
 
-## Enriched recommendations
+Считает итоговую оценку похожести.
 
-**Создаётся:** `RecommendationWriter`.
+До этого этапа проект сохраняет факты о поведении, но не превращает их в один финальный score.
 
-**Назначение:** человекочитаемая версия рекомендаций с названиями товаров.
+### `TopKSelector`
 
-| Поле                | Что означает                  |
-|---------------------|-------------------------------|
-| `item_id`           | исходный товар                |
-| `item_name`         | название исходного товара     |
-| `similar_item_id`   | рекомендованный похожий товар |
-| `similar_item_name` | название похожего товара      |
-| `rank`              | позиция кандидата             |
-| `score`             | итоговая оценка похожести     |
-| `source`            | источник рекомендации         |
+Выбирает лучшие `top_k` похожих товаров для каждого `item_id`.
 
-Важное правило: этот формат нужен для ручной проверки и не является основным форматом для serving.
+## Бизнес-правила и резервные рекомендации
 
-## Lookup output
+Модуль [`business`](../src/ozon_similar_products/business/README.md) применяется после поведенческого top-K.
 
-**Создаётся:** `RecommendationWriter`.
+Главный слой здесь — `FallbackLayer`.
 
-**Назначение:** компактный формат для быстрого получения похожих товаров.
+Он нужен для товаров, которым не хватило поведенческих данных:
 
-| Поле                     | Что означает                                      |
-|--------------------------|---------------------------------------------------|
-| `item_id`                | исходный товар                                    |
-| `similar_items_sku_list` | список похожих товаров, отсортированный по `rank` |
+* новый товар;
+* редкий товар;
+* слишком мало пар;
+* после фильтров осталось меньше `top_k` рекомендаций.
 
-Пример:
+Важно: `FallbackLayer` не должен встраиваться в `preprocessing` или `retrieval`.
+
+Он работает как отдельный post-top-k слой:
 
 ```text
-item_id | similar_items_sku_list
-100     | [205, 317, 918]
+behavioral recommendations
+→ fallback
+→ final recommendations
 ```
 
-Важные правила:
+Так проще отличить поведенческие рекомендации от резервных: источник сохраняется в поле `source`.
 
-* lookup output не хранит `score`;
-* список внутри `similar_items_sku_list` уже отсортирован;
-* этот формат читает `SimilarItemsLookup`.
+## Оценка качества
 
-## Manifest
+Модуль [`evaluation`](../src/ozon_similar_products/evaluation/README.md) проверяет рекомендации на будущих действиях
+пользователей.
 
-**Создаётся:** `RecommendationWriter`.
-
-**Назначение:** описание запуска и путей к результатам.
-
-Типовые поля:
-
-| Поле               | Что означает                                      |
-|--------------------|---------------------------------------------------|
-| `run_id`           | идентификатор запуска                             |
-| `generated_at`     | время создания результата                         |
-| `train_until_date` | конец train-окна                                  |
-| `lookback_days`    | размер окна в днях                                |
-| `window_start`     | начало окна                                       |
-| `window_end`       | конец окна                                        |
-| `update_strategy`  | стратегия обновления                              |
-| `score_method`     | метод расчёта score                               |
-| `top_k`            | число рекомендаций на товар                       |
-| `calibration_used` | использовалась ли калибровка                      |
-| `fallback_enabled` | был ли включён fallback                           |
-| `paths`            | пути к сохранённым файлам                         |
-| `rows`             | количество строк по ключевым артефактам           |
-| `incremental`      | информация о переиспользовании дневных артефактов |
-
-Важное правило: манифест нужен, чтобы связать результат с параметрами запуска и файлами на диске.
-
-## Инварианты контрактов
-
-Эти правила должны сохраняться при изменении проекта.
-
-### До scoring нет финального score
+Общий принцип:
 
 ```text
-clean events
-sessions
-item popularity
-daily item pairs
-daily pair stats
-pair aggregates
+train period → строим рекомендации
+validation period → строим ground truth
+recommendations + ground truth → offline metrics
 ```
 
-Эти таблицы не должны содержать итоговый `score`.
+Оценка качества не участвует в построении рекомендаций для production-выхода. Она нужна для экспериментов, сравнения
+параметров и контроля качества.
 
-### Каналы поведения хранятся отдельно
+Подробнее о метриках: [`evaluation_metrics.md`](evaluation_metrics.md).
+
+## Сохранение результата
+
+Модуль [`output`](../src/ozon_similar_products/output/README.md) сохраняет готовые рекомендации.
+
+Основные файлы:
 
 ```text
-view
-click
-favorite
-to_cart
+detailed.parquet
+enriched.parquet
+lookup.parquet
+manifest.json
 ```
 
-Не нужно заранее смешивать их в один универсальный вес.
+`detailed.parquet` нужен для анализа и оценки.
 
-### `signal_priority` — не business weight
+`enriched.parquet` нужен для ручной проверки с названиями товаров.
 
-Порядок силы действий внутри сессии задаётся отдельно:
+`lookup.parquet` нужен для быстрого получения похожих товаров.
 
-```yaml
-item_pair_builder:
-  signal_priority:
-    view: 1
-    click: 2
-    favorite: 3
-    to_cart: 4
-```
+`manifest.json` связывает результат с параметрами запуска.
 
-Эти числа нужны только для выбора strongest signal внутри сессии.
+Контракты выходных таблиц описаны в [`data_contract.md`](data_contract.md).
 
-Финальные веса задаются отдельно:
+## Чтение готовых рекомендаций
 
-```yaml
-scoring:
-  business_weights:
-    view: 1.0
-    click: 3.0
-    favorite: 6.0
-    to_cart: 8.0
-```
+Модуль [`serving`](../src/ozon_similar_products/serving/README.md) читает уже сохранённый compact-результат и возвращает
+похожие товары для конкретного `item_id`.
 
-И применяются только в `CoVisitationScorer`.
-
-### Lookup output остаётся compact-форматом
-
-Публичный compact-контракт:
+Главный класс:
 
 ```text
-item_id
-similar_items_sku_list
+SimilarItemsLookup
 ```
 
-Если этот формат меняется, нужно обновить `output`, `serving`, тесты и документацию.
+Он не пересчитывает рекомендации. Он только открывает `lookup.parquet` или `manifest.json`, строит словарь в памяти и
+отдаёт список похожих товаров.
+
+Текущий serving-слой — это Python API, а не отдельный HTTP-сервис.
+
+## Диагностика
+
+Модуль [`diagnostics`](../src/ozon_similar_products/diagnostics/README.md) содержит функции для проверки данных и
+промежуточных таблиц.
+
+Он помогает посмотреть:
+
+* схему таблицы;
+* пропуски;
+* распределение действий;
+* размеры parquet-разделов;
+* временные разрывы между событиями;
+* примерную сессионность.
+
+Диагностика не заменяет рабочие слои и не должна становиться скрытой частью production-конвейера.
+
+Если проверка становится обязательной частью запуска, её лучше перенести в соответствующий модуль и покрыть тестами.
+
+## Полный запуск
+
+Модуль [`pipeline`](../src/ozon_similar_products/pipeline/README.md) связывает все слои в один сценарий.
+
+Он отвечает за:
+
+* загрузку конфигов;
+* расчёт временного окна;
+* вызов этапов в правильном порядке;
+* запись промежуточных артефактов;
+* incremental-режим;
+* сохранение итогового результата;
+* публикацию `outputs/latest/`.
+
+Главная функция:
+
+```text
+run_pipeline(...)
+```
+
+Пользовательский вход обычно идёт через команду:
+
+```bash
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+```
+
+Полный сценарий с оценкой качества:
+
+```bash
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+```
+
+## Единый слой конфигурации
+
+Основной слой конфигурации находится здесь:
+
+[`../src/ozon_similar_products/config.py`](../src/ozon_similar_products/config.py)
+
+Через него доступны функции и объекты:
+
+```text
+PROJECT_ROOT
+resolve_config_path
+load_yaml_config
+load_paths_config
+load_data_config
+load_configs
+resolve_project_path
+get_path_from_config
+```
+
+Конфиги хранятся в [`../configs/`](../configs/):
+
+```text
+configs/
+  paths.yaml
+  data.yaml
+  baseline.yaml
+  production.yaml
+  evaluation.yaml
+  tuning/
+```
+
+`data/config.py` сохранён как совместимая обёртка для старых импортов. Новую логику загрузки YAML туда добавлять не
+нужно.
+
+## Совместимые обёртки
+
+В проекте есть несколько мест, которые оставлены для совместимости.
+
+Например:
+
+* [`../src/ozon_similar_products/data/config.py`](../src/ozon_similar_products/data/config.py);
+* [`../src/ozon_similar_products/output/lookup.py`](../src/ozon_similar_products/output/lookup.py).
+
+Их задача — не развивать новую логику, а поддерживать старые импорты в ноутбуках, тестах или пользовательском коде.
+
+Канонический lookup для чтения готовых рекомендаций находится в [
+`../src/ozon_similar_products/serving/lookup.py`](../src/ozon_similar_products/serving/lookup.py).
 
 ## Связанные документы
 
-| Документ                                               | Что смотреть                               |
-|--------------------------------------------------------|--------------------------------------------|
-| `architecture.md`                                      | общий путь данных и границы слоёв          |
-| `data_io.md`                                           | подготовка исходных данных                 |
-| `../src/ozon_similar_products/data/README.md`          | чтение данных, схемы и валидация           |
-| `../src/ozon_similar_products/preprocessing/README.md` | clean events и sessions                    |
-| `../src/ozon_similar_products/features/README.md`      | item popularity и action type distribution |
-| `../src/ozon_similar_products/retrieval/README.md`     | пары, агрегация, scoring и top-K           |
-| `../src/ozon_similar_products/business/README.md`      | fallback-рекомендации                      |
-| `../src/ozon_similar_products/output/README.md`        | detailed, enriched, lookup и manifest      |
-| `../src/ozon_similar_products/serving/README.md`       | чтение готового lookup-результата          |
-
-## Коротко
-
-Этот документ — справочник контрактов данных.
-
-Он описывает таблицы, поля и главные инварианты между слоями.
-
-Подробности о том, как каждый модуль строит свои таблицы, находятся в README соответствующих модулей.
+* [`docs/README.md`](README.md) — карта документации;
+* [`data_contract.md`](data_contract.md) — контракты таблиц и границы ответственности;
+* [`incremental_update.md`](incremental_update.md) — incremental-режим;
+* [`evaluation_metrics.md`](evaluation_metrics.md) — offline-метрики качества;
+* [`../scripts/README.md`](../scripts/README.md) — пользовательские команды запуска;
+* [`../configs/README.md`](../configs/README.md) — настройки проекта.

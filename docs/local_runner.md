@@ -2,11 +2,20 @@
 
 Этот документ описывает локальный self-hosted runner для тяжёлых запусков проекта **OZON Similar Products**.
 
-Runner нужен для сценариев, которые неудобно выполнять на обычных GitHub-hosted runners: например, когда нужны локальные данные, больше ресурсов или длительный запуск полного конвейера.
+Runner нужен для сценариев, которые неудобно выполнять на обычных GitHub-hosted runners: например, когда нужны локальные
+данные, больше ресурсов или длительный запуск полного конвейера.
+
+Связанные документы:
+
+* [корневой README](../README.md);
+* [команды запуска](../scripts/README.md);
+* [настройки проекта](../configs/README.md);
+* [README модуля `pipeline`](../src/ozon_similar_products/pipeline/README.md);
+* [README модуля `evaluation`](../src/ozon_similar_products/evaluation/README.md).
 
 ## Общая схема
 
-```text
+```
 GitHub Actions
 → self-hosted runner на локальном компьютере
 → Docker
@@ -16,13 +25,14 @@ GitHub Actions
 
 Workflow называется:
 
-```text
+```
 Local heavy pipeline
 ```
 
 Он запускается только вручную через `workflow_dispatch`.
 
-Автоматических запусков на `push`, `pull_request` и `pull_request_target` нет. Это важно: публичный репозиторий не должен автоматически выполнять чужой код на локальном компьютере.
+Автоматических запусков на `push`, `pull_request` и `pull_request_target` нет. Это важно: публичный репозиторий не
+должен автоматически выполнять чужой код на локальном компьютере.
 
 ## Когда использовать этот runner
 
@@ -34,6 +44,8 @@ Local heavy pipeline
 * нужно получить безопасный компактный artifact без raw- и processed-данных.
 
 Для обычной разработки, unit-тестов и лёгких проверок этот runner не нужен.
+
+Обычные локальные команды описаны в [README скриптов](../scripts/README.md).
 
 ## Ограничения безопасности
 
@@ -58,13 +70,14 @@ Local heavy pipeline
 * `arinaortenberg` — Арина, GitHub collaborator with write access;
 * `AccidentalGenius13` — Виктор, GitHub collaborator with write access;
 * `svinpepe2` — дополнительный командный аккаунт;
+* `IDhide` — Илья, GitHub collaborator with write access;
 * `Sleepy-Fenrir` — Семён Брыкин, GitHub collaborator with write access.
 
 ## Локальная рабочая папка
 
 Основная папка runner:
 
-```text
+```
 D:\ozon-local-runner\
   data\
     raw\
@@ -87,26 +100,27 @@ D:\ozon-local-runner\
 
 Raw-данные должны лежать здесь:
 
-```text
+```
 D:\ozon-local-runner\data\raw\user_actions
 D:\ozon-local-runner\data\raw\product_information
 ```
 
-Если скопировать raw-данные в эту папку долго или временно невозможно, можно использовать существующий `data/raw` из рабочей копии как read-only mount.
+Если скопировать raw-данные в эту папку долго или временно невозможно, можно использовать существующий `data/raw` из
+рабочей копии как read-only mount.
 
 Но outputs и processed-данные всё равно должны оставаться здесь:
 
-```text
+```
 D:\ozon-local-runner\
 ```
+
+Подготовка исходных данных для обычного локального запуска описана в [README скриптов](../scripts/README.md).
 
 ## Регистрация runner
 
 1. В GitHub откройте настройки репозитория:
 
-```text
-Settings → Actions → Runners → New self-hosted runner → Windows x64
-```
+   Settings → Actions → Runners → New self-hosted runner → Windows x64
 
 2. Скопируйте registration token.
 
@@ -114,19 +128,18 @@ Settings → Actions → Runners → New self-hosted runner → Windows x64
 
 3. В PowerShell из корня репозитория выполните:
 
-```powershell
-.\tools\local-runner\windows\register-ozon-runner.ps1 -AsService
+   .\tools\local-runner\windows\register-ozon-runner.ps1 -AsService
+
+Скрипт [`register-ozon-runner.ps1`](../tools/local-runner/windows/register-ozon-runner.ps1) скачивает официальный runner
+из `github.com/actions/runner`, регистрирует его с именем:
+
 ```
-
-Скрипт скачивает официальный runner из `github.com/actions/runner`, регистрирует его с именем:
-
-```text
 ozon-local-heavy-runner
 ```
 
 и label:
 
-```text
+```
 ozon-local-heavy
 ```
 
@@ -134,13 +147,14 @@ ozon-local-heavy
 
 Для автономной настройки можно скопировать token через GitHub UI и выполнить:
 
-```powershell
+```
 .\tools\local-runner\windows\register-ozon-runner.ps1 -AsService -TokenFromClipboard
 ```
 
 Token читается из локального clipboard, не печатается и не сохраняется.
 
-Если runner уже зарегистрирован с таким именем, скрипт остановится. Используйте `-Replace` только после ручной проверки, что это именно нужный runner.
+Если runner уже зарегистрирован с таким именем, скрипт остановится. Используйте `-Replace` только после ручной проверки,
+что это именно нужный runner.
 
 ## Управление runner
 
@@ -148,29 +162,41 @@ PowerShell-скрипты нужно запускать из корня репо
 
 Пример:
 
-```powershell
+```
 cd D:\ITMO\Hackathons\OZON-Similar-products
 ```
 
 Проверить статус:
 
-```powershell
+```
 .\tools\local-runner\windows\status-ozon-runner.ps1
 ```
 
 Запустить service:
 
-```powershell
+```
 .\tools\local-runner\windows\start-ozon-runner.ps1
 ```
 
 Остановить service:
 
-```powershell
+```
 .\tools\local-runner\windows\stop-ozon-runner.ps1
 ```
 
-Если runner не установлен как Windows Service, `start-ozon-runner.ps1` запускает официальный `run.cmd` как скрытый foreground process.
+Основные файлы управления:
+
+| Назначение   | PowerShell                                                                           | CMD wrapper                                                                          |
+|--------------|--------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
+| Регистрация  | [`register-ozon-runner.ps1`](../tools/local-runner/windows/register-ozon-runner.ps1) | [`register-ozon-runner.cmd`](../tools/local-runner/windows/register-ozon-runner.cmd) |
+| Старт        | [`start-ozon-runner.ps1`](../tools/local-runner/windows/start-ozon-runner.ps1)       | [`start-ozon-runner.cmd`](../tools/local-runner/windows/start-ozon-runner.cmd)       |
+| Стоп         | [`stop-ozon-runner.ps1`](../tools/local-runner/windows/stop-ozon-runner.ps1)         | [`stop-ozon-runner.cmd`](../tools/local-runner/windows/stop-ozon-runner.cmd)         |
+| Статус       | [`status-ozon-runner.ps1`](../tools/local-runner/windows/status-ozon-runner.ps1)     | [`status-ozon-runner.cmd`](../tools/local-runner/windows/status-ozon-runner.cmd)     |
+| Tray monitor | [`tray-ozon-runner.ps1`](../tools/local-runner/windows/tray-ozon-runner.ps1)         | [`tray-ozon-runner.cmd`](../tools/local-runner/windows/tray-ozon-runner.cmd)         |
+
+Если runner не установлен как Windows Service, [
+`start-ozon-runner.ps1`](../tools/local-runner/windows/start-ozon-runner.ps1) запускает официальный `run.cmd` как
+скрытый foreground process.
 
 В этом случае скрипт:
 
@@ -179,13 +205,13 @@ cd D:\ITMO\Hackathons\OZON-Similar-products
 
 Скрипты ищут service только по имени:
 
-```text
+```
 ozon-local-heavy-runner
 ```
 
 Если такого service нет, они управляют только процессами из:
 
-```text
+```
 D:\ozon-local-runner\actions-runner
 ```
 
@@ -197,7 +223,7 @@ Docker Desktop и чужие services эти скрипты не трогают.
 
 Для запуска двойным кликом используйте `.cmd` wrappers:
 
-```text
+```
 tools\local-runner\windows\start-ozon-runner.cmd
 tools\local-runner\windows\stop-ozon-runner.cmd
 tools\local-runner\windows\status-ozon-runner.cmd
@@ -224,7 +250,7 @@ Runner запущен, если выполняются признаки:
 
 Можно запустить лёгкий tray monitor без сторонних зависимостей:
 
-```text
+```
 tools\local-runner\windows\tray-ozon-runner.cmd
 ```
 
@@ -232,7 +258,7 @@ tools\local-runner\windows\tray-ozon-runner.cmd
 
 Tooltip показывает:
 
-```text
+```
 Ozon runner: running/stopped
 ```
 
@@ -260,7 +286,7 @@ Ozon runner: running/stopped
 Параметры:
 
 | Параметр           | Что означает                                                 |
-| ------------------ | ------------------------------------------------------------ |
+|--------------------|--------------------------------------------------------------|
 | `run_mode`         | режим запуска: `pipeline`, `lookup`, `evaluation` или `full` |
 | `train_until_date` | конец train-окна, например `2024-04-30`                      |
 | `lookback_days`    | размер окна; для smoke test используйте `1`                  |
@@ -268,18 +294,22 @@ Ozon runner: running/stopped
 | `config_path`      | путь к конфигу; по умолчанию `configs/baseline.yaml`         |
 | `upload_artifact`  | загружать ли безопасный artifact bundle                      |
 
+В обычном локальном режиме похожие сценарии запускаются через console scripts из [`pyproject.toml`](../pyproject.toml),
+например `ozon-run-pipeline`, `ozon-run-full`, `ozon-run-tune` и `ozon-preview-recommendations`. Подробнее —
+в [README скриптов](../scripts/README.md).
+
 ## Docker
 
 Базовый запуск использует Docker Compose:
 
-```powershell
+```
 docker compose -p ozon-local-heavy -f docker-compose.yml -f docker-compose.local-runner.yml run --rm pipeline ...
 ```
 
-`docker-compose.local-runner.yml` монтирует:
+[`docker-compose.local-runner.yml`](../docker-compose.local-runner.yml) монтирует:
 
 | Локальный путь                        | Путь внутри контейнера |
-| ------------------------------------- | ---------------------- |
+|---------------------------------------|------------------------|
 | `D:/ozon-local-runner/data/raw`       | `/app/data/raw:ro`     |
 | `D:/ozon-local-runner/data/processed` | `/app/data/processed`  |
 | `D:/ozon-local-runner/outputs`        | `/app/outputs`         |
@@ -287,7 +317,7 @@ docker compose -p ozon-local-heavy -f docker-compose.yml -f docker-compose.local
 
 Не используйте без отдельного решения:
 
-```text
+```
 docker system prune
 docker volume prune
 docker compose down -v
@@ -299,7 +329,7 @@ docker compose down -v
 
 Локальные outputs сохраняются здесь:
 
-```text
+```
 D:\ozon-local-runner\outputs
 ```
 
@@ -327,7 +357,7 @@ D:\ozon-local-runner\outputs
 
 Проверьте:
 
-```powershell
+```
 .\tools\local-runner\windows\status-ozon-runner.ps1
 ```
 
@@ -341,7 +371,7 @@ D:\ozon-local-runner\outputs
 
 Проверьте:
 
-```powershell
+```
 docker info
 ```
 
@@ -353,13 +383,13 @@ docker info
 
 Проверьте, что существует папка:
 
-```text
+```
 D:\ozon-local-runner\data\raw\user_actions
 ```
 
 И справочник товаров:
 
-```text
+```
 D:\ozon-local-runner\data\raw\product_information
 ```
 
@@ -367,7 +397,7 @@ D:\ozon-local-runner\data\raw\product_information
 
 Проверьте, что bundle не включает:
 
-```text
+```
 data/raw
 data/processed
 *.parquet
@@ -375,15 +405,28 @@ data/processed
 
 и файлы больше 100 MB.
 
+## Связанные документы
+
+* [корневой README](../README.md) — краткое описание проекта и быстрый запуск;
+* [README скриптов](../scripts/README.md) — обычные команды запуска;
+* [README конфигов](../configs/README.md) — настройки проекта;
+* [архитектура проекта](architecture.md) — общий путь данных;
+* [README модуля `pipeline`](../src/ozon_similar_products/pipeline/README.md) — полный запуск конвейера;
+* [README модуля `evaluation`](../src/ozon_similar_products/evaluation/README.md) — оценка качества;
+* [`docker-compose.local-runner.yml`](../docker-compose.local-runner.yml) — Docker Compose override для локального
+  runner;
+* [`tools/local-runner/windows/`](../tools/local-runner/windows/) — скрипты управления runner.
+
 ## Коротко
 
 Локальный runner нужен только для тяжёлых запусков.
 
-Он запускается вручную, использует отдельную локальную папку `D:\ozon-local-runner\`, монтирует raw-данные только на чтение и загружает в GitHub только безопасный компактный artifact bundle.
+Он запускается вручную, использует отдельную локальную папку `D:\ozon-local-runner\`, монтирует raw-данные только на
+чтение и загружает в GitHub только безопасный компактный artifact bundle.
 
 Главные правила:
 
-```text
+```
 не запускать чужой код автоматически
 не монтировать весь диск
 не монтировать Docker socket/pipe

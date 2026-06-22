@@ -2,7 +2,9 @@
 
 Этот документ описывает, как мы оцениваем качество рекомендаций в offline-режиме.
 
-Здесь не описан полный запуск оценки. Полный сценарий лежит в `../src/ozon_similar_products/evaluation/README.md`.
+Здесь не описан полный запуск оценки. Полный сценарий лежит в [
+`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md), а команды запуска — в [
+`../scripts/README.md`](../scripts/README.md).
 
 ## Что мы проверяем
 
@@ -74,6 +76,8 @@ to_cart
 * как отличаются слабые и сильные действия;
 * не теряем ли мы слишком много данных при фильтрации.
 
+Контракты таблиц проекта описаны в [`data_contract.md`](data_contract.md).
+
 ## `ranking_ground_truth`
 
 `ranking_ground_truth` — версия ground truth для основных метрик качества.
@@ -141,6 +145,8 @@ evaluation:
 
 Даже в `binary`-режиме фильтр по сильным действиям остаётся важным. Он отделяет основную оценку качества от
 диагностических совпадений по просмотрам.
+
+Подробнее о настройках: [`../configs/README.md`](../configs/README.md).
 
 ## Основные метрики
 
@@ -297,6 +303,8 @@ fallback_recall_at_k
 Если fallback добавляет попадания для редких или холодных товаров, значит он закрывает проблему нехватки поведенческих
 данных.
 
+Подробнее о fallback-слое: [`business/README.md`](../src/ozon_similar_products/business/README.md).
+
 ## Размеры ground truth
 
 В отчёте сохраняются не только метрики, но и размеры выборки.
@@ -394,6 +402,17 @@ ranking_evaluated_items
 Fallback может улучшать покрытие, но портить точность, если добавляет слишком общие популярные товары.
 
 Поэтому fallback-метрики нужно читать отдельно от поведенческих рекомендаций.
+
+## Связанные документы
+
+* [`docs/README.md`](README.md) — карта документации;
+* [`data_contract.md`](data_contract.md) — контракты таблиц;
+* [`../configs/README.md`](../configs/README.md) — настройки оценки качества;
+* [`../scripts/README.md`](../scripts/README.md) — команды запуска оценки;
+* [`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md) — реализация оценки качества;
+* [`business/README.md`](../src/ozon_similar_products/business/README.md) — fallback-рекомендации;
+* [`retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md) — построение рекомендаций до оценки
+  качества.
 
 ## Коротко
 

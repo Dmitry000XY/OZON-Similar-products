@@ -1,16 +1,16 @@
 # Бизнес-правила рекомендаций
 
-В этом модуле мы держим правила, которые применяются после основной поведенческой выдачи.
+В этом модуле находятся правила, которые применяются после основной поведенческой выдачи.
 
 Сейчас здесь реализован резервный слой рекомендаций. Он нужен для случаев, когда поведенческих данных не хватило: товар
 новый, товар редко встречался в событиях или после фильтров осталось меньше `top_k` похожих товаров.
 
-Основная логика похожести находится в `retrieval`. Модуль `business` не пересчитывает `score`, а дополняет уже готовые
-рекомендации понятными резервными кандидатами.
+Основная логика похожести находится в [`retrieval`](../retrieval/README.md). Модуль `business` не пересчитывает `score`,
+а дополняет уже готовые рекомендации понятными резервными кандидатами.
 
 ## Что делает модуль
 
-```text id="0mblz8"
+```text
 behavioral recommendations
 + item_popularity
 + product_information
@@ -25,12 +25,12 @@ behavioral recommendations
 
 ## Основной файл
 
-```text id="o04pcd"
+```text
 src/ozon_similar_products/business/
   fallback.py
 ```
 
-В нём находятся:
+В [`fallback.py`](fallback.py) находятся:
 
 | Объект                     | За что отвечает                                    |
 |----------------------------|----------------------------------------------------|
@@ -60,7 +60,7 @@ src/ozon_similar_products/business/
 
 Резервные кандидаты строятся из двух источников:
 
-```text id="p36weq"
+```text
 item_popularity
 product_information
 ```
@@ -71,7 +71,7 @@ product_information
 
 Сначала товары сортируются по популярности. Приоритет сортировки такой:
 
-```text id="zg46tv"
+```text
 unique_users
 to_cart_count
 favorites_count
@@ -83,11 +83,16 @@ item_id
 
 После этого из популярных товаров строятся несколько уровней резервных кандидатов.
 
+Подробнее:
+
+* [`../features/README.md`](../features/README.md) — как считается `item_popularity`;
+* [`../data/README.md`](../data/README.md) — как читается `product_information`.
+
 ## Уровни резервных рекомендаций
 
 Резервный слой пробует кандидатов по порядку: сначала более близкие по метаданным, потом более общие.
 
-```text id="8psvp1"
+```text
 category + type
 category
 type
@@ -99,7 +104,7 @@ global popular
 
 Возможные значения:
 
-```text id="treqeu"
+```text
 fallback_category_type_popular
 fallback_category_popular
 fallback_type_popular
@@ -128,7 +133,7 @@ fallback_global_popular
 
 Настройки резервного слоя находятся в конфиге:
 
-```yaml id="j4c98v"
+```yaml
 business:
   fallback:
     enabled: true
@@ -164,6 +169,8 @@ business:
 | `include_cold_start_items`     | добавлять товары из `item_popularity`, даже если у них нет поведенческой выдачи |
 | `include_catalog_only_sources` | добавлять товары только из каталога, даже если по ним нет событий               |
 
+Подробнее о настройках: [`../../../configs/README.md`](../../../configs/README.md).
+
 ## Холодные товары
 
 Параметр `include_cold_start_items` отвечает за товары, которые есть в статистике популярности, но не получили
@@ -188,19 +195,19 @@ business:
 
 Резервные рекомендации получают:
 
-```text id="sg7oie"
+```text
 score = 0.0
 ```
 
 Это сделано намеренно.
 
 Мы не смешиваем поведенческую оценку похожести и резервные бизнес-правила. Если рекомендация пришла из поведения
-пользователей, её `score` рассчитан в `retrieval`. Если рекомендация добавлена резервным слоем, её происхождение видно
-по `source`.
+пользователей, её `score` рассчитан в [`retrieval`](../retrieval/README.md). Если рекомендация добавлена резервным
+слоем, её происхождение видно по `source`.
 
 ## Пример использования
 
-```python id="zgl19a"
+```python
 from ozon_similar_products.business.fallback import (
     FallbackConfig,
     FallbackLayer,
@@ -226,7 +233,7 @@ final_recommendations = fallback_layer.apply(
 
 Резервный слой применяется после выбора top-K поведенческих кандидатов.
 
-```text id="qmplim"
+```text
 retrieval
 → behavioral recommendations
 → business fallback
@@ -260,14 +267,14 @@ retrieval
 
 Эти задачи находятся в других слоях:
 
-| Задача                         | Модуль          |
-|--------------------------------|-----------------|
-| чтение данных                  | `data`          |
-| очистка событий и сессии       | `preprocessing` |
-| популярность товаров           | `features`      |
-| поведенческие рекомендации     | `retrieval`     |
-| сохранение результата          | `output`        |
-| получение готовых рекомендаций | `serving`       |
+| Задача                         | Модуль                                        |
+|--------------------------------|-----------------------------------------------|
+| чтение данных                  | [`data`](../data/README.md)                   |
+| очистка событий и сессии       | [`preprocessing`](../preprocessing/README.md) |
+| популярность товаров           | [`features`](../features/README.md)           |
+| поведенческие рекомендации     | [`retrieval`](../retrieval/README.md)         |
+| сохранение результата          | [`output`](../output/README.md)               |
+| получение готовых рекомендаций | [`serving`](../serving/README.md)             |
 
 ## Что менять осторожно
 
@@ -285,9 +292,11 @@ retrieval
 После изменения резервных правил нужно смотреть не только общие метрики качества, но и долю рекомендаций с `source`,
 начинающимся на `fallback_`.
 
+Подробнее о метриках: [`../../../docs/evaluation_metrics.md`](../../../docs/evaluation_metrics.md).
+
 ## Быстрая проверка
 
-```python id="nr1te6"
+```python
 from ozon_similar_products.business.fallback import (
     FallbackConfig,
     FallbackLayer,
@@ -315,17 +324,20 @@ print(result.head())
 print(result["source"].value_counts())
 ```
 
+Для полного запуска лучше использовать команды из [`../../../scripts/README.md`](../../../scripts/README.md).
+
 ## Связанные документы
 
-| Документ                         | Что смотреть                                  |
-|----------------------------------|-----------------------------------------------|
-| `../retrieval/README.md`         | как строится поведенческая выдача             |
-| `../features/README.md`          | как считается популярность товаров            |
-| `../output/README.md`            | как сохраняется итоговый результат            |
-| `../pipeline/README.md`          | где резервный слой находится в полном запуске |
-| `../evaluation/README.md`        | как проверять качество рекомендаций           |
-| `../../../configs/README.md`     | настройки резервных рекомендаций              |
-| `../../../docs/data_contract.md` | контракт итоговой таблицы рекомендаций        |
+| Документ                                                                     | Что смотреть                                  |
+|------------------------------------------------------------------------------|-----------------------------------------------|
+| [`../retrieval/README.md`](../retrieval/README.md)                           | как строится поведенческая выдача             |
+| [`../features/README.md`](../features/README.md)                             | как считается популярность товаров            |
+| [`../output/README.md`](../output/README.md)                                 | как сохраняется итоговый результат            |
+| [`../pipeline/README.md`](../pipeline/README.md)                             | где резервный слой находится в полном запуске |
+| [`../evaluation/README.md`](../evaluation/README.md)                         | как проверять качество рекомендаций           |
+| [`../../../configs/README.md`](../../../configs/README.md)                   | настройки резервных рекомендаций              |
+| [`../../../docs/data_contract.md`](../../../docs/data_contract.md)           | контракт итоговой таблицы рекомендаций        |
+| [`../../../docs/evaluation_metrics.md`](../../../docs/evaluation_metrics.md) | как читать fallback-метрики                   |
 
 ## Коротко
 

@@ -1,7 +1,7 @@
 # Слой данных
 
-В этом модуле мы собрали всё, что связано с входными данными проекта: подготовку архивов, поиск parquet-файлов, чтение
-таблиц и проверку ожидаемых колонок.
+Модуль `data` отвечает за входные данные проекта **OZON Similar Products**: подготовку исходных архивов, поиск
+parquet-файлов, чтение таблиц и проверку ожидаемых колонок.
 
 Этот слой стоит первым в конвейере обработки. Его задача — дать остальному проекту понятный и проверенный вход: товары,
 пользовательские события и набор общих схем, на которые дальше опираются очистка событий, построение сессий, расчёт
@@ -16,9 +16,9 @@
 3. Прочитать товары и пользовательские события.
 4. Проверить, что в таблицах есть ожидаемые колонки.
 
-Публичный вход в модуль находится в `src/ozon_similar_products/data/__init__.py`.
+Публичный вход в модуль находится в [`__init__.py`](__init__.py).
 
-```python id="l0iyam"
+```python
 from ozon_similar_products.data import (
     load_configs,
     load_events,
@@ -32,7 +32,7 @@ from ozon_similar_products.data import (
 
 Проект работает с двумя основными наборами данных.
 
-```text id="ns2lxw"
+```text
 product_information
 user_actions
 ```
@@ -42,26 +42,29 @@ user_actions
 `user_actions` — пользовательские события: просмотры, клики, добавления в избранное, добавления в корзину и другие
 действия, которые приходят в исходных логах.
 
-Названия архивов, ожидаемые колонки и известные типы действий описаны в `configs/data.yaml`.
+Названия архивов, ожидаемые колонки и известные типы действий описаны в [
+`../../../configs/data.yaml`](../../../configs/data.yaml).
+
+Контракты таблиц описаны в [`../../../docs/data_contract.md`](../../../docs/data_contract.md).
 
 ## Как данные попадают в проект
 
 Исходные архивы нужно положить в папку:
 
-```text id="or2y9q"
+```text
 data/raw/archives/
 ```
 
 Ожидаемые архивы:
 
-```text id="xd7lvk"
+```text
 product_information.tar.gz
 user_actions.tar.gz
 ```
 
 После этого данные готовятся командой:
 
-```bash id="yg7bge"
+```bash
 uv run python scripts/prepare_raw_data.py
 ```
 
@@ -77,27 +80,33 @@ uv run python scripts/prepare_raw_data.py
 
 Если данные уже подготовлены, повторный запуск не распаковывает архив заново. Для полной пересборки используется флаг:
 
-```bash id="s2ktvt"
+```bash
 uv run python scripts/prepare_raw_data.py --force
 ```
 
 Посмотреть содержимое архивов без распаковки:
 
-```bash id="x6d4do"
+```bash
 uv run python scripts/prepare_raw_data.py --preview
 ```
 
+Подробнее:
+
+* [`../../../data/raw/README.md`](../../../data/raw/README.md);
+* [`../../../scripts/README.md`](../../../scripts/README.md);
+* [`../../../configs/README.md`](../../../configs/README.md).
+
 ## Основные файлы модуля
 
-| Файл            | Что в нём находится                                   |
-|-----------------|-------------------------------------------------------|
-| `__init__.py`   | публичные функции чтения данных                       |
-| `archives.py`   | подготовка исходных архивов и запись `.prepared.json` |
-| `config.py`     | совместимая обёртка для старых импортов               |
-| `partitions.py` | работа с дневными разделами пользовательских событий  |
-| `readers.py`    | чтение товаров и пользовательских событий             |
-| `schemas.py`    | названия колонок и контракты таблиц                   |
-| `validation.py` | проверки, что в таблицах есть нужные колонки          |
+| Файл                             | Что в нём находится                                   |
+|----------------------------------|-------------------------------------------------------|
+| [`__init__.py`](__init__.py)     | публичные функции чтения данных                       |
+| [`archives.py`](archives.py)     | подготовка исходных архивов и запись `.prepared.json` |
+| [`config.py`](config.py)         | совместимая обёртка для старых импортов               |
+| [`partitions.py`](partitions.py) | работа с дневными разделами пользовательских событий  |
+| [`readers.py`](readers.py)       | чтение товаров и пользовательских событий             |
+| [`schemas.py`](schemas.py)       | названия колонок и контракты таблиц                   |
+| [`validation.py`](validation.py) | проверки, что в таблицах есть нужные колонки          |
 
 ## Чтение пользовательских событий
 
@@ -107,7 +116,7 @@ uv run python scripts/prepare_raw_data.py --preview
 
 Функция возвращает ленивую таблицу Polars.
 
-```python id="bk093r"
+```python
 from ozon_similar_products.data import scan_events
 
 events = scan_events(
@@ -123,7 +132,7 @@ events = scan_events(
 
 Функция загружает события в память.
 
-```python id="8mwuhr"
+```python
 from ozon_similar_products.data import load_events
 
 events = load_events(
@@ -144,7 +153,7 @@ events = load_events(
 
 Функция возвращает ленивую таблицу Polars.
 
-```python id="p4h96s"
+```python
 from ozon_similar_products.data import scan_products
 
 products = scan_products()
@@ -154,7 +163,7 @@ products = scan_products()
 
 Функция загружает таблицу товаров в память.
 
-```python id="4egrjv"
+```python
 from ozon_similar_products.data import load_products
 
 products = load_products()
@@ -162,7 +171,7 @@ products = load_products()
 
 Если нужны только отдельные колонки, их можно указать явно:
 
-```python id="cvh1j4"
+```python
 products = load_products(
     columns=["item_id", "name", "brand", "category_name"],
 )
@@ -174,7 +183,7 @@ products = load_products(
 
 Ожидаемый вид:
 
-```text id="9ioy8q"
+```text
 data/raw/user_actions/
   date=2024-04-01/
     action_type=view/
@@ -186,7 +195,7 @@ data/raw/user_actions/
       ...
 ```
 
-Модуль `partitions.py` умеет:
+Модуль [`partitions.py`](partitions.py) умеет:
 
 * найти доступные даты;
 * выбрать конкретные даты;
@@ -199,11 +208,11 @@ data/raw/user_actions/
 
 ## Схемы и колонки
 
-В `schemas.py` мы держим общие названия колонок, которые используются в разных частях проекта.
+В [`schemas.py`](schemas.py) хранятся общие названия колонок, которые используются в разных частях проекта.
 
 Например:
 
-```text id="xx2iiu"
+```text
 RAW_EVENTS_COLUMNS
 CLEAN_EVENTS_COLUMNS
 PRODUCT_INFORMATION_COLUMNS
@@ -221,16 +230,18 @@ WIDGET_OUTPUT_COLUMNS
 Например, если слой очистки событий создаёт таблицу `clean_events`, следующие этапы ожидают в ней не произвольные поля,
 а конкретный набор колонок из `CLEAN_EVENTS_COLUMNS`.
 
+Подробное описание таблиц находится в [`../../../docs/data_contract.md`](../../../docs/data_contract.md).
+
 ## Проверка таблиц
 
-В `validation.py` мы собрали проверки колонок.
+В [`validation.py`](validation.py) собраны проверки колонок.
 
 Главная идея простая: если таблица не содержит обязательные поля, лучше упасть сразу на границе слоя, чем получить
 непонятную ошибку дальше по конвейеру обработки.
 
 Примеры проверок:
 
-```python id="2okpql"
+```python
 from ozon_similar_products.data.validation import (
     validate_raw_events,
     validate_product_information,
@@ -250,7 +261,7 @@ validate_clean_events(clean_events)
 
 Он отвечает только за входной слой:
 
-```text id="zt49s6"
+```text
 архивы
 → parquet-файлы
 → чтение таблиц
@@ -277,19 +288,19 @@ validate_clean_events(clean_events)
 
 Эти задачи выполняются в следующих модулях:
 
-| Задача                         | Модуль          |
-|--------------------------------|-----------------|
-| очистка событий                | `preprocessing` |
-| построение сессий              | `preprocessing` |
-| популярность товаров           | `features`      |
-| пары товаров и похожесть       | `retrieval`     |
-| резервные рекомендации         | `business`      |
-| сохранение результата          | `output`        |
-| получение готовых рекомендаций | `serving`       |
+| Задача                         | Модуль                                        |
+|--------------------------------|-----------------------------------------------|
+| очистка событий                | [`preprocessing`](../preprocessing/README.md) |
+| построение сессий              | [`preprocessing`](../preprocessing/README.md) |
+| популярность товаров           | [`features`](../features/README.md)           |
+| пары товаров и похожесть       | [`retrieval`](../retrieval/README.md)         |
+| резервные рекомендации         | [`business`](../business/README.md)           |
+| сохранение результата          | [`output`](../output/README.md)               |
+| получение готовых рекомендаций | [`serving`](../serving/README.md)             |
 
 ## Типовой путь данных
 
-```text id="qelsaa"
+```text
 data/raw/archives/
   product_information.tar.gz
   user_actions.tar.gz
@@ -311,34 +322,35 @@ Polars DataFrame / LazyFrame
 
 В этом модуле особенно важно аккуратно относиться к контрактам данных.
 
-| Что менять          | Почему осторожно                                                                                 |
-|---------------------|--------------------------------------------------------------------------------------------------|
-| `configs/data.yaml` | от него зависят ожидаемые архивы, колонки и типы действий                                        |
-| `schemas.py`        | эти колонки используют следующие слои проекта                                                    |
-| `validation.py`     | слишком слабая проверка пропустит ошибочные данные, слишком строгая может сломать рабочий запуск |
-| `partitions.py`     | от выбора файлов зависит, какие события попадут в обработку                                      |
-| `readers.py`        | это общий вход для товаров и пользовательских событий                                            |
+| Что менять                                                 | Почему осторожно                                                                                 |
+|------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| [`../../../configs/data.yaml`](../../../configs/data.yaml) | от него зависят ожидаемые архивы, колонки и типы действий                                        |
+| [`schemas.py`](schemas.py)                                 | эти колонки используют следующие слои проекта                                                    |
+| [`validation.py`](validation.py)                           | слишком слабая проверка пропустит ошибочные данные, слишком строгая может сломать рабочий запуск |
+| [`partitions.py`](partitions.py)                           | от выбора файлов зависит, какие события попадут в обработку                                      |
+| [`readers.py`](readers.py)                                 | это общий вход для товаров и пользовательских событий                                            |
 
-Если меняется структура входных данных, нужно проверить не только этот модуль, но и `preprocessing`, `features`,
-`retrieval` и `evaluation`.
+Если меняется структура входных данных, нужно проверить не только этот модуль, но и [
+`preprocessing`](../preprocessing/README.md), [`features`](../features/README.md), [`retrieval`](../retrieval/README.md)
+и [`evaluation`](../evaluation/README.md).
 
 ## Быстрая проверка
 
 Подготовить данные:
 
-```bash id="s9upcm"
+```bash
 uv run python scripts/prepare_raw_data.py
 ```
 
 Проверить структуру проекта и наличие данных:
 
-```bash id="qwx7tf"
+```bash
 uv run python scripts/check_project_structure.py
 ```
 
 Прочитать небольшой пример событий:
 
-```python id="rjfo1f"
+```python
 from ozon_similar_products.data import load_events
 
 events = load_events(sample_days=1, sample_rows=1000)
@@ -347,7 +359,7 @@ print(events.head())
 
 Прочитать товары:
 
-```python id="217qdf"
+```python
 from ozon_similar_products.data import load_products
 
 products = load_products()
@@ -356,14 +368,15 @@ print(products.head())
 
 ## Связанные документы
 
-| Документ                         | Что смотреть                                  |
-|----------------------------------|-----------------------------------------------|
-| `../../../configs/README.md`     | настройки путей, данных и запусков            |
-| `../../../docs/data_io.md`       | подготовка исходных данных                    |
-| `../../../docs/data_contract.md` | подробные контракты таблиц                    |
-| `../../../scripts/README.md`     | команды подготовки данных                     |
-| `../preprocessing/README.md`     | что происходит с событиями после чтения       |
-| `../pipeline/README.md`          | как слой данных используется в полном запуске |
+| Документ                                                           | Что смотреть                                  |
+|--------------------------------------------------------------------|-----------------------------------------------|
+| [`../../../data/raw/README.md`](../../../data/raw/README.md)       | куда класть исходные архивы                   |
+| [`../../../configs/README.md`](../../../configs/README.md)         | настройки путей, данных и запусков            |
+| [`../../../docs/data_contract.md`](../../../docs/data_contract.md) | подробные контракты таблиц                    |
+| [`../../../docs/architecture.md`](../../../docs/architecture.md)   | место слоя данных в архитектуре               |
+| [`../../../scripts/README.md`](../../../scripts/README.md)         | команды подготовки данных                     |
+| [`../preprocessing/README.md`](../preprocessing/README.md)         | что происходит с событиями после чтения       |
+| [`../pipeline/README.md`](../pipeline/README.md)                   | как слой данных используется в полном запуске |
 
 ## Коротко
 

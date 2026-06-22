@@ -1,307 +1,464 @@
-# Получение готовых рекомендаций
+# Диагностика данных
 
-В этом модуле мы читаем уже построенные рекомендации и получаем список похожих товаров для конкретного `item_id`.
+Модуль `diagnostics` содержит вспомогательные функции для проверки данных, parquet-файлов и логики сессий.
 
-К этому моменту конвейер уже всё посчитал: собрал события, построил пары товаров, рассчитал `score`, выбрал top-K,
-добавил резервные рекомендации и сохранил результат. Модуль `serving` не пересчитывает рекомендации. Он только открывает
-готовый compact-файл и отдаёт похожие товары.
+Этот слой не строит рекомендации и не меняет данные. Его задача — помогать быстро отвечать на вопросы:
+
+* какие колонки есть в таблице;
+* сколько пропусков в важных полях;
+* как распределены действия пользователей;
+* сколько строк лежит в parquet-разделах;
+* какие временные разрывы возникают между событиями пользователя;
+* разумно ли выбран `session_timeout_minutes`.
 
 ## Что делает модуль
 
 ```text
-outputs/latest/manifest.json
-или
-outputs/latest/recommendations/lookup.parquet
-→ SimilarItemsLookup
-→ get_similar_items(item_id)
-→ список похожих товаров
+raw / clean events / parquet dataset
+→ diagnostics helpers
+→ компактные диагностические таблицы
 ```
 
-Главный класс модуля:
-
-```python
-SimilarItemsLookup
-```
-
-Он загружает compact-рекомендации и строит быстрый lookup:
-
-```text
-item_id → similar_items_sku_list
-```
+Функции модуля работают с Polars `DataFrame` и `LazyFrame`, а часть parquet-проверок работает напрямую по путям к
+файлам.
 
 ## Основные файлы
 
-| Файл          | Что в нём находится                                     |
-|---------------|---------------------------------------------------------|
-| `__init__.py` | публичный импорт `SimilarItemsLookup`                   |
-| `lookup.py`   | чтение compact-рекомендаций и получение похожих товаров |
+| Файл                                     | Что в нём находится                               |
+|------------------------------------------|---------------------------------------------------|
+| [`profiling.py`](profiling.py)           | профилирование таблиц и parquet-датасетов         |
+| [`session_checks.py`](session_checks.py) | проверка временных разрывов и сессионных маркеров |
+| [`__init__.py`](__init__.py)             | публичный экспорт диагностических функций         |
 
-## Какой файл читает serving
+## Публичные функции
 
-Serving-слой работает с compact-форматом рекомендаций.
-
-Обычно это файл:
-
-```text
-outputs/latest/recommendations/lookup.parquet
-```
-
-Формат таблицы:
-
-```text
-item_id
-similar_items_sku_list
-```
-
-Пример:
-
-```text
-item_id | similar_items_sku_list
-100     | [205, 317, 918, 441]
-101     | [778, 120, 334, 902]
-```
-
-Этот формат создаётся в модуле `output` из подробной таблицы рекомендаций.
-
-## Почему используется `lookup.parquet`
-
-В подробном формате каждая рекомендация хранится отдельной строкой:
-
-```text
-item_id | similar_item_id | score | rank | source
-```
-
-Для анализа это удобно, но для быстрого получения похожих товаров не очень.
-
-Serving-слою нужен уже собранный список:
-
-```text
-item_id | similar_items_sku_list
-```
-
-Так для одного товара можно сразу вернуть массив похожих товаров без группировки и сортировки на каждый запрос.
-
-## Использование через manifest
-
-Самый удобный вариант — читать рекомендации через `manifest.json`.
+Из модуля можно импортировать:
 
 ```python
-from ozon_similar_products.serving import SimilarItemsLookup
-
-lookup = SimilarItemsLookup("outputs/latest/manifest.json")
-
-similar_items = lookup.get_similar_items(100, top_k=10)
-print(similar_items)
+from ozon_similar_products.diagnostics import (
+    action_profile,
+    add_session_markers,
+    null_profile,
+    parquet_dataset_overview,
+    parquet_partition_profile,
+    partition_row_counts,
+    schema_overview,
+    time_diff_summary,
+    time_diff_summary_by_partition,
+)
 ```
 
-В этом случае `SimilarItemsLookup` сам найдёт путь к compact-файлу внутри манифеста.
+## Проверка схемы таблицы
 
-Такой способ лучше, чем вручную указывать parquet-файл, потому что путь к рекомендациям берётся из метаданных последнего
-запуска.
+### `schema_overview`
 
-## Использование через parquet-файл
-
-Можно передать путь к `lookup.parquet` напрямую:
-
-```python
-from ozon_similar_products.serving import SimilarItemsLookup
-
-lookup = SimilarItemsLookup("outputs/latest/recommendations/lookup.parquet")
-
-similar_items = lookup.get_similar_items(100, top_k=10)
-print(similar_items)
-```
-
-Можно также передать директорию, где лежит `lookup.parquet`:
-
-```python
-lookup = SimilarItemsLookup("outputs/latest/recommendations")
-```
-
-В этом случае будет использован файл:
-
-```text
-outputs/latest/recommendations/lookup.parquet
-```
-
-## Что возвращает `get_similar_items`
-
-Метод:
-
-```python
-get_similar_items(item_id, top_k=10)
-```
-
-возвращает список `item_id` похожих товаров.
+`schema_overview` возвращает список колонок и типов данных.
 
 Пример:
 
 ```python
-lookup.get_similar_items(100, top_k=3)
+from ozon_similar_products.diagnostics import schema_overview
+
+schema = schema_overview(events)
+print(schema)
 ```
 
-Результат:
-
-```python
-[205, 317, 918]
-```
-
-Если для товара нет рекомендаций, метод возвращает пустой список:
-
-```python
-[]
-```
-
-Если `top_k <= 0`, метод выбрасывает ошибку, потому что размер выдачи должен быть положительным числом.
-
-## Что происходит при загрузке
-
-При создании `SimilarItemsLookup` модуль:
-
-1. Определяет, что ему передали: manifest, parquet-файл или директорию.
-2. Если передан manifest, читает из него путь к compact-рекомендациям.
-3. Загружает parquet-файл через Polars.
-4. Проверяет, что таблица соответствует compact-контракту.
-5. Строит словарь `item_id → similar_items_sku_list`.
-6. Убирает `None` из списков похожих товаров.
-
-После этого запросы к `get_similar_items` идут уже по словарю в памяти.
-
-## Какие ключи manifest поддерживаются
-
-В манифесте путь к compact-рекомендациям может называться по-разному.
-
-Serving использует helper из `output.manifest`, который ищет путь по нескольким ключам:
+Результат — таблица вида:
 
 ```text
-widget_recommendations_path
-compact_recommendations_path
-similar_items_path
-widget_path
-lookup_recommendations_path
-lookup_path
-recommendations_path
+column      | dtype
+user_id     | Int64
+timestamp   | Datetime
+action_type | String
+item_id     | Int64
 ```
 
-Это нужно для обратной совместимости: если название поля в манифесте менялось, serving всё равно сможет найти нужный
-файл.
+Это удобно использовать в EDA, когда нужно быстро понять, что реально лежит в таблице.
+
+## Проверка пропусков
+
+### `null_profile`
+
+`null_profile` считает число и долю пропусков по выбранным колонкам.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import null_profile
+
+profile = null_profile(
+    events,
+    columns=["user_id", "timestamp", "action_type", "item_id"],
+)
+
+print(profile)
+```
+
+На выходе получается таблица:
+
+```text
+column
+row_count
+null_count
+null_share
+```
+
+Эта проверка полезна перед очисткой событий. Например, если много строк без `item_id`, это объясняет, почему после
+`EventCleaner` стало меньше данных.
+
+## Профиль действий
+
+### `action_profile`
+
+`action_profile` показывает, какие типы действий есть в таблице и насколько они заполнены.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import action_profile
+
+profile = action_profile(events)
+print(profile)
+```
+
+Функция группирует строки по `action_type` и считает:
+
+```text
+rows
+users
+items
+item_id_missing_rows
+search_query_missing_rows
+share
+item_id_missing_share
+search_query_missing_share
+```
+
+Эта диагностика помогает понять:
+
+* какие действия доминируют в логах;
+* у каких действий чаще отсутствует `item_id`;
+* почему `search` обычно не попадает в товарные события;
+* достаточно ли сильных сигналов вроде `click`, `favorite`, `to_cart`.
+
+## Проверка parquet-датасета
+
+### `parquet_files`
+
+Внутренняя функция `parquet_files` находит parquet-файлы внутри директории или возвращает сам файл, если на вход передан
+путь к parquet-файлу.
+
+Обычно напрямую удобнее использовать более высокоуровневые функции ниже.
+
+### `parquet_partition_profile`
+
+`parquet_partition_profile` строит профиль parquet-файлов и извлекает Hive-разделы из путей.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import parquet_partition_profile
+
+profile = parquet_partition_profile("data/raw/user_actions")
+print(profile)
+```
+
+Результат содержит:
+
+```text
+file_path
+rows
+file_size_bytes
+date
+action_type
+```
+
+Если в пути есть части вида `date=2024-04-23` или `action_type=view`, они будут вынесены в отдельные колонки.
+
+### `partition_row_counts`
+
+`partition_row_counts` агрегирует количество строк и размер файлов по разделам.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import partition_row_counts
+
+counts = partition_row_counts(
+    "data/raw/user_actions",
+    partition_columns=("date", "action_type"),
+)
+
+print(counts)
+```
+
+Это удобно для проверки, что данные действительно есть по нужным датам и типам действий.
+
+### `parquet_dataset_overview`
+
+`parquet_dataset_overview` возвращает общий размер parquet-датасета.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import parquet_dataset_overview
+
+overview = parquet_dataset_overview("data/raw/user_actions")
+print(overview)
+```
+
+На выходе одна строка:
+
+```text
+files
+rows
+file_size_bytes
+```
+
+Эта функция полезна для быстрой оценки объёма данных перед тяжёлым запуском.
+
+## Проверка сессий
+
+### `add_session_markers`
+
+`add_session_markers` сортирует события внутри пользователя и добавляет диагностические колонки:
+
+```text
+time_diff_seconds
+is_new_session
+session_index
+```
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import add_session_markers
+
+marked = add_session_markers(
+    events,
+    timeout_minutes=20,
+)
+
+print(marked.collect().head())
+```
+
+Функция не заменяет `SessionBuilder`. Она нужна для диагностики временных разрывов и проверки выбранного session
+timeout.
+
+## Сводка временных разрывов
+
+### `time_diff_summary`
+
+`time_diff_summary` считает общую сводку временных разрывов между событиями пользователя.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import time_diff_summary
+
+summary = time_diff_summary(
+    events,
+    timeout_minutes=20,
+)
+
+print(summary)
+```
+
+В результате есть поля:
+
+```text
+events
+time_diffs
+negative_time_diffs
+zero_time_diffs
+gaps_over_timeout
+sessions
+timeout_seconds
+p50_seconds
+p75_seconds
+p90_seconds
+p95_seconds
+p99_seconds
+```
+
+Эта проверка помогает понять:
+
+* сколько событий попало в расчёт;
+* есть ли отрицательные временные разрывы;
+* сколько событий имеют одинаковый timestamp;
+* сколько разрывов больше session timeout;
+* сколько сессий получится при выбранном пороге.
+
+## Сводка по разделам
+
+### `time_diff_summary_by_partition`
+
+`time_diff_summary_by_partition` считает такую же сводку, но отдельно по разделу, чаще всего по дате.
+
+Пример:
+
+```python
+from ozon_similar_products.diagnostics import time_diff_summary_by_partition
+
+summary = time_diff_summary_by_partition(
+    events,
+    partition_col="event_date",
+    timeout_minutes=20,
+)
+
+print(summary)
+```
+
+Это полезно, если нужно найти день, где резко изменилась структура событий или появились странные временные разрывы.
+
+## Когда использовать diagnostics
+
+Модуль полезен в нескольких сценариях.
+
+### Перед первым запуском проекта
+
+Проверить, что данные распакованы и читаются:
+
+```python
+from ozon_similar_products.diagnostics import parquet_dataset_overview
+
+print(parquet_dataset_overview("data/raw/user_actions"))
+print(parquet_dataset_overview("data/raw/product_information"))
+```
+
+### Перед настройкой `EventCleaner`
+
+Понять, какие действия есть в raw events:
+
+```python
+from ozon_similar_products.data import load_events
+from ozon_similar_products.diagnostics import action_profile
+
+events = load_events(sample_days=1, sample_rows=10000)
+
+print(action_profile(events))
+```
+
+### Перед выбором session timeout
+
+Посмотреть распределение временных разрывов:
+
+```python
+from ozon_similar_products.diagnostics import time_diff_summary
+
+print(time_diff_summary(events, timeout_minutes=20))
+print(time_diff_summary(events, timeout_minutes=30))
+```
+
+### При отладке больших запусков
+
+Понять, в каких разделах больше всего строк:
+
+```python
+from ozon_similar_products.diagnostics import partition_row_counts
+
+counts = partition_row_counts(
+    "data/raw/user_actions",
+    partition_columns=("date", "action_type"),
+)
+
+print(counts)
+```
 
 ## Где находится в проекте
 
-Serving-слой стоит после `output`.
+`diagnostics` — вспомогательный слой рядом с основным конвейером.
 
 ```text
-pipeline
+data
+→ preprocessing
+→ features
+→ retrieval
+→ business
 → output
 → serving
+
+diagnostics
+  ↳ проверяет данные и промежуточные результаты
 ```
 
-`pipeline` строит рекомендации.
-
-`output` сохраняет их в `lookup.parquet`.
-
-`serving` читает `lookup.parquet` и отдаёт похожие товары для конкретного товара.
-
-## Чем serving сейчас не является
-
-В текущей версии `serving` — это не отдельный HTTP-сервис.
-
-Здесь нет API-сервера, роутов, авторизации, кэша в Redis или онлайн-обновления модели.
-
-Сейчас это лёгкий Python-слой для локального чтения готового результата. Его можно использовать:
-
-* в скриптах;
-* в ноутбуках;
-* в проверках;
-* как основу для будущего сервиса.
-
-Если проекту понадобится реальный online-serving, его можно будет строить поверх `SimilarItemsLookup` или заменить этот
-слой более производительным хранилищем.
+Он может использоваться до, во время или после основного запуска, но не является обязательным этапом построения
+рекомендаций.
 
 ## Границы ответственности
 
-Что делает `serving`:
+Что делает `diagnostics`:
 
-* читает `manifest.json` или `lookup.parquet`;
-* находит compact-файл рекомендаций;
-* проверяет формат `item_id | similar_items_sku_list`;
-* строит lookup-словарь;
-* возвращает top-K похожих товаров для `item_id`.
+* показывает схему таблицы;
+* считает пропуски по колонкам;
+* строит профиль действий;
+* читает parquet-метаданные;
+* считает строки и размеры файлов по разделам;
+* добавляет диагностические маркеры сессий;
+* считает сводки временных разрывов.
 
-Что не делает `serving`:
+Что не делает `diagnostics`:
 
-* не читает сырые события;
-* не строит сессии;
-* не считает пары товаров;
+* не готовит архивы;
+* не очищает события;
+* не строит production-сессии;
+* не считает популярность товаров;
+* не строит пары товаров;
 * не рассчитывает `score`;
-* не выбирает top-K из подробной таблицы;
-* не добавляет fallback;
-* не сохраняет результат;
-* не поднимает web-сервис.
-
-Эти задачи находятся в других слоях:
-
-| Задача                  | Модуль       |
-|-------------------------|--------------|
-| построение рекомендаций | `retrieval`  |
-| резервные рекомендации  | `business`   |
-| полный запуск           | `pipeline`   |
-| сохранение результата   | `output`     |
-| проверка качества       | `evaluation` |
+* не сохраняет итоговые рекомендации;
+* не заменяет тесты и контракты данных.
 
 ## Что менять осторожно
 
-| Что менять                          | Почему осторожно                                              |
-|-------------------------------------|---------------------------------------------------------------|
-| название `lookup.parquet`           | его ожидают `output`, `pipeline` и `serving`                  |
-| колонку `similar_items_sku_list`    | это compact-контракт результата                               |
-| поиск пути в `manifest.json`        | можно сломать чтение `outputs/latest/manifest.json`           |
-| поведение при неизвестном `item_id` | сейчас это безопасный пустой список                           |
-| загрузку файла в память             | для очень большого каталога может потребоваться другой подход |
+| Что менять                       | Почему осторожно                                      |
+|----------------------------------|-------------------------------------------------------|
+| названия диагностических колонок | их могут использовать ноутбуки и проверки             |
+| логику `add_session_markers`     | она должна соответствовать смыслу session timeout     |
+| расчёт `time_diff_summary`       | влияет на интерпретацию сессионных разрывов           |
+| чтение parquet-метаданных        | должно работать без полной загрузки больших датасетов |
+| extraction Hive-разделов из пути | влияет на профили по `date` и `action_type`           |
 
-Если меняется compact-формат, нужно обновить `output`, `serving`, тесты и документацию по контрактам.
+Если меняется логика сессий в [`preprocessing`](../preprocessing/README.md), стоит проверить, что диагностические
+функции в [`session_checks.py`](session_checks.py) всё ещё помогают корректно интерпретировать временные разрывы.
 
 ## Быстрая проверка
 
-После запуска конвейера:
-
-```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
-```
-
-можно проверить serving так:
+Пример быстрой диагностики raw events:
 
 ```python
-from ozon_similar_products.serving import SimilarItemsLookup
+from ozon_similar_products.data import load_events
+from ozon_similar_products.diagnostics import (
+    action_profile,
+    null_profile,
+    schema_overview,
+    time_diff_summary,
+)
 
-lookup = SimilarItemsLookup("outputs/latest/manifest.json")
+events = load_events(sample_days=1, sample_rows=10000)
 
-print(lookup.get_similar_items(100, top_k=10))
-```
-
-Или посмотреть последние рекомендации через готовый скрипт:
-
-```bash
-uv run python scripts/preview_latest_recommendations.py
+print(schema_overview(events))
+print(null_profile(events, columns=["user_id", "timestamp", "action_type", "item_id"]))
+print(action_profile(events))
+print(time_diff_summary(events, timeout_minutes=20))
 ```
 
 ## Связанные документы
 
-| Документ                         | Что смотреть                             |
-|----------------------------------|------------------------------------------|
-| `../output/README.md`            | как создаётся `lookup.parquet`           |
-| `../pipeline/README.md`          | как публикуется `outputs/latest/`        |
-| `../retrieval/README.md`         | как строятся поведенческие рекомендации  |
-| `../business/README.md`          | как добавляются fallback-рекомендации    |
-| `../../../docs/data_contract.md` | контракт compact-таблицы                 |
-| `../../../scripts/README.md`     | команда просмотра последних рекомендаций |
+| Документ                                                           | Что смотреть                            |
+|--------------------------------------------------------------------|-----------------------------------------|
+| [`../data/README.md`](../data/README.md)                           | как читаются исходные данные            |
+| [`../preprocessing/README.md`](../preprocessing/README.md)         | как очищаются события и строятся сессии |
+| [`../pipeline/README.md`](../pipeline/README.md)                   | как запускается полный конвейер         |
+| [`../../../notebooks/README.md`](../../../notebooks/README.md)     | как использовать диагностику в EDA      |
+| [`../../../docs/data_contract.md`](../../../docs/data_contract.md) | контракты таблиц и колонок              |
+| [`../../../scripts/README.md`](../../../scripts/README.md)         | команды подготовки и проверки проекта   |
 
 ## Коротко
 
-Мы используем `serving`, чтобы быстро получить похожие товары из уже сохранённого результата.
+`diagnostics` — это набор вспомогательных функций для проверки данных и сессий.
 
-Он читает `manifest.json` или `lookup.parquet`, строит словарь в памяти и возвращает список похожих товаров по
-`item_id`.
+Он помогает понять структуру таблиц, пропуски, распределение действий, размер parquet-датасетов и временные разрывы
+между событиями.
 
-Вся тяжёлая работа — построение рекомендаций, scoring и fallback — происходит раньше, в `pipeline`, `retrieval` и
-`business`.
+Модуль не строит рекомендации и не участвует в production-логике напрямую, но помогает быстрее находить проблемы в
+данных и параметрах запуска.

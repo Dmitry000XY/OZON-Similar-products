@@ -18,17 +18,16 @@
 
 ## Быстрая навигация
 
-| Задача                                | Куда идти                                        |
-|---------------------------------------|--------------------------------------------------|
-| Понять проект целиком                 | [`../README.md`](../README.md)                   |
-| Запустить проект                      | [`../scripts/README.md`](../scripts/README.md)   |
-| Настроить конфиги                     | [`../configs/README.md`](../configs/README.md)   |
-| Понять архитектуру                    | [`architecture.md`](architecture.md)             |
-| Разобраться с таблицами               | [`data_contract.md`](data_contract.md)           |
-| Понять метрики качества               | [`evaluation_metrics.md`](evaluation_metrics.md) |
-| Понять incremental-режим              | [`incremental_update.md`](incremental_update.md) |
-| Настроить локальный тяжёлый запуск    | [`local_runner.md`](local_runner.md)             |
-| Посмотреть статус архивных материалов | [`archive/README.md`](archive/README.md)         |
+| Задача                             | Куда идти                                        |
+|------------------------------------|--------------------------------------------------|
+| Понять проект целиком              | [`../README.md`](../README.md)                   |
+| Запустить проект                   | [`../scripts/README.md`](../scripts/README.md)   |
+| Настроить конфиги                  | [`../configs/README.md`](../configs/README.md)   |
+| Понять архитектуру                 | [`architecture.md`](architecture.md)             |
+| Разобраться с таблицами            | [`data_contract.md`](data_contract.md)           |
+| Понять метрики качества            | [`evaluation_metrics.md`](evaluation_metrics.md) |
+| Понять incremental-режим           | [`incremental_update.md`](incremental_update.md) |
+| Настроить локальный тяжёлый запуск | [`local_runner.md`](local_runner.md)             |
 
 ## Основные документы
 
@@ -39,7 +38,6 @@
 | [`evaluation_metrics.md`](evaluation_metrics.md) | какие offline-метрики считаются и как отличать основные метрики от диагностических                        |
 | [`incremental_update.md`](incremental_update.md) | как переиспользуются дневные артефакты и как устроена защита от некорректного reuse                       |
 | [`local_runner.md`](local_runner.md)             | как запускать тяжёлые сценарии через локальный self-hosted GitHub Actions runner                          |
-| [`archive/README.md`](archive/README.md)         | почему архивный код не входит в рабочий запуск и как переносить из него полезную логику                   |
 
 ## README по модулям
 
@@ -86,7 +84,7 @@
 
 ## Коротко
 
-`docs/README.md` — это не место для повторения всего проекта.
+[`docs/README.md`](README.md) — это не место для повторения всего проекта.
 
 Его задача — быстро привести к нужному документу:
 

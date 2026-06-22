@@ -58,25 +58,25 @@ uv run python scripts/check_project_structure.py
 ### 3. Построить рекомендации
 
 ```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
 ### 4. Посмотреть результат
 
 ```bash
-uv run python scripts/preview_latest_recommendations.py
+uv run ozon-preview-recommendations
 ```
 
 Посмотреть рекомендации для конкретного товара:
 
 ```bash
-uv run python scripts/preview_latest_recommendations.py --item-id 113
+uv run ozon-preview-recommendations --item-id 113
 ```
 
 ### 5. Запустить полный сценарий с оценкой качества
 
 ```bash
-uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
 ```
 
 Полный сценарий сначала строит рекомендации на обучающем периоде, а затем проверяет качество на следующем временном
@@ -104,6 +104,13 @@ uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days
 
 Главный принцип реализации: сначала проект сохраняет факты о поведении пользователей, затем отдельно считает оценку
 похожести и только после этого формирует итоговые рекомендации.
+
+Подробнее:
+
+* [архитектура проекта](docs/architecture.md);
+* [контракты данных](docs/data_contract.md);
+* [README модуля `retrieval`](src/ozon_similar_products/retrieval/README.md);
+* [README модуля `pipeline`](src/ozon_similar_products/pipeline/README.md).
 
 ## Что появляется после запуска
 
@@ -134,35 +141,39 @@ outputs/latest/
 | `lookup.parquet`   | компактный формат для быстрого получения похожих товаров                   |
 | `manifest.json`    | параметры запуска, даты периода, пути к результатам и служебная информация |
 
+Подробнее:
+
+* [README модуля `output`](src/ozon_similar_products/output/README.md);
+* [README модуля `serving`](src/ozon_similar_products/serving/README.md);
+* [контракты выходных таблиц](docs/data_contract.md).
+
 ## Структура репозитория
 
-| Путь                         | Что находится                                                     |
-|------------------------------|-------------------------------------------------------------------|
-| `configs/`                   | настройки данных, пайплайна, оценки качества и подбора параметров |
-| `docs/`                      | подробная документация и карта документов                         |
-| `notebooks/`                 | исследовательские ноутбуки                                        |
-| `scripts/`                   | пользовательские команды запуска                                  |
-| `src/ozon_similar_products/` | основной Python-пакет                                             |
-| `tests/`                     | тесты                                                             |
-| `data/`                      | локальные данные, не коммитятся в Git                             |
-| `outputs/`                   | результаты запусков, не коммитятся в Git                          |
+| Путь                                                       | Что находится                                                     |
+|------------------------------------------------------------|-------------------------------------------------------------------|
+| [`configs/`](configs/)                                     | настройки данных, пайплайна, оценки качества и подбора параметров |
+| [`docs/`](docs/)                                           | подробная документация и карта документов                         |
+| [`notebooks/`](notebooks/)                                 | исследовательские ноутбуки                                        |
+| [`scripts/`](scripts/)                                     | пользовательские команды запуска                                  |
+| [`src/ozon_similar_products/`](src/ozon_similar_products/) | основной Python-пакет                                             |
+| [`tests/`](tests/)                                         | тесты                                                             |
+| `data/`                                                    | локальные данные, не коммитятся в Git                             |
+| `outputs/`                                                 | результаты запусков, не коммитятся в Git                          |
 
 ## Основные модули
 
-| Модуль          | Ответственность                             |
-|-----------------|---------------------------------------------|
-| `data`          | чтение данных, схемы и валидация            |
-| `preprocessing` | очистка событий и построение сессий         |
-| `features`      | популярность товаров и служебные статистики |
-| `retrieval`     | пары товаров, агрегация, scoring и top-K    |
-| `business`      | fallback-рекомендации и бизнес-правила      |
-| `evaluation`    | offline-оценка качества                     |
-| `pipeline`      | полный запуск конвейера                     |
-| `output`        | сохранение результатов                      |
-| `serving`       | чтение готового lookup-результата           |
-| `diagnostics`   | диагностика данных и результатов            |
-
-Подробности по каждому модулю лежат в README внутри соответствующей папки.
+| Модуль                                                               | Ответственность                             |
+|----------------------------------------------------------------------|---------------------------------------------|
+| [`data`](src/ozon_similar_products/data/README.md)                   | чтение данных, схемы и валидация            |
+| [`preprocessing`](src/ozon_similar_products/preprocessing/README.md) | очистка событий и построение сессий         |
+| [`features`](src/ozon_similar_products/features/README.md)           | популярность товаров и служебные статистики |
+| [`retrieval`](src/ozon_similar_products/retrieval/README.md)         | пары товаров, агрегация, scoring и top-K    |
+| [`business`](src/ozon_similar_products/business/README.md)           | fallback-рекомендации и бизнес-правила      |
+| [`evaluation`](src/ozon_similar_products/evaluation/README.md)       | offline-оценка качества                     |
+| [`pipeline`](src/ozon_similar_products/pipeline/README.md)           | полный запуск конвейера                     |
+| [`output`](src/ozon_similar_products/output/README.md)               | сохранение результатов                      |
+| [`serving`](src/ozon_similar_products/serving/README.md)             | чтение готового lookup-результата           |
+| [`diagnostics`](src/ozon_similar_products/diagnostics/README.md)     | диагностика данных и результатов            |
 
 ## Документация
 
@@ -179,23 +190,23 @@ outputs/latest/
 
 README по модулям:
 
-* [`data`](src/ozon_similar_products/data/README.md)
-* [`preprocessing`](src/ozon_similar_products/preprocessing/README.md)
-* [`features`](src/ozon_similar_products/features/README.md)
-* [`retrieval`](src/ozon_similar_products/retrieval/README.md)
-* [`business`](src/ozon_similar_products/business/README.md)
-* [`evaluation`](src/ozon_similar_products/evaluation/README.md)
-* [`pipeline`](src/ozon_similar_products/pipeline/README.md)
-* [`output`](src/ozon_similar_products/output/README.md)
-* [`serving`](src/ozon_similar_products/serving/README.md)
-* [`diagnostics`](src/ozon_similar_products/diagnostics/README.md)
+* [`data`](src/ozon_similar_products/data/README.md);
+* [`preprocessing`](src/ozon_similar_products/preprocessing/README.md);
+* [`features`](src/ozon_similar_products/features/README.md);
+* [`retrieval`](src/ozon_similar_products/retrieval/README.md);
+* [`business`](src/ozon_similar_products/business/README.md);
+* [`evaluation`](src/ozon_similar_products/evaluation/README.md);
+* [`pipeline`](src/ozon_similar_products/pipeline/README.md);
+* [`output`](src/ozon_similar_products/output/README.md);
+* [`serving`](src/ozon_similar_products/serving/README.md);
+* [`diagnostics`](src/ozon_similar_products/diagnostics/README.md).
 
 ## Подбор параметров
 
 Для подбора параметров есть отдельный сценарий:
 
 ```bash
-uv run python scripts/run_tune.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
+uv run ozon-run-tune 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
 ```
 
 Результаты сохраняются в:
@@ -207,8 +218,12 @@ outputs/tuning/<sweep_id>/
   best_metrics.json
 ```
 
-Подробнее: [`scripts/README.md`](scripts/README.md), [`configs/README.md`](configs/README.md), [
-`docs/evaluation_metrics.md`](docs/evaluation_metrics.md).
+Подробнее:
+
+* [`scripts/README.md`](scripts/README.md);
+* [`configs/README.md`](configs/README.md);
+* [`docs/evaluation_metrics.md`](docs/evaluation_metrics.md);
+* [`evaluation/README.md`](src/ozon_similar_products/evaluation/README.md).
 
 ## Тесты и проверки
 
@@ -253,7 +268,7 @@ uv run pyrefly check src scripts tests
 → lookup
 ```
 
-Для первого запуска достаточно подготовить данные, запустить `scripts/run_pipeline.py` и посмотреть результат через
-`scripts/preview_latest_recommendations.py`.
+Для первого запуска достаточно подготовить данные, запустить `ozon-run-pipeline` и посмотреть результат через
+`ozon-preview-recommendations`.
 
 За подробностями переходите в [`docs/README.md`](docs/README.md).

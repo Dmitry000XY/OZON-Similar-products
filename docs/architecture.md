@@ -59,7 +59,7 @@ raw user actions
 
 ## Структура пакета
 
-Основной код лежит в `src/ozon_similar_products/`.
+Основной код лежит в [`../src/ozon_similar_products/`](../src/ozon_similar_products/).
 
 ```text
 src/ozon_similar_products/
@@ -78,13 +78,21 @@ src/ozon_similar_products/
 
 Документация по конкретным слоям лежит рядом с кодом:
 
-```text
-src/ozon_similar_products/<module>/README.md
-```
+* [`data/README.md`](../src/ozon_similar_products/data/README.md);
+* [`preprocessing/README.md`](../src/ozon_similar_products/preprocessing/README.md);
+* [`features/README.md`](../src/ozon_similar_products/features/README.md);
+* [`retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md);
+* [`business/README.md`](../src/ozon_similar_products/business/README.md);
+* [`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md);
+* [`pipeline/README.md`](../src/ozon_similar_products/pipeline/README.md);
+* [`output/README.md`](../src/ozon_similar_products/output/README.md);
+* [`serving/README.md`](../src/ozon_similar_products/serving/README.md);
+* [`diagnostics/README.md`](../src/ozon_similar_products/diagnostics/README.md).
 
 ## Слой данных
 
-Модуль `data` отвечает за чтение подготовленных parquet-данных, схемы и базовую валидацию.
+Модуль [`data`](../src/ozon_similar_products/data/README.md) отвечает за чтение подготовленных parquet-данных, схемы и
+базовую валидацию.
 
 Он не очищает события и не строит рекомендации.
 
@@ -105,7 +113,8 @@ user_actions
 
 ## Предобработка
 
-Модуль `preprocessing` отвечает за очистку событий и построение пользовательских сессий.
+Модуль [`preprocessing`](../src/ozon_similar_products/preprocessing/README.md) отвечает за очистку событий и построение
+пользовательских сессий.
 
 ```text
 raw events
@@ -125,7 +134,7 @@ raw events
 
 ## Статистики
 
-Модуль `features` считает статистики по очищенным событиям.
+Модуль [`features`](../src/ozon_similar_products/features/README.md) считает статистики по очищенным событиям.
 
 Главный объект здесь — `ItemPopularityBuilder`.
 
@@ -136,11 +145,13 @@ raw events
 * счётчики по типам действий;
 * распределение действий для калибровки scoring.
 
-Эти статистики используются дальше в `retrieval`, `business`, `evaluation` и диагностике.
+Эти статистики используются дальше в [`retrieval`](../src/ozon_similar_products/retrieval/README.md), [
+`business`](../src/ozon_similar_products/business/README.md), [
+`evaluation`](../src/ozon_similar_products/evaluation/README.md) и диагностике.
 
 ## Построение похожих товаров
 
-Модуль `retrieval` отвечает за поведенческое ядро рекомендаций.
+Модуль [`retrieval`](../src/ozon_similar_products/retrieval/README.md) отвечает за поведенческое ядро рекомендаций.
 
 ```text
 sessions
@@ -182,7 +193,7 @@ unique_sessions
 
 ## Бизнес-правила и резервные рекомендации
 
-Модуль `business` применяется после поведенческого top-K.
+Модуль [`business`](../src/ozon_similar_products/business/README.md) применяется после поведенческого top-K.
 
 Главный слой здесь — `FallbackLayer`.
 
@@ -207,7 +218,8 @@ behavioral recommendations
 
 ## Оценка качества
 
-Модуль `evaluation` проверяет рекомендации на будущих действиях пользователей.
+Модуль [`evaluation`](../src/ozon_similar_products/evaluation/README.md) проверяет рекомендации на будущих действиях
+пользователей.
 
 Общий принцип:
 
@@ -220,9 +232,11 @@ recommendations + ground truth → offline metrics
 Оценка качества не участвует в построении рекомендаций для production-выхода. Она нужна для экспериментов, сравнения
 параметров и контроля качества.
 
+Подробнее о метриках: [`evaluation_metrics.md`](evaluation_metrics.md).
+
 ## Сохранение результата
 
-Модуль `output` сохраняет готовые рекомендации.
+Модуль [`output`](../src/ozon_similar_products/output/README.md) сохраняет готовые рекомендации.
 
 Основные файлы:
 
@@ -241,9 +255,12 @@ manifest.json
 
 `manifest.json` связывает результат с параметрами запуска.
 
+Контракты выходных таблиц описаны в [`data_contract.md`](data_contract.md).
+
 ## Чтение готовых рекомендаций
 
-Модуль `serving` читает уже сохранённый compact-результат и возвращает похожие товары для конкретного `item_id`.
+Модуль [`serving`](../src/ozon_similar_products/serving/README.md) читает уже сохранённый compact-результат и возвращает
+похожие товары для конкретного `item_id`.
 
 Главный класс:
 
@@ -258,7 +275,8 @@ SimilarItemsLookup
 
 ## Диагностика
 
-Модуль `diagnostics` содержит функции для проверки данных и промежуточных таблиц.
+Модуль [`diagnostics`](../src/ozon_similar_products/diagnostics/README.md) содержит функции для проверки данных и
+промежуточных таблиц.
 
 Он помогает посмотреть:
 
@@ -275,7 +293,7 @@ SimilarItemsLookup
 
 ## Полный запуск
 
-Модуль `pipeline` связывает все слои в один сценарий.
+Модуль [`pipeline`](../src/ozon_similar_products/pipeline/README.md) связывает все слои в один сценарий.
 
 Он отвечает за:
 
@@ -293,25 +311,23 @@ SimilarItemsLookup
 run_pipeline(...)
 ```
 
-Пользовательский вход обычно идёт через скрипты:
+Пользовательский вход обычно идёт через команду:
 
 ```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
-или полный сценарий с оценкой качества:
+Полный сценарий с оценкой качества:
 
 ```bash
-uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
 ```
 
 ## Единый слой конфигурации
 
 Основной слой конфигурации находится здесь:
 
-```text
-src/ozon_similar_products/config.py
-```
+[`../src/ozon_similar_products/config.py`](../src/ozon_similar_products/config.py)
 
 Через него доступны функции и объекты:
 
@@ -326,7 +342,7 @@ resolve_project_path
 get_path_from_config
 ```
 
-Конфиги хранятся в `configs/`:
+Конфиги хранятся в [`../configs/`](../configs/):
 
 ```text
 configs/
@@ -347,130 +363,19 @@ configs/
 
 Например:
 
-```text
-src/ozon_similar_products/data/config.py
-src/ozon_similar_products/output/lookup.py
-```
+* [`../src/ozon_similar_products/data/config.py`](../src/ozon_similar_products/data/config.py);
+* [`../src/ozon_similar_products/output/lookup.py`](../src/ozon_similar_products/output/lookup.py).
 
 Их задача — не развивать новую логику, а поддерживать старые импорты в ноутбуках, тестах или пользовательском коде.
 
-Канонический lookup для чтения готовых рекомендаций находится в:
+Канонический lookup для чтения готовых рекомендаций находится в [
+`../src/ozon_similar_products/serving/lookup.py`](../src/ozon_similar_products/serving/lookup.py).
 
-```text
-src/ozon_similar_products/serving/lookup.py
-```
+## Связанные документы
 
-## Архивные материалы
-
-Старый исследовательский код хранится в:
-
-```text
-docs/archive/code/
-```
-
-Он нужен как исторический контекст, но не участвует в рабочем запуске проекта.
-
-Правила для архивного кода:
-
-* не импортировать из `src/`;
-* не импортировать из `tests/`;
-* не импортировать из `scripts/`;
-* не считать частью production API.
-
-Если из архива нужен фрагмент логики, его нужно перенести в нормальный модуль внутри `src/ozon_similar_products/`,
-адаптировать под текущие контракты и покрыть тестами.
-
-## Ограничения текущей реализации
-
-Текущая архитектура закрывает рабочий offline-сценарий, но у неё есть ограничения.
-
-### Резервный слой
-
-`FallbackLayer` сейчас является локальной MVP-реализацией.
-
-Он подходит для проверки подхода и добора рекомендаций, но для очень больших каталогов может потребовать отдельной
-оптимизации.
-
-### Serving
-
-`serving` сейчас не является отдельным онлайн-сервисом.
-
-Это Python-слой для чтения готового `lookup.parquet`.
-
-### Пакетный пересчёт
-
-Проект рассчитан на пакетное построение рекомендаций по временному окну.
-
-Он не делает мгновенный онлайн-пересчёт после каждого пользовательского события.
-
-### Retrieval
-
-В `retrieval` сейчас вместе лежат построение пар, агрегация, scoring и top-K.
-
-Если модуль станет слишком большим, его можно будет разделить глубже: например, на graph/scoring/ranking.
-
-## Архитектурные правила
-
-В проекте важно сохранять несколько правил.
-
-### Не смешивать веса слишком рано
-
-До `CoVisitationScorer` мы сохраняем факты:
-
-```text
-view_count
-click_count
-favorite_count
-to_cart_count
-unique_users
-unique_sessions
-```
-
-Финальный `score` появляется только в scoring-слое.
-
-Это защищает проект от двойного взвешивания и делает рекомендации объяснимыми.
-
-### Не переносить fallback внутрь retrieval
-
-`retrieval` строит поведенческие рекомендации.
-
-`business` добавляет резервные рекомендации.
-
-Эти слои должны оставаться разделёнными.
-
-### Не использовать архивный код в runtime
-
-Код из `docs/archive/code/` не должен импортироваться рабочими слоями.
-
-Если логика нужна, её нужно перенести в `src/`.
-
-### Не хардкодить пути
-
-Пути должны идти через конфиги и helper-функции.
-
-Ноутбуки, скрипты и модули не должны держать абсолютные пути к локальным данным.
-
-## Дальнейшее развитие
-
-Возможные направления развития:
-
-* определить политику версии Python;
-* оптимизировать fallback для больших каталогов;
-* выделить внутри `retrieval` отдельные подслои для graph, scoring и ranking;
-* добавить товарные эмбеддинги;
-* добавить отдельную модель ранжирования;
-* развить serving до полноценного сервиса, если появится такая задача.
-
-## Коротко
-
-Архитектура проекта строится вокруг простого правила:
-
-```text
-сначала сохраняем факты о поведении
-потом считаем оценку похожести
-потом выбираем рекомендации
-потом отдельно добавляем fallback
-потом сохраняем и читаем готовый результат
-```
-
-Такой подход делает проект проще для проверки, отладки и постепенного улучшения.
+* [`docs/README.md`](README.md) — карта документации;
+* [`data_contract.md`](data_contract.md) — контракты таблиц и границы ответственности;
+* [`incremental_update.md`](incremental_update.md) — incremental-режим;
+* [`evaluation_metrics.md`](evaluation_metrics.md) — offline-метрики качества;
+* [`../scripts/README.md`](../scripts/README.md) — пользовательские команды запуска;
+* [`../configs/README.md`](../configs/README.md) — настройки проекта.

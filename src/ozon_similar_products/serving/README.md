@@ -1,6 +1,6 @@
 # Получение готовых рекомендаций
 
-В этом модуле мы читаем уже построенные рекомендации и получаем список похожих товаров для конкретного `item_id`.
+В этом модуле читаются уже построенные рекомендации и возвращается список похожих товаров для конкретного `item_id`.
 
 К этому моменту конвейер уже всё посчитал: собрал события, построил пары товаров, рассчитал `score`, выбрал top-K,
 добавил резервные рекомендации и сохранил результат. Модуль `serving` не пересчитывает рекомендации. Он только открывает
@@ -31,10 +31,10 @@ item_id → similar_items_sku_list
 
 ## Основные файлы
 
-| Файл          | Что в нём находится                                     |
-|---------------|---------------------------------------------------------|
-| `__init__.py` | публичный импорт `SimilarItemsLookup`                   |
-| `lookup.py`   | чтение compact-рекомендаций и получение похожих товаров |
+| Файл                         | Что в нём находится                                     |
+|------------------------------|---------------------------------------------------------|
+| [`__init__.py`](__init__.py) | публичный импорт `SimilarItemsLookup`                   |
+| [`lookup.py`](lookup.py)     | чтение compact-рекомендаций и получение похожих товаров |
 
 ## Какой файл читает serving
 
@@ -61,7 +61,7 @@ item_id | similar_items_sku_list
 101     | [778, 120, 334, 902]
 ```
 
-Этот формат создаётся в модуле `output` из подробной таблицы рекомендаций.
+Этот формат создаётся в модуле [`output`](../output/README.md) из подробной таблицы рекомендаций.
 
 ## Почему используется `lookup.parquet`
 
@@ -171,7 +171,7 @@ lookup.get_similar_items(100, top_k=3)
 
 В манифесте путь к compact-рекомендациям может называться по-разному.
 
-Serving использует helper из `output.manifest`, который ищет путь по нескольким ключам:
+Serving использует helper из [`output.manifest`](../output/manifest.py), который ищет путь по нескольким ключам:
 
 ```text
 widget_recommendations_path
@@ -188,7 +188,7 @@ recommendations_path
 
 ## Где находится в проекте
 
-Serving-слой стоит после `output`.
+Serving-слой стоит после [`output`](../output/README.md).
 
 ```text
 pipeline
@@ -196,9 +196,9 @@ pipeline
 → serving
 ```
 
-`pipeline` строит рекомендации.
+[`pipeline`](../pipeline/README.md) строит рекомендации.
 
-`output` сохраняет их в `lookup.parquet`.
+[`output`](../output/README.md) сохраняет их в `lookup.parquet`.
 
 `serving` читает `lookup.parquet` и отдаёт похожие товары для конкретного товара.
 
@@ -241,13 +241,13 @@ pipeline
 
 Эти задачи находятся в других слоях:
 
-| Задача                  | Модуль       |
-|-------------------------|--------------|
-| построение рекомендаций | `retrieval`  |
-| резервные рекомендации  | `business`   |
-| полный запуск           | `pipeline`   |
-| сохранение результата   | `output`     |
-| проверка качества       | `evaluation` |
+| Задача                  | Модуль                                  |
+|-------------------------|-----------------------------------------|
+| построение рекомендаций | [`retrieval`](../retrieval/README.md)   |
+| резервные рекомендации  | [`business`](../business/README.md)     |
+| полный запуск           | [`pipeline`](../pipeline/README.md)     |
+| сохранение результата   | [`output`](../output/README.md)         |
+| проверка качества       | [`evaluation`](../evaluation/README.md) |
 
 ## Что менять осторожно
 
@@ -259,14 +259,15 @@ pipeline
 | поведение при неизвестном `item_id` | сейчас это безопасный пустой список                           |
 | загрузку файла в память             | для очень большого каталога может потребоваться другой подход |
 
-Если меняется compact-формат, нужно обновить `output`, `serving`, тесты и документацию по контрактам.
+Если меняется compact-формат, нужно обновить [`output`](../output/README.md), `serving`, тесты и документацию по
+контрактам.
 
 ## Быстрая проверка
 
 После запуска конвейера:
 
 ```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
 можно проверить serving так:
@@ -279,22 +280,22 @@ lookup = SimilarItemsLookup("outputs/latest/manifest.json")
 print(lookup.get_similar_items(100, top_k=10))
 ```
 
-Или посмотреть последние рекомендации через готовый скрипт:
+Или посмотреть последние рекомендации через готовую команду:
 
 ```bash
-uv run python scripts/preview_latest_recommendations.py
+uv run ozon-preview-recommendations
 ```
 
 ## Связанные документы
 
-| Документ                         | Что смотреть                             |
-|----------------------------------|------------------------------------------|
-| `../output/README.md`            | как создаётся `lookup.parquet`           |
-| `../pipeline/README.md`          | как публикуется `outputs/latest/`        |
-| `../retrieval/README.md`         | как строятся поведенческие рекомендации  |
-| `../business/README.md`          | как добавляются fallback-рекомендации    |
-| `../../../docs/data_contract.md` | контракт compact-таблицы                 |
-| `../../../scripts/README.md`     | команда просмотра последних рекомендаций |
+| Документ                                                           | Что смотреть                             |
+|--------------------------------------------------------------------|------------------------------------------|
+| [`../output/README.md`](../output/README.md)                       | как создаётся `lookup.parquet`           |
+| [`../pipeline/README.md`](../pipeline/README.md)                   | как публикуется `outputs/latest/`        |
+| [`../retrieval/README.md`](../retrieval/README.md)                 | как строятся поведенческие рекомендации  |
+| [`../business/README.md`](../business/README.md)                   | как добавляются fallback-рекомендации    |
+| [`../../../docs/data_contract.md`](../../../docs/data_contract.md) | контракт compact-таблицы                 |
+| [`../../../scripts/README.md`](../../../scripts/README.md)         | команда просмотра последних рекомендаций |
 
 ## Коротко
 
