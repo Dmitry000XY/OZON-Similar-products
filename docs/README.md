@@ -3,8 +3,8 @@
 Эта папка содержит подробные документы по проекту **OZON Similar Products**.
 
 Главный README в корне репозитория объясняет проект в целом: что он делает, как его запустить и где находятся основные
-части кода. Этот документ нужен как карта: он помогает быстро понять, куда идти за подробностями по разным аспектам
-проекта.
+части кода. Этот документ нужен как карта документации: он помогает быстро понять, куда идти за подробностями по разным
+частям проекта.
 
 ## С чего начать
 
@@ -14,36 +14,37 @@
 2. `architecture.md` — общая архитектура и путь данных от сырых событий до рекомендаций.
 3. `data_contract.md` — таблицы, поля, форматы и границы ответственности между слоями.
 4. `data_io.md` — подготовка локальных данных из исходных архивов.
-5. README внутри модулей `src/ozon_similar_products/` — подробности по отдельным частям кода.
+5. README внутри модулей `../src/ozon_similar_products/` — подробности по отдельным частям кода.
 
 ## Основные документы
 
-| Документ                     | Зачем читать                                                                             |
-|------------------------------|------------------------------------------------------------------------------------------|
-| `architecture.md`            | Чтобы понять, как устроен проект и из каких этапов состоит построение рекомендаций       |
-| `data_contract.md`           | Чтобы разобраться в таблицах, колонках, форматах и правилах передачи данных между слоями |
-| `data_io.md`                 | Чтобы подготовить локальные данные и понять, какие файлы ожидает проект                  |
-| `local_runner.md`            | Чтобы запустить проект локально и проверить результат на небольшом объёме данных         |
-| `item_popularity_builder.md` | Чтобы понять, как считается популярность товаров и статистика по действиям               |
-| `item_pair_builder.md`       | Чтобы понять, как строятся пары товаров внутри пользовательских сессий                   |
-| `aggregate_pairs.md`         | Чтобы понять, как пары товаров объединяются за выбранный период                          |
+| Документ                | Зачем читать                                                                             |
+|-------------------------|------------------------------------------------------------------------------------------|
+| `architecture.md`       | чтобы понять, как устроен проект и из каких этапов состоит построение рекомендаций       |
+| `data_contract.md`      | чтобы разобраться в таблицах, колонках, форматах и правилах передачи данных между слоями |
+| `data_io.md`            | чтобы подготовить локальные данные и понять, какие файлы ожидает проект                  |
+| `local_runner.md`       | чтобы запустить тяжёлый сценарий локально через self-hosted GitHub Actions runner        |
+| `evaluation_metrics.md` | чтобы понять, какие offline-метрики считаются и как они интерпретируются                 |
+| `incremental_update.md` | чтобы понять, как переиспользуются дневные артефакты в incremental-режиме                |
+| `project_roadmap.md`    | чтобы увидеть краткую дорожную карту проекта                                             |
+| `archive/README.md`     | чтобы понять статус старых исследовательских материалов и архивного кода                 |
 
 ## Документация по модулям
 
 Подробности по конкретным частям кода хранятся рядом с самими модулями.
 
-| Документ                                            | Что объясняет                                                          |
-|-----------------------------------------------------|------------------------------------------------------------------------|
-| `src/ozon_similar_products/data/README.md`          | чтение данных, схемы, валидация и базовые проверки                     |
-| `src/ozon_similar_products/preprocessing/README.md` | очистка событий и построение пользовательских сессий                   |
-| `src/ozon_similar_products/features/README.md`      | расчёт популярности товаров и вспомогательных статистик                |
-| `src/ozon_similar_products/retrieval/README.md`     | построение пар товаров, агрегация, расчёт похожести и выбор кандидатов |
-| `src/ozon_similar_products/business/README.md`      | резервные рекомендации и бизнес-правила качества                       |
-| `src/ozon_similar_products/evaluation/README.md`    | проверка качества рекомендаций на будущих действиях пользователей      |
-| `src/ozon_similar_products/pipeline/README.md`      | полный запуск конвейера обработки и связь между этапами                |
-| `src/ozon_similar_products/output/README.md`        | сохранение результатов, служебные файлы и структура выходных данных    |
-| `src/ozon_similar_products/serving/README.md`       | получение готового списка похожих товаров из сохранённого результата   |
-| `src/ozon_similar_products/diagnostics/README.md`   | проверки данных, исследовательские функции и повторяемая диагностика   |
+| Документ                                               | Что объясняет                                                          |
+|--------------------------------------------------------|------------------------------------------------------------------------|
+| `../src/ozon_similar_products/data/README.md`          | чтение данных, схемы, валидация и базовые проверки                     |
+| `../src/ozon_similar_products/preprocessing/README.md` | очистка событий и построение пользовательских сессий                   |
+| `../src/ozon_similar_products/features/README.md`      | расчёт популярности товаров и вспомогательных статистик                |
+| `../src/ozon_similar_products/retrieval/README.md`     | построение пар товаров, агрегация, расчёт похожести и выбор кандидатов |
+| `../src/ozon_similar_products/business/README.md`      | резервные рекомендации и бизнес-правила качества                       |
+| `../src/ozon_similar_products/evaluation/README.md`    | проверка качества рекомендаций на будущих действиях пользователей      |
+| `../src/ozon_similar_products/pipeline/README.md`      | полный запуск конвейера обработки и связь между этапами                |
+| `../src/ozon_similar_products/output/README.md`        | сохранение результатов, служебные файлы и структура выходных данных    |
+| `../src/ozon_similar_products/serving/README.md`       | получение готового списка похожих товаров из сохранённого результата   |
+| `../src/ozon_similar_products/diagnostics/README.md`   | проверки данных, исследовательские функции и повторяемая диагностика   |
 
 ## Куда идти за подробностями
 
@@ -53,7 +54,7 @@
 
 1. `../README.md`
 2. `data_io.md`
-3. `local_runner.md`
+3. `../scripts/README.md`
 
 Этих документов достаточно, чтобы подготовить данные, запустить построение рекомендаций и посмотреть результат.
 
@@ -63,7 +64,7 @@
 
 1. `architecture.md`
 2. `data_contract.md`
-3. `src/ozon_similar_products/pipeline/README.md`
+3. `../src/ozon_similar_products/pipeline/README.md`
 
 Эти документы объясняют, как данные проходят через проект, где появляются промежуточные таблицы и за что отвечает каждый
 слой.
@@ -74,8 +75,8 @@
 
 1. `data_io.md`
 2. `data_contract.md`
-3. `src/ozon_similar_products/data/README.md`
-4. `src/ozon_similar_products/preprocessing/README.md`
+3. `../src/ozon_similar_products/data/README.md`
+4. `../src/ozon_similar_products/preprocessing/README.md`
 
 Здесь описаны исходные данные, подготовка parquet-файлов, очистка событий и построение пользовательских сессий.
 
@@ -83,60 +84,132 @@
 
 Читайте:
 
-1. `item_pair_builder.md`
-2. `aggregate_pairs.md`
-3. `src/ozon_similar_products/retrieval/README.md`
-4. `src/ozon_similar_products/features/README.md`
+1. `../src/ozon_similar_products/preprocessing/README.md`
+2. `../src/ozon_similar_products/features/README.md`
+3. `../src/ozon_similar_products/retrieval/README.md`
 
-Эти документы объясняют, как из пользовательских сессий получаются пары товаров, как пары агрегируются и как считается
-похожесть.
+Эти документы объясняют, как из пользовательских событий получаются сессии, пары товаров, агрегированные связи и
+итоговая оценка похожести.
 
 ### Хочу понять резервные рекомендации
 
 Читайте:
 
-1. `src/ozon_similar_products/business/README.md`
-2. `src/ozon_similar_products/retrieval/README.md`
-3. `src/ozon_similar_products/output/README.md`
+1. `../src/ozon_similar_products/business/README.md`
+2. `../src/ozon_similar_products/retrieval/README.md`
+3. `../src/ozon_similar_products/output/README.md`
 
 Здесь описано, что происходит с товарами, которым не хватило поведенческих данных для обычных рекомендаций.
+
+### Хочу понять сохранение и чтение результата
+
+Читайте:
+
+1. `../src/ozon_similar_products/output/README.md`
+2. `../src/ozon_similar_products/serving/README.md`
+3. `data_contract.md`
+
+Эти документы объясняют, какие файлы появляются после запуска и как из них получить похожие товары для конкретного
+`item_id`.
 
 ### Хочу проверить качество рекомендаций
 
 Читайте:
 
-1. `src/ozon_similar_products/evaluation/README.md`
-2. `configs/evaluation.yaml`
-3. раздел про оценку качества в `../README.md`
+1. `../src/ozon_similar_products/evaluation/README.md`
+2. `evaluation_metrics.md`
+3. `../configs/README.md`
+4. раздел про оценку качества в `../README.md`
 
 Эти материалы объясняют, как проект проверяет рекомендации на будущих действиях пользователей и какие метрики
 используются.
+
+### Хочу подобрать параметры
+
+Читайте:
+
+1. `../configs/README.md`
+2. `../scripts/README.md`
+3. `../src/ozon_similar_products/evaluation/README.md`
+
+Там описаны конфиги, команды `run_tune.py` и `compare_tuning.py`, а также метрики, по которым сравниваются эксперименты.
+
+### Хочу понять incremental-режим
+
+Читайте:
+
+1. `incremental_update.md`
+2. `../src/ozon_similar_products/pipeline/README.md`
+3. `data_contract.md`
+
+Эти документы объясняют, какие дневные артефакты можно переиспользовать и как проект защищается от некорректного reuse.
+
+### Хочу использовать диагностику
+
+Читайте:
+
+1. `../src/ozon_similar_products/diagnostics/README.md`
+2. `../notebooks/README.md`
+3. `data_io.md`
+
+Диагностика помогает проверить схемы, пропуски, parquet-разделы, распределение действий и временные разрывы между
+событиями.
 
 ### Хочу изменить конкретный модуль
 
 Читайте README внутри нужного модуля:
 
 ```text
-src/ozon_similar_products/<module>/README.md
+../src/ozon_similar_products/<module>/README.md
 ```
 
 Например:
 
-* меняется чтение данных — `src/ozon_similar_products/data/README.md`;
-* меняется очистка событий или построение сессий — `src/ozon_similar_products/preprocessing/README.md`;
-* меняется расчёт похожести — `src/ozon_similar_products/retrieval/README.md`;
-* меняется сохранение результата — `src/ozon_similar_products/output/README.md`;
-* меняется проверка качества — `src/ozon_similar_products/evaluation/README.md`.
+* меняется чтение данных — `../src/ozon_similar_products/data/README.md`;
+* меняется очистка событий или построение сессий — `../src/ozon_similar_products/preprocessing/README.md`;
+* меняется расчёт похожести — `../src/ozon_similar_products/retrieval/README.md`;
+* меняется резервный слой — `../src/ozon_similar_products/business/README.md`;
+* меняется сохранение результата — `../src/ozon_similar_products/output/README.md`;
+* меняется проверка качества — `../src/ozon_similar_products/evaluation/README.md`.
 
 ### Хочу запустить готовый сценарий
 
 Читайте:
 
 1. `../README.md`
-2. `scripts/README.md`
-3. `configs/README.md`
+2. `../scripts/README.md`
+3. `../configs/README.md`
 
 Там описаны основные команды, настройки запуска и сценарии для локальной проверки.
+
+## Служебные и исторические материалы
+
+### `archive/`
+
+Папка `archive/` хранит старые исследовательские материалы и код, который не участвует в рабочем запуске проекта.
+
+На архивный код не нужно опираться при разработке новой логики. Если из архива нужен какой-то подход, его лучше
+перенести в нормальный модуль внутри `../src/ozon_similar_products/`, адаптировать под текущие контракты и покрыть
+тестами.
+
+Подробнее: `archive/README.md`.
+
+## Что не стоит дублировать
+
+Чтобы документация не расползалась и не устаревала, у каждого документа должна быть своя зона ответственности.
+
+| Где                     | Что писать                                                                  |
+|-------------------------|-----------------------------------------------------------------------------|
+| `../README.md`          | общее описание проекта, быстрый запуск, основные команды                    |
+| `docs/README.md`        | карта документации и порядок чтения                                         |
+| `docs/architecture.md`  | архитектурные решения и общий путь данных                                   |
+| `docs/data_contract.md` | строгие контракты таблиц и колонок                                          |
+| README внутри модулей   | назначение модуля, основные классы, входы, выходы и границы ответственности |
+| `../scripts/README.md`  | пользовательские команды и сценарии запуска                                 |
+| `../configs/README.md`  | настройки проекта и сценариев запуска                                       |
+
+Если информация относится к конкретному модулю, лучше писать её в README этого модуля, а из общих документов давать
+ссылку.
 
 ## Коротко
 
@@ -146,9 +219,9 @@ src/ozon_similar_products/<module>/README.md
 хочу понять таблицы → docs/data_contract.md
 хочу подготовить данные → docs/data_io.md
 хочу запустить проект локально → docs/local_runner.md
-хочу понять пары товаров → docs/item_pair_builder.md
-хочу понять агрегацию пар → docs/aggregate_pairs.md
-хочу понять популярность товаров → docs/item_popularity_builder.md
+хочу понять похожие товары → src/ozon_similar_products/retrieval/README.md
+хочу понять резервные рекомендации → src/ozon_similar_products/business/README.md
+хочу проверить качество → src/ozon_similar_products/evaluation/README.md
 хочу изменить модуль → README внутри нужного модуля
 хочу запустить команды → scripts/README.md
 хочу изменить настройки → configs/README.md

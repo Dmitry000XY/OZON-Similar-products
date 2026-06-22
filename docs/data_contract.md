@@ -1,21 +1,24 @@
-# Контракты данных для calibrated multi-channel MVP
+# Контракты данных
 
-Этот документ фиксирует актуальные контракты данных для MVP-пайплайна виджета «Похожие товары по интересам
-пользователей».
+Этот документ фиксирует основные таблицы проекта **OZON Similar Products** и правила передачи данных между слоями.
 
-Главное решение: **события не взвешиваются до scoring-слоя**.
+Здесь описаны именно контракты: какие поля ожидаются в таблицах, что они означают и какие инварианты нужно сохранять.
+Подробности о том, как конкретные модули строят эти таблицы, описаны в README соответствующих модулей.
 
-До `CoVisitationScorer` мы сохраняем факты:
+## Главное правило
+
+До `CoVisitationScorer` проект хранит факты о поведении пользователей.
 
 ```text
 raw events
 → clean events
 → sessions
-→ daily item pairs
+→ item popularity
+→ daily pair stats
 → pair aggregates
 ```
 
-А финальные веса, частотная калибровка и итоговый `score` появляются только здесь:
+Итоговый `score` появляется только после scoring-слоя:
 
 ```text
 pair aggregates
@@ -23,14 +26,31 @@ pair aggregates
 → pair scores
 ```
 
-Это нужно, чтобы не домножить один и тот же сигнал дважды и не смешать слишком рано разные типы поведения: `view`,
-`click`, `favorite`, `to_cart`.
+Это нужно, чтобы не смешивать разные типы действий слишком рано и не применять веса дважды.
 
----
+## Общий путь данных
 
-## 1. Почему в основном контракте нет `action_weight`, `pair_weight`, `weight_sum`, `weighted_events`
+```text
+raw events
+→ clean events
+→ sessions
+→ item popularity
+→ action type distribution
+→ daily item pairs
+→ daily pair stats
+→ pair aggregates
+→ pair scores
+→ recommendations
+→ enriched recommendations
+→ lookup output
+→ manifest
+```
 
-В старой версии baseline были поля:
+## Почему ранние таблицы хранят факты, а не score
+
+В ранних таблицах не должно быть финального `score`.
+
+Также в базовом контракте ранних слоёв не нужны поля вроде:
 
 ```text
 action_weight
@@ -39,19 +59,18 @@ weight_sum
 weighted_events
 ```
 
-Теперь они **не входят в обязательный контракт**.
-
-Причина: эти поля заставляют нас слишком рано превратить разные каналы поведения в одно число. После этого уже трудно
-понять, почему пара получила высокий вес:
+Причина: высокая связь между товарами может появиться по разным причинам.
 
 ```text
-300 просмотров?
-20 кликов?
-3 добавления в избранное?
-1 добавление в корзину?
+300 просмотров
+20 кликов
+3 добавления в избранное
+1 добавление в корзину
 ```
 
-Для калибровки нам важно хранить каналы отдельно:
+Если превратить это в один вес слишком рано, потом сложнее понять, почему рекомендация получила высокий результат.
+
+Поэтому до scoring-слоя мы отдельно храним каналы:
 
 ```text
 view_count
@@ -60,202 +79,128 @@ favorite_count
 to_cart_count
 ```
 
-Только scorer решает, сколько должен весить каждый канал.
+А финальные веса задаются и применяются только в `CoVisitationScorer`.
 
----
+## Raw events
 
-## 2. Raw events
+**Создаётся:** входные пользовательские данные.
 
-Исходные пользовательские события.
+**Назначение:** исходные события пользователей до очистки.
 
-Ожидаемый контракт:
+Ожидаемые колонки задаются в `configs/data.yaml`.
 
-```text
-user_id
-date
-timestamp
-action_type
-widget_name
-search_query
-item_id
-```
+| Поле           | Что означает                                          |
+|----------------|-------------------------------------------------------|
+| `user_id`      | идентификатор пользователя                            |
+| `date`         | дата события или дата parquet-раздела                 |
+| `timestamp`    | точное время события                                  |
+| `action_type`  | тип действия пользователя                             |
+| `widget_name`  | интерфейсный контекст действия                        |
+| `search_query` | поисковый запрос, если он применим                    |
+| `item_id`      | идентификатор товара, если действие связано с товаром |
 
-Смысл полей:
+Важное правило: raw events не используются напрямую для построения пар товаров. Сначала они проходят очистку.
 
-- `user_id` — идентификатор пользователя;
-- `date` — дата партиции или исходная дата события;
-- `timestamp` — время события;
-- `action_type` — тип действия пользователя;
-- `widget_name` — интерфейсный контекст действия;
-- `search_query` — поисковый запрос, если событие связано с поиском;
-- `item_id` — идентификатор товара, если действие связано с товаром.
+## Clean events
 
-Raw events не используются напрямую для pair building. Сначала они должны пройти `EventCleaner`.
+**Создаётся:** `EventCleaner`.
 
----
+**Назначение:** очищенная таблица товарных событий для построения пользовательских сессий.
 
-## 3. Clean events
+| Поле           | Что означает                    |
+|----------------|---------------------------------|
+| `user_id`      | идентификатор пользователя      |
+| `event_date`   | дата события после нормализации |
+| `timestamp`    | точное время события            |
+| `action_type`  | тип товарного действия          |
+| `item_id`      | идентификатор товара            |
+| `search_query` | поисковый запрос, если он есть  |
+| `widget_name`  | интерфейсный контекст действия  |
 
-Создаёт: `EventCleaner`.
+Важные правила:
 
-Актуальный обязательный контракт:
+* в таблице остаются только события, которые можно связать с товаром;
+* `action_type` сохраняется как канал поведения;
+* финальный `score` здесь не появляется;
+* бизнес-веса здесь не применяются.
 
-```text
-user_id
-event_date
-timestamp
-action_type
-item_id
-search_query
-widget_name
-```
+## Sessions
 
-Что делает `EventCleaner`:
+**Создаётся:** `SessionBuilder`.
 
-- проверяет наличие обязательных колонок в raw events;
-- приводит `timestamp` к нормальному datetime-типу;
-- создаёт `event_date`;
-- удаляет явные дубли;
-- оставляет товарные действия с непустым `item_id`;
-- сохраняет `action_type`, `widget_name`, `search_query`.
+**Назначение:** события, сгруппированные в пользовательские сессии.
 
-Что `EventCleaner` **не делает**:
+| Поле                 | Что означает               |
+|----------------------|----------------------------|
+| `user_id`            | идентификатор пользователя |
+| `session_index`      | индекс сессии пользователя |
+| `session_start_date` | дата начала сессии         |
+| `event_date`         | дата события               |
+| `timestamp`          | точное время события       |
+| `action_type`        | тип товарного действия     |
+| `item_id`            | идентификатор товара       |
 
-- не создаёт `action_weight`;
-- не применяет business weights;
-- не применяет inverse-frequency normalization;
-- не считает score;
-- не строит сессии;
-- не строит пары.
+Важные правила:
 
-Источник истины для силы события на этом этапе — это только `action_type`.
+* сессия задаёт контекст совместного появления товаров;
+* `action_type` сохраняется для построения пар;
+* сессия не содержит итоговую оценку похожести;
+* повторные действия одного товара внутри сессии ещё не обязаны быть схлопнуты.
 
----
+## Item popularity
 
-## 4. Sessions
+**Создаётся:** `ItemPopularityBuilder`.
 
-Создаёт: `SessionBuilder`.
+**Назначение:** фактическая популярность товаров за выбранное окно.
 
-Актуальный обязательный контракт:
+| Поле              | Что означает                           |
+|-------------------|----------------------------------------|
+| `item_id`         | идентификатор товара                   |
+| `events_count`    | общее число товарных событий по товару |
+| `unique_users`    | число уникальных пользователей         |
+| `views_count`     | число событий `view`                   |
+| `clicks_count`    | число событий `click`                  |
+| `favorites_count` | число событий `favorite`               |
+| `to_cart_count`   | число событий `to_cart`                |
 
-```text
-user_id
-session_id
-event_date
-timestamp
-action_type
-item_id
-```
+Важное правило: популярность товара — это фактическая статистика, а не итоговый score.
 
-Что делает `SessionBuilder`:
+Она может использоваться для нормализации, fallback-рекомендаций и диагностики.
 
-- получает `events_clean`;
-- сортирует события по `user_id` и `timestamp`;
-- считает временные разрывы между событиями;
-- создаёт `session_id`;
-- сохраняет `action_type` для downstream-логики;
-- отдаёт события внутри пользовательских сессий.
+## Action type distribution
 
-Что `SessionBuilder` **не делает**:
+**Создаётся:** `ItemPopularityBuilder`.
 
-- не создаёт `action_weight`;
-- не схлопывает повторные действия одного товара;
-- не выбирает strongest action для товара;
-- не строит пары;
-- не считает score.
+**Назначение:** распределение действий для частотной калибровки scoring.
 
-Сессия — это контекст. Веса не являются частью контракта сессий.
+| Поле                | Что означает                              |
+|---------------------|-------------------------------------------|
+| `action_type`       | тип действия                              |
+| `events_count`      | число событий этого типа                  |
+| `event_share`       | доля действия среди всех товарных событий |
+| `unique_users`      | число пользователей, совершивших действие |
+| `unique_items`      | число товаров, по которым было действие   |
+| `calibration_start` | начало периода калибровки                 |
+| `calibration_end`   | конец периода калибровки                  |
 
----
+Важное правило: эта таблица не меняет события. Она только даёт scorer-у статистику частоты действий.
 
-## 5. Item popularity
+## Daily item pairs
 
-Создаёт: `ItemPopularityBuilder`.
+**Создаётся:** `ItemPairBuilder`.
 
-Актуальный обязательный контракт:
+**Назначение:** направленные пары товаров внутри пользовательских сессий.
 
-```text
-item_id
-events_count
-unique_users
-views_count
-clicks_count
-favorites_count
-to_cart_count
-```
-
-Смысл полей:
-
-- `events_count` — общее число товарных событий по товару;
-- `unique_users` — число уникальных пользователей;
-- `views_count` — число `view`;
-- `clicks_count` — число `click`;
-- `favorites_count` — число `favorite`;
-- `to_cart_count` — число `to_cart`.
-
-Что не входит в обязательный контракт:
-
-```text
-weighted_events
-```
-
-Почему: в новой архитектуре item popularity — это факты, а не взвешенный score.
-
----
-
-## 6. Action type distribution for calibration
-
-Создаёт: `ItemPopularityBuilder` или отдельный calibration helper.
-
-Контракт:
-
-```text
-action_type
-events_count
-event_share
-unique_users
-unique_items
-calibration_start
-calibration_end
-```
-
-Этот артефакт нужен для `CoVisitationScorer`, чтобы посчитать частотную поправку:
-
-```text
-frequency_boost[action] = (reference_share / action_share) ^ beta
-```
-
-Важно: этот артефакт не меняет события. Он только сохраняет статистику для будущей калибровки.
-
----
-
-## 7. Daily item pairs
-
-Создаёт: `ItemPairBuilder`.
-
-Актуальный обязательный контракт:
-
-```text
-pair_date
-item_id
-similar_item_id
-session_id
-user_id
-source_action_type
-target_action_type
-signal_type
-```
-
-Смысл полей:
-
-- `pair_date` — дата пары;
-- `item_id` — исходный товар;
-- `similar_item_id` — товар-кандидат;
-- `session_id` — сессия, где возникла связь;
-- `user_id` — пользователь, создавший связь;
-- `source_action_type` — strongest action исходного товара внутри сессии;
-- `target_action_type` — strongest action товара-кандидата внутри сессии;
-- `signal_type` — канал сигнала пары.
+| Поле                 | Что означает                                        |
+|----------------------|-----------------------------------------------------|
+| `pair_date`          | дата пары                                           |
+| `item_id`            | исходный товар                                      |
+| `similar_item_id`    | товар-кандидат                                      |
+| `user_id`            | пользователь, у которого возникла связь             |
+| `session_index`      | индекс сессии пользователя                          |
+| `source_action_type` | самый сильный сигнал исходного товара внутри сессии |
+| `target_action_type` | самый сильный сигнал товара-кандидата внутри сессии |
+| `signal_type`        | канал сигнала пары                                  |
 
 Правило для `signal_type`:
 
@@ -272,230 +217,297 @@ B: to_cart
 C: view
 
 pairs:
-A -> B: signal_type = to_cart
-C -> B: signal_type = to_cart
-B -> A: signal_type = view
-B -> C: signal_type = view
+A → B: signal_type = to_cart
+C → B: signal_type = to_cart
+B → A: signal_type = view
+B → C: signal_type = view
 ```
 
-Что не входит в обязательный контракт:
+Важные правила:
+
+* пары направленные: `A → B` и `B → A` хранятся отдельно;
+* `signal_type` показывает канал связи пары;
+* финальный вес рекомендации здесь не считается.
+
+## Daily pair stats
+
+**Создаётся:** `ItemPairBuilder`.
+
+**Назначение:** компактные дневные статистики пар для последующей агрегации.
+
+Daily pair stats состоят из трёх частей:
 
 ```text
-pair_weight
+counts
+user_keys
+session_keys
 ```
 
-Почему: пары должны хранить факты и канал сигнала. Вес канала появляется только в scorer.
+### `counts`
 
----
+| Поле                      | Что означает                    |
+|---------------------------|---------------------------------|
+| `pair_date`               | дата пары                       |
+| `item_id`                 | исходный товар                  |
+| `similar_item_id`         | товар-кандидат                  |
+| `pair_count`              | число появлений пары            |
+| `view_count`              | число сигналов `view`           |
+| `click_count`             | число сигналов `click`          |
+| `favorite_count`          | число сигналов `favorite`       |
+| `to_cart_count`           | число сигналов `to_cart`        |
+| `weighted_pair_count`     | взвешенное число появлений пары |
+| `weighted_view_count`     | взвешенный счётчик `view`       |
+| `weighted_click_count`    | взвешенный счётчик `click`      |
+| `weighted_favorite_count` | взвешенный счётчик `favorite`   |
+| `weighted_to_cart_count`  | взвешенный счётчик `to_cart`    |
 
-## 8. Pair aggregates
-
-Создаёт: `PairAggregator`.
-
-Актуальный обязательный контракт:
+Сырые счётчики:
 
 ```text
-item_id
-similar_item_id
 pair_count
 view_count
 click_count
 favorite_count
 to_cart_count
-unique_users
-unique_sessions
-window_start
-window_end
 ```
 
-Смысл полей:
-
-- `pair_count` — сколько раз пара встретилась в rolling window;
-- `view_count` — сколько pair events пришли из `signal_type = view`;
-- `click_count` — сколько pair events пришли из `signal_type = click`;
-- `favorite_count` — сколько pair events пришли из `signal_type = favorite`;
-- `to_cart_count` — сколько pair events пришли из `signal_type = to_cart`;
-- `unique_users` — сколько уникальных пользователей создали пару;
-- `unique_sessions` — сколько уникальных `(user_id, session_id)` создали пару;
-- `window_start` — начало окна;
-- `window_end` — конец окна.
-
-Проверка качества:
+Взвешенные счётчики:
 
 ```text
-pair_count = view_count + click_count + favorite_count + to_cart_count
+weighted_pair_count
+weighted_view_count
+weighted_click_count
+weighted_favorite_count
+weighted_to_cart_count
 ```
 
-Что не входит в обязательный контракт:
+Важное правило: `weighted_*`-поля отражают технические поправки графа, например по расстоянию внутри сессии. Они не
+заменяют сырые фактические счётчики.
 
-```text
-weight_sum
-```
+### `user_keys`
 
-Почему: агрегатор не применяет веса. Он только считает факты.
+| Поле              | Что означает                  |
+|-------------------|-------------------------------|
+| `pair_date`       | дата пары                     |
+| `item_id`         | исходный товар                |
+| `similar_item_id` | товар-кандидат                |
+| `user_id`         | пользователь, создавший связь |
 
----
+Назначение: точный подсчёт уникальных пользователей для пары.
 
-## 9. Pair scores
+### `session_keys`
 
-Создаёт: `CoVisitationScorer`.
+| Поле              | Что означает                  |
+|-------------------|-------------------------------|
+| `pair_date`       | дата пары                     |
+| `item_id`         | исходный товар                |
+| `similar_item_id` | товар-кандидат                |
+| `user_id`         | пользователь, создавший связь |
+| `session_index`   | индекс сессии пользователя    |
 
-Актуальный обязательный контракт:
+Назначение: точный подсчёт уникальных сессий для пары.
 
-```text
-item_id
-similar_item_id
-score
-pair_count
-view_count
-click_count
-favorite_count
-to_cart_count
-unique_users
-unique_sessions
-```
+## Pair aggregates
 
-Scorer впервые применяет:
+**Создаётся:** `PairAggregator`.
 
-- `business_weights`;
-- `action_shares_used_for_calibration`;
-- `beta`;
-- `max_frequency_boost`;
-- thresholds;
-- итоговую формулу `score`.
+**Назначение:** агрегированная статистика пары товаров за выбранное временное окно.
 
-Основной strong-MVP метод:
+| Поле                      | Что означает                                  |
+|---------------------------|-----------------------------------------------|
+| `item_id`                 | исходный товар                                |
+| `similar_item_id`         | товар-кандидат                                |
+| `pair_count`              | сколько раз пара встретилась в окне           |
+| `view_count`              | сколько сигналов пришло из `view`             |
+| `click_count`             | сколько сигналов пришло из `click`            |
+| `favorite_count`          | сколько сигналов пришло из `favorite`         |
+| `to_cart_count`           | сколько сигналов пришло из `to_cart`          |
+| `weighted_pair_count`     | взвешенный общий счётчик пары                 |
+| `weighted_view_count`     | взвешенный счётчик `view`                     |
+| `weighted_click_count`    | взвешенный счётчик `click`                    |
+| `weighted_favorite_count` | взвешенный счётчик `favorite`                 |
+| `weighted_to_cart_count`  | взвешенный счётчик `to_cart`                  |
+| `unique_users`            | сколько уникальных пользователей создали пару |
+| `unique_sessions`         | сколько уникальных сессий создали пару        |
+| `window_start`            | начало окна                                   |
+| `window_end`              | конец окна                                    |
 
-```text
-calibrated_multichannel
-```
+Важное правило: pair aggregates — это ещё не рекомендации, а факты о связи двух товаров.
 
-Пример формулы:
+## Pair scores
 
-```text
-score =
-    w_view     * log1p(view_count)
-  + w_click    * log1p(click_count)
-  + w_favorite * log1p(favorite_count)
-  + w_to_cart  * log1p(to_cart_count)
-```
+**Создаётся:** `CoVisitationScorer`.
 
-Где `w_*` — effective weights после частотной калибровки.
+**Назначение:** пары товаров с рассчитанной оценкой похожести.
 
----
+| Поле                      | Что означает                    |
+|---------------------------|---------------------------------|
+| `item_id`                 | исходный товар                  |
+| `similar_item_id`         | товар-кандидат                  |
+| `score`                   | итоговая оценка похожести       |
+| `pair_count`              | число появлений пары            |
+| `view_count`              | число сигналов `view`           |
+| `click_count`             | число сигналов `click`          |
+| `favorite_count`          | число сигналов `favorite`       |
+| `to_cart_count`           | число сигналов `to_cart`        |
+| `weighted_pair_count`     | взвешенное число появлений пары |
+| `weighted_view_count`     | взвешенный счётчик `view`       |
+| `weighted_click_count`    | взвешенный счётчик `click`      |
+| `weighted_favorite_count` | взвешенный счётчик `favorite`   |
+| `weighted_to_cart_count`  | взвешенный счётчик `to_cart`    |
+| `unique_users`            | число уникальных пользователей  |
+| `unique_sessions`         | число уникальных сессий         |
 
-## 10. Recommendations
+Важное правило: это первый слой, где появляется итоговый `score`.
 
-Создаёт: `TopKSelector`.
+## Recommendations
+
+**Создаётся:** `TopKSelector`, затем может дополняться `FallbackLayer`.
+
+**Назначение:** ранжированный список похожих товаров.
 
 Минимальный контракт:
 
+| Поле              | Что означает                                 |
+|-------------------|----------------------------------------------|
+| `item_id`         | исходный товар                               |
+| `similar_item_id` | рекомендованный похожий товар                |
+| `score`           | итоговая оценка похожести                    |
+| `rank`            | позиция кандидата внутри списка рекомендаций |
+| `source`          | источник рекомендации                        |
+
+Примеры `source`:
+
 ```text
-item_id
-similar_item_id
-score
-rank
-source
+behavioral
+fallback_category_type_popular
+fallback_category_popular
+fallback_type_popular
+fallback_brand_popular
+fallback_global_popular
 ```
 
-Смысл полей:
-
-- `item_id` — исходный товар;
-- `similar_item_id` — рекомендованный похожий товар;
-- `score` — итоговый score от scorer-а;
-- `rank` — позиция кандидата внутри списка рекомендаций;
-- `source` — источник рекомендации, например `behavioral`.
-
-Для ручной проверки можно сохранять расширенную таблицу:
+Допустимые диагностические поля:
 
 ```text
-item_id
-similar_item_id
-score
-rank
-source
 pair_count
 view_count
 click_count
 favorite_count
 to_cart_count
+weighted_pair_count
+weighted_view_count
+weighted_click_count
+weighted_favorite_count
+weighted_to_cart_count
 unique_users
 unique_sessions
+base_score
 ```
 
-Но compact output для lookup должен оставаться простым.
+Важное правило: минимальный контракт рекомендаций остаётся простым, даже если для отладки сохраняются дополнительные
+поля.
 
----
+## Enriched recommendations
 
-## 11. Final lookup output
+**Создаётся:** `RecommendationWriter`.
 
-Создаёт: `RecommendationWriter`.
+**Назначение:** человекочитаемая версия рекомендаций с названиями товаров.
 
-Контракт для виджета/lookup:
+| Поле                | Что означает                  |
+|---------------------|-------------------------------|
+| `item_id`           | исходный товар                |
+| `item_name`         | название исходного товара     |
+| `similar_item_id`   | рекомендованный похожий товар |
+| `similar_item_name` | название похожего товара      |
+| `rank`              | позиция кандидата             |
+| `score`             | итоговая оценка похожести     |
+| `source`            | источник рекомендации         |
+
+Важное правило: этот формат нужен для ручной проверки и не является основным форматом для serving.
+
+## Lookup output
+
+**Создаётся:** `RecommendationWriter`.
+
+**Назначение:** компактный формат для быстрого получения похожих товаров.
+
+| Поле                     | Что означает                                      |
+|--------------------------|---------------------------------------------------|
+| `item_id`                | исходный товар                                    |
+| `similar_items_sku_list` | список похожих товаров, отсортированный по `rank` |
+
+Пример:
 
 ```text
-item_id
-similar_items_sku_list
+item_id | similar_items_sku_list
+100     | [205, 317, 918]
 ```
 
-Где `similar_items_sku_list` — список `similar_item_id`, отсортированный по `rank`.
+Важные правила:
 
-Lookup не пересчитывает pipeline. Он только читает готовый опубликованный результат.
+* lookup output не хранит `score`;
+* список внутри `similar_items_sku_list` уже отсортирован;
+* этот формат читает `SimilarItemsLookup`.
 
----
+## Manifest
 
-## 12. Итоговая граница ответственности
+**Создаётся:** `RecommendationWriter`.
+
+**Назначение:** описание запуска и путей к результатам.
+
+Типовые поля:
+
+| Поле               | Что означает                                      |
+|--------------------|---------------------------------------------------|
+| `run_id`           | идентификатор запуска                             |
+| `generated_at`     | время создания результата                         |
+| `train_until_date` | конец train-окна                                  |
+| `lookback_days`    | размер окна в днях                                |
+| `window_start`     | начало окна                                       |
+| `window_end`       | конец окна                                        |
+| `update_strategy`  | стратегия обновления                              |
+| `score_method`     | метод расчёта score                               |
+| `top_k`            | число рекомендаций на товар                       |
+| `calibration_used` | использовалась ли калибровка                      |
+| `fallback_enabled` | был ли включён fallback                           |
+| `paths`            | пути к сохранённым файлам                         |
+| `rows`             | количество строк по ключевым артефактам           |
+| `incremental`      | информация о переиспользовании дневных артефактов |
+
+Важное правило: манифест нужен, чтобы связать результат с параметрами запуска и файлами на диске.
+
+## Инварианты контрактов
+
+Эти правила должны сохраняться при изменении проекта.
+
+### До scoring нет финального score
 
 ```text
-EventCleaner:
-  cleaning + action_type preserved
-
-SessionBuilder:
-  session_id + action_type preserved
-
-ItemPopularityBuilder:
-  item counts + action_type distribution for calibration
-
-ItemPairBuilder:
-  strongest item signal + directed pairs + signal_type
-
-PairAggregator:
-  channel counts only
-
-CoVisitationScorer:
-  calibrated weights + final score
-
-TopKSelector:
-  top-K by ready score
-
-RecommendationWriter:
-  detailed output + compact lookup + manifest
-
-SimilarItemsLookup:
-  read ready recommendations
+clean events
+sessions
+item popularity
+daily item pairs
+daily pair stats
+pair aggregates
 ```
 
-Ключевое правило:
+Эти таблицы не должны содержать итоговый `score`.
+
+### Каналы поведения хранятся отдельно
 
 ```text
-До CoVisitationScorer нет весов.
-В CoVisitationScorer появляется один финальный score.
+view
+click
+favorite
+to_cart
 ```
 
-Именно это защищает проект от double weighting и делает рекомендации объяснимыми.
+Не нужно заранее смешивать их в один универсальный вес.
 
----
+### `signal_priority` — не business weight
 
-## 13. Где живёт порядок силы action_type для ItemPairBuilder
-
-`ItemPairBuilder` должен знать, какое действие сильнее внутри одной сессии, чтобы схлопнуть повторный товар в один
-item-level signal. Это не вес и не score, а только порядок категорий:
-
-```text
-view < click < favorite < to_cart
-```
-
-Порядок задаётся в config:
+Порядок силы действий внутри сессии задаётся отдельно:
 
 ```yaml
 item_pair_builder:
@@ -506,16 +518,50 @@ item_pair_builder:
     to_cart: 4
 ```
 
-Список допустимых товарных действий задаётся отдельно:
+Эти числа нужны только для выбора strongest signal внутри сессии.
+
+Финальные веса задаются отдельно:
 
 ```yaml
-events:
-  item_action_types:
-    - view
-    - click
-    - favorite
-    - to_cart
+scoring:
+  business_weights:
+    view: 1.0
+    click: 3.0
+    favorite: 6.0
+    to_cart: 8.0
 ```
 
-Важно: эти числа не являются business weights. Они используются только для выбора strongest signal внутри одной сессии.
-Финальные веса остаются в `scoring.business_weights` и применяются только в `CoVisitationScorer`.
+И применяются только в `CoVisitationScorer`.
+
+### Lookup output остаётся compact-форматом
+
+Публичный compact-контракт:
+
+```text
+item_id
+similar_items_sku_list
+```
+
+Если этот формат меняется, нужно обновить `output`, `serving`, тесты и документацию.
+
+## Связанные документы
+
+| Документ                                               | Что смотреть                               |
+|--------------------------------------------------------|--------------------------------------------|
+| `architecture.md`                                      | общий путь данных и границы слоёв          |
+| `data_io.md`                                           | подготовка исходных данных                 |
+| `../src/ozon_similar_products/data/README.md`          | чтение данных, схемы и валидация           |
+| `../src/ozon_similar_products/preprocessing/README.md` | clean events и sessions                    |
+| `../src/ozon_similar_products/features/README.md`      | item popularity и action type distribution |
+| `../src/ozon_similar_products/retrieval/README.md`     | пары, агрегация, scoring и top-K           |
+| `../src/ozon_similar_products/business/README.md`      | fallback-рекомендации                      |
+| `../src/ozon_similar_products/output/README.md`        | detailed, enriched, lookup и manifest      |
+| `../src/ozon_similar_products/serving/README.md`       | чтение готового lookup-результата          |
+
+## Коротко
+
+Этот документ — справочник контрактов данных.
+
+Он описывает таблицы, поля и главные инварианты между слоями.
+
+Подробности о том, как каждый модуль строит свои таблицы, находятся в README соответствующих модулей.
