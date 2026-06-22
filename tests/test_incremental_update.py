@@ -277,6 +277,66 @@ def _write_raw_events(project_root: Path) -> None:
     )
 
 
+def _write_multi_day_raw_events(project_root: Path) -> None:
+    events_root = project_root / "data" / "raw" / "user_actions" / "user_actions"
+    _write_action_partition(
+        events_root,
+        "2026-05-10",
+        "view",
+        [
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 1,
+            },
+        ],
+    )
+    _write_action_partition(
+        events_root,
+        "2026-05-10",
+        "click",
+        [
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:05:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 10,
+            },
+        ],
+    )
+    _write_action_partition(
+        events_root,
+        "2026-05-11",
+        "view",
+        [
+            {
+                "user_id": 2,
+                "timestamp": "2026-05-11 11:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 2,
+            },
+        ],
+    )
+    _write_action_partition(
+        events_root,
+        "2026-05-11",
+        "click",
+        [
+            {
+                "user_id": 2,
+                "timestamp": "2026-05-11 11:05:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 20,
+            },
+        ],
+    )
+
+
 def _write_products(project_root: Path) -> None:
     products_dir = project_root / "data" / "raw" / "product_information" / "product_information"
     products_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +364,26 @@ def _run_pipeline_fixture(
     return run_pipeline.run_pipeline(
         train_until_date="2026-05-10",
         lookback_days=1,
+        config_path=config_path,
+        run_id=run_id,
+        update_latest=False,
+    )
+
+
+def _run_pipeline_with_window(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        update_strategy: str,
+        run_id: str,
+        train_until_date: str,
+        lookback_days: int,
+) -> run_pipeline.PipelineRunResult:
+    config_path = _write_project_configs(tmp_path, update_strategy=update_strategy)
+    monkeypatch.setattr(run_pipeline, "PROJECT_ROOT", tmp_path)
+    return run_pipeline.run_pipeline(
+        train_until_date=train_until_date,
+        lookback_days=lookback_days,
         config_path=config_path,
         run_id=run_id,
         update_latest=False,
@@ -575,6 +655,72 @@ def test_pair_artifact_with_matching_processed_through_date_is_reused(
 
     assert incremental.manifest["incremental"]["reused_pair_stat_days"] == ["2026-05-10"]
     assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == []
+
+
+def test_multi_day_full_build_finalizes_pair_stats_to_window_end(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    _write_multi_day_raw_events(tmp_path)
+    _write_products(tmp_path)
+
+    _run_pipeline_with_window(
+        monkeypatch,
+        tmp_path,
+        update_strategy="full_retrain",
+        run_id="full-two-day",
+        train_until_date="2026-05-11",
+        lookback_days=2,
+    )
+
+    config = yaml.safe_load((tmp_path / "configs" / "baseline.yaml").read_text(encoding="utf-8"))
+    manifests_dir = tmp_path / "data" / "processed" / "item_pairs" / "manifests"
+    for partition_date in ("2026-05-10", "2026-05-11"):
+        manifest = run_pipeline.read_manifest(manifests_dir / f"date={partition_date}.json")
+        assert manifest is not None
+        assert manifest.metadata["processed_through_date"] == "2026-05-11"
+        assert manifest.fingerprint == run_pipeline._daily_pair_stats_fingerprint(
+            config=config,
+            action_types=["view", "click", "favorite", "to_cart"],
+            partition_date=partition_date,
+            processed_through_date="2026-05-11",
+        )
+
+
+def test_multi_day_incremental_rerun_reuses_finalized_pair_stats(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    _write_multi_day_raw_events(tmp_path)
+    _write_products(tmp_path)
+
+    full = _run_pipeline_with_window(
+        monkeypatch,
+        tmp_path,
+        update_strategy="full_retrain",
+        run_id="full-two-day",
+        train_until_date="2026-05-11",
+        lookback_days=2,
+    )
+    incremental = _run_pipeline_with_window(
+        monkeypatch,
+        tmp_path,
+        update_strategy="incremental",
+        run_id="incremental-two-day",
+        train_until_date="2026-05-11",
+        lookback_days=2,
+    )
+
+    full_recommendations = pl.read_parquet(full.detailed_recommendations_path)
+    incremental_recommendations = pl.read_parquet(incremental.detailed_recommendations_path)
+    assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == []
+    assert incremental.manifest["incremental"]["reused_pair_stat_days"] == [
+        "2026-05-10",
+        "2026-05-11",
+    ]
+    assert incremental_recommendations.sort(["item_id", "rank"]).equals(
+        full_recommendations.sort(["item_id", "rank"])
+    )
 
 
 def test_update_strategy_is_not_tuned() -> None:

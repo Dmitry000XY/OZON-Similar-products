@@ -85,6 +85,30 @@ processed-through date differs from the requested cutoff, the artifact is marked
 invalid and the current implementation rebuilds conservatively from
 `window_start`.
 
+During streaming, a daily pair-stat manifest records the actual cutoff processed
+so far. That means `date=2026-05-10` may first be written with
+`processed_through_date=2026-05-10` while the window is still in progress. Only
+after the full window build succeeds do we finalize the manifest to the full
+`window_end`, without rewriting the parquet data.
+
+Example:
+
+```text
+Window: 2026-05-10..2026-05-11
+
+During processing:
+  date=2026-05-10 may first be written with processed_through_date=2026-05-10.
+
+After successful window completion:
+  date=2026-05-10 manifest is finalized to processed_through_date=2026-05-11.
+
+Backfill ending 2026-05-10:
+  cannot reuse artifact finalized through 2026-05-11.
+```
+
+This keeps earlier backfills safe from future leakage while still allowing
+multi-day reruns on the same cutoff to reuse all finalized pair stats.
+
 ## Why Not Global Cleanup
 
 The incremental path must not depend on deleting `data/processed`. Global cleanup

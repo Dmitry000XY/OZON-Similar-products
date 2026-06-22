@@ -284,6 +284,52 @@ def _daily_pair_stats_fingerprint(
     )
 
 
+def _finalize_daily_pair_stat_manifests(
+        *,
+        count_paths: Sequence[Path],
+        daily_pairs_output_dir: Path,
+        config: Mapping[str, Any],
+        action_types: Sequence[str],
+        processed_through_date: str,
+) -> None:
+    """Finalize built pair-stat manifests to the full processed cutoff."""
+
+    for count_path in count_paths:
+        partition_date = count_path.stem.removeprefix("date=")
+        manifest_path = _daily_pair_stats_manifest_path(
+            daily_pairs_output_dir,
+            partition_date,
+        )
+        manifest = read_manifest(manifest_path)
+        if manifest is None:
+            raise FileNotFoundError(
+                "missing daily pair-stat manifest for built artifact "
+                f"date={partition_date}: {manifest_path}"
+            )
+
+        write_manifest(
+            manifest_path,
+            ArtifactManifest(
+                artifact_type=manifest.artifact_type,
+                date=manifest.date,
+                fingerprint=_daily_pair_stats_fingerprint(
+                    config=config,
+                    action_types=action_types,
+                    partition_date=manifest.date,
+                    processed_through_date=processed_through_date,
+                ),
+                paths=dict(manifest.paths),
+                rows=dict(manifest.rows),
+                metadata={
+                    **manifest.metadata,
+                    "processed_through_date": processed_through_date,
+                },
+                schema_version=manifest.schema_version,
+                created_at=manifest.created_at,
+            ),
+        )
+
+
 def _partition_frame_by_date_column(
         frame: pl.DataFrame,
         date_column: str,
@@ -1697,6 +1743,13 @@ def run_pipeline(
             action_types=action_types,
             session_batch_size=session_batch_size,
             session_user_buckets=session_user_buckets,
+        )
+        _finalize_daily_pair_stat_manifests(
+            count_paths=daily_pair_stats_paths.count_paths,
+            daily_pairs_output_dir=daily_pairs_output_dir,
+            config=config,
+            action_types=action_types,
+            processed_through_date=window_end,
         )
         rebuilt_pair_stat_days = [
             path.stem.removeprefix("date=")
