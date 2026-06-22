@@ -13,7 +13,7 @@
 1. `../README.md` — общее описание проекта и быстрый запуск.
 2. `architecture.md` — общая архитектура и путь данных от сырых событий до рекомендаций.
 3. `data_contract.md` — таблицы, поля, форматы и границы ответственности между слоями.
-4. `data_io.md` — подготовка локальных данных из исходных архивов.
+4. `../scripts/README.md` — пользовательские команды: подготовка данных, запуск конвейера и просмотр результата.
 5. README внутри модулей `../src/ozon_similar_products/` — подробности по отдельным частям кода.
 
 ## Основные документы
@@ -22,7 +22,6 @@
 |-------------------------|------------------------------------------------------------------------------------------|
 | `architecture.md`       | чтобы понять, как устроен проект и из каких этапов состоит построение рекомендаций       |
 | `data_contract.md`      | чтобы разобраться в таблицах, колонках, форматах и правилах передачи данных между слоями |
-| `data_io.md`            | чтобы подготовить локальные данные и понять, какие файлы ожидает проект                  |
 | `local_runner.md`       | чтобы запустить тяжёлый сценарий локально через self-hosted GitHub Actions runner        |
 | `evaluation_metrics.md` | чтобы понять, какие offline-метрики считаются и как они интерпретируются                 |
 | `incremental_update.md` | чтобы понять, как переиспользуются дневные артефакты в incremental-режиме                |
@@ -53,8 +52,8 @@
 Читайте:
 
 1. `../README.md`
-2. `data_io.md`
-3. `../scripts/README.md`
+2. `../scripts/README.md`
+3. `../configs/README.md`
 
 Этих документов достаточно, чтобы подготовить данные, запустить построение рекомендаций и посмотреть результат.
 
@@ -73,12 +72,12 @@
 
 Читайте:
 
-1. `data_io.md`
+1. `../src/ozon_similar_products/data/README.md`
 2. `data_contract.md`
-3. `../src/ozon_similar_products/data/README.md`
-4. `../src/ozon_similar_products/preprocessing/README.md`
+3. `../src/ozon_similar_products/preprocessing/README.md`
+4. `../src/ozon_similar_products/diagnostics/README.md`
 
-Здесь описаны исходные данные, подготовка parquet-файлов, очистка событий и построение пользовательских сессий.
+Здесь описаны подготовка parquet-файлов, чтение данных, контракты колонок, очистка событий и базовая диагностика.
 
 ### Хочу понять построение похожих товаров
 
@@ -150,7 +149,7 @@
 
 1. `../src/ozon_similar_products/diagnostics/README.md`
 2. `../notebooks/README.md`
-3. `data_io.md`
+3. `../src/ozon_similar_products/data/README.md`
 
 Диагностика помогает проверить схемы, пропуски, parquet-разделы, распределение действий и временные разрывы между
 событиями.
@@ -217,7 +216,8 @@
 хочу понять проект целиком → README.md в корне
 хочу понять архитектуру → docs/architecture.md
 хочу понять таблицы → docs/data_contract.md
-хочу подготовить данные → docs/data_io.md
+хочу подготовить данные → scripts/README.md
+хочу понять слой данных → src/ozon_similar_products/data/README.md
 хочу запустить проект локально → docs/local_runner.md
 хочу понять похожие товары → src/ozon_similar_products/retrieval/README.md
 хочу понять резервные рекомендации → src/ozon_similar_products/business/README.md

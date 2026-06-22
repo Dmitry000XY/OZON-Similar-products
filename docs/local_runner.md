@@ -1,47 +1,68 @@
-# Local heavy GitHub Actions runner
+# Локальный runner для тяжёлых запусков
 
-Этот документ описывает локальный self-hosted runner для тяжелого ML pipeline проекта
-`Dmitry000XY/OZON-Similar-products`.
+Этот документ описывает локальный self-hosted runner для тяжёлых запусков проекта **OZON Similar Products**.
 
-## Схема
+Runner нужен для сценариев, которые неудобно выполнять на обычных GitHub-hosted runners: например, когда нужны локальные данные, больше ресурсов или длительный запуск полного конвейера.
 
-`GitHub button -> self-hosted runner -> Docker -> pipeline -> safe artifact`
+## Общая схема
 
-Workflow называется `Local heavy pipeline` и запускается только вручную через
-`workflow_dispatch`. Автоматических триггеров `push`, `pull_request` и
-`pull_request_target` нет: публичный репозиторий не должен автоматически выполнять
-чужой код на локальном ПК.
+```text
+GitHub Actions
+→ self-hosted runner на локальном компьютере
+→ Docker
+→ pipeline / evaluation / lookup
+→ безопасный artifact bundle
+```
 
-## Безопасность
+Workflow называется:
 
-Применены ограничения:
+```text
+Local heavy pipeline
+```
 
-- runner label: `ozon-local-heavy`;
-- runner name: `ozon-local-heavy-runner`;
-- workflow runner selector: `[self-hosted, windows, x64, ozon-local-heavy]`;
-- manual-only запуск через `Actions -> Local heavy pipeline -> Run workflow`;
-- allowlist по `github.actor`;
-- один heavy run за раз через `concurrency`;
-- raw data монтируются read-only;
-- Docker socket/pipe не монтируется;
-- `privileged` не используется;
-- весь диск `C:\` или `D:\` не монтируется;
-- artifact bundle пропускает `data/raw`, `data/processed`, parquet и файлы больше
-  100 MB.
+Он запускается только вручную через `workflow_dispatch`.
+
+Автоматических запусков на `push`, `pull_request` и `pull_request_target` нет. Это важно: публичный репозиторий не должен автоматически выполнять чужой код на локальном компьютере.
+
+## Когда использовать этот runner
+
+Локальный runner нужен, когда:
+
+* нужно прогнать тяжёлый конвейер на локальных данных;
+* обычный GitHub-hosted runner не подходит по ресурсам;
+* данные нельзя или неудобно загружать в GitHub Actions;
+* нужно получить безопасный компактный artifact без raw- и processed-данных.
+
+Для обычной разработки, unit-тестов и лёгких проверок этот runner не нужен.
+
+## Ограничения безопасности
+
+Для runner применяются ограничения:
+
+* label runner: `ozon-local-heavy`;
+* имя runner: `ozon-local-heavy-runner`;
+* selector workflow: `[self-hosted, windows, x64, ozon-local-heavy]`;
+* запуск только вручную через `Actions → Local heavy pipeline → Run workflow`;
+* allowlist по `github.actor`;
+* только один тяжёлый запуск одновременно через `concurrency`;
+* raw-данные монтируются только на чтение;
+* Docker socket/pipe не монтируется;
+* `privileged` не используется;
+* весь диск `C:\` или `D:\` не монтируется;
+* artifact bundle не включает `data/raw`, `data/processed`, parquet-файлы и файлы больше 100 MB.
 
 Текущий allowlist:
 
-- `Dmitry000XY` - owner/admin;
-- `SvinPepe` - Никита Сычев, GitHub collaborator with write access;
-- `arinaortenberg` - Арина, GitHub collaborator with write access;
-- `AccidentalGenius13` - Виктор, GitHub collaborator with write access;
-- `svinpepe2` - дополнительный командный аккаунт;
-- `IDhide` - Илья, GitHub collaborator with write access;
-- `Sleepy-Fenrir` - Семен Брыкин, GitHub collaborator with write access.
+* `Dmitry000XY` — owner/admin;
+* `SvinPepe` — Никита Сычев, GitHub collaborator with write access;
+* `arinaortenberg` — Арина, GitHub collaborator with write access;
+* `AccidentalGenius13` — Виктор, GitHub collaborator with write access;
+* `svinpepe2` — дополнительный командный аккаунт;
+* `Sleepy-Fenrir` — Семён Брыкин, GitHub collaborator with write access.
 
-## Runtime paths
+## Локальная рабочая папка
 
-Основная runtime-папка:
+Основная папка runner:
 
 ```text
 D:\ozon-local-runner\
@@ -56,38 +77,62 @@ D:\ozon-local-runner\
   actions-runner\
 ```
 
-Код остается в git checkout. Тяжелые данные, processed artifacts, outputs и
-runner binaries лежат вне репозитория.
+Код проекта остаётся в git checkout.
 
-## Подготовка данных
+Тяжёлые данные, processed-артефакты, outputs, artifacts, logs и файлы самого runner лежат вне репозитория.
 
-Raw data должны лежать здесь:
+Так мы не смешиваем рабочую копию кода и тяжёлые локальные данные.
+
+## Данные для запуска
+
+Raw-данные должны лежать здесь:
 
 ```text
 D:\ozon-local-runner\data\raw\user_actions
 D:\ozon-local-runner\data\raw\product_information
 ```
 
-Если копирование raw data невозможно или долгое, допустимо временно использовать
-существующий `data/raw` из рабочей копии как read-only mount, но outputs и processed
-должны оставаться в `D:\ozon-local-runner`.
+Если скопировать raw-данные в эту папку долго или временно невозможно, можно использовать существующий `data/raw` из рабочей копии как read-only mount.
+
+Но outputs и processed-данные всё равно должны оставаться здесь:
+
+```text
+D:\ozon-local-runner\
+```
 
 ## Регистрация runner
 
-1. В GitHub откройте repository settings:
-   `Settings -> Actions -> Runners -> New self-hosted runner -> Windows x64`.
-2. Скопируйте registration token. Не сохраняйте его в Git, docs или логи.
+1. В GitHub откройте настройки репозитория:
+
+```text
+Settings → Actions → Runners → New self-hosted runner → Windows x64
+```
+
+2. Скопируйте registration token.
+
+Не сохраняйте token в Git, документацию или логи.
+
 3. В PowerShell из корня репозитория выполните:
 
 ```powershell
 .\tools\local-runner\windows\register-ozon-runner.ps1 -AsService
 ```
 
-Скрипт скачивает официальный runner из `github.com/actions/runner`, регистрирует
-его с именем `ozon-local-heavy-runner` и label `ozon-local-heavy`, а при `-AsService`
-устанавливает Windows Service.
+Скрипт скачивает официальный runner из `github.com/actions/runner`, регистрирует его с именем:
 
-Для автономной настройки можно скопировать token кнопкой GitHub UI и выполнить:
+```text
+ozon-local-heavy-runner
+```
+
+и label:
+
+```text
+ozon-local-heavy
+```
+
+Если передан `-AsService`, runner устанавливается как Windows Service.
+
+Для автономной настройки можно скопировать token через GitHub UI и выполнить:
 
 ```powershell
 .\tools\local-runner\windows\register-ozon-runner.ps1 -AsService -TokenFromClipboard
@@ -95,50 +140,62 @@ D:\ozon-local-runner\data\raw\product_information
 
 Token читается из локального clipboard, не печатается и не сохраняется.
 
-Если runner уже зарегистрирован с таким именем, скрипт остановится. Используйте
-`-Replace` только после ручной проверки, что это именно нужный runner.
+Если runner уже зарегистрирован с таким именем, скрипт остановится. Используйте `-Replace` только после ручной проверки, что это именно нужный runner.
 
 ## Управление runner
 
-PowerShell scripts можно запускать из терминала. Сначала перейдите в корень
-репозитория:
+PowerShell-скрипты нужно запускать из корня репозитория.
+
+Пример:
 
 ```powershell
 cd D:\ITMO\Hackathons\OZON-Similar-products
 ```
 
-Статус:
+Проверить статус:
 
 ```powershell
 .\tools\local-runner\windows\status-ozon-runner.ps1
 ```
 
-Запуск service:
+Запустить service:
 
 ```powershell
 .\tools\local-runner\windows\start-ozon-runner.ps1
 ```
 
-Остановка service:
+Остановить service:
 
 ```powershell
 .\tools\local-runner\windows\stop-ozon-runner.ps1
 ```
 
-Если runner не установлен как Windows Service, `start-ozon-runner.ps1` запускает
-официальный `run.cmd` как скрытый foreground process, сохраняет PID в
-`D:\ozon-local-runner\actions-runner\.runner-pid` и пишет runner log в
-`D:\ozon-local-runner\logs\runner-foreground.log`.
+Если runner не установлен как Windows Service, `start-ozon-runner.ps1` запускает официальный `run.cmd` как скрытый foreground process.
 
-Скрипты ищут service только по `ozon-local-heavy-runner`; если service нет, они
-управляют только процессами из `D:\ozon-local-runner\actions-runner`. Docker Desktop
-и чужие services не трогаются.
+В этом случае скрипт:
 
-### Двойной клик из Проводника
+* сохраняет PID в `D:\ozon-local-runner\actions-runner\.runner-pid`;
+* пишет лог runner в `D:\ozon-local-runner\logs\runner-foreground.log`.
 
-Не запускайте `.ps1` через `Run with PowerShell`: окно может закрыться сразу после
-ошибки или успешного завершения. Для обычного запуска двойным кликом используйте
-`.cmd` wrappers:
+Скрипты ищут service только по имени:
+
+```text
+ozon-local-heavy-runner
+```
+
+Если такого service нет, они управляют только процессами из:
+
+```text
+D:\ozon-local-runner\actions-runner
+```
+
+Docker Desktop и чужие services эти скрипты не трогают.
+
+## Запуск через двойной клик
+
+Не запускайте `.ps1` через `Run with PowerShell`: окно может закрыться сразу после ошибки или успешного завершения.
+
+Для запуска двойным кликом используйте `.cmd` wrappers:
 
 ```text
 tools\local-runner\windows\start-ozon-runner.cmd
@@ -147,34 +204,46 @@ tools\local-runner\windows\status-ozon-runner.cmd
 tools\local-runner\windows\register-ozon-runner.cmd
 ```
 
-Каждый `.cmd` запускает соответствующий `.ps1` с `-ExecutionPolicy Bypass`, показывает
-вывод, пишет отдельный лог в `D:\ozon-local-runner\logs\` и в конце делает `pause`,
-чтобы окно не закрылось.
+Каждый `.cmd`:
 
-Как понять, что runner запущен:
+* запускает соответствующий `.ps1` с `-ExecutionPolicy Bypass`;
+* показывает вывод;
+* пишет отдельный лог в `D:\ozon-local-runner\logs\`;
+* в конце делает `pause`, чтобы окно не закрылось.
 
-- `status-ozon-runner.cmd` показывает `LocallyOnline=True`;
-- есть `Runner.Listener` process или Windows Service в состоянии `Running`;
-- в логе есть строка `Listening for Jobs`;
-- в GitHub `Settings -> Actions -> Runners` runner отображается как `Idle` или `Busy`.
+## Как понять, что runner работает
 
-### Tray monitor
+Runner запущен, если выполняются признаки:
 
-Можно запустить lightweight tray monitor без сторонних зависимостей:
+* `status-ozon-runner.cmd` показывает `LocallyOnline=True`;
+* есть процесс `Runner.Listener` или Windows Service в состоянии `Running`;
+* в логе есть строка `Listening for Jobs`;
+* в GitHub `Settings → Actions → Runners` runner отображается как `Idle` или `Busy`.
+
+## Tray monitor
+
+Можно запустить лёгкий tray monitor без сторонних зависимостей:
 
 ```text
 tools\local-runner\windows\tray-ozon-runner.cmd
 ```
 
-Он использует PowerShell + Windows Forms `NotifyIcon`. Tooltip показывает
-`Ozon runner: running/stopped`, а меню содержит:
+Он использует PowerShell + Windows Forms `NotifyIcon`.
 
-- `Start runner`;
-- `Stop runner`;
-- `Status`;
-- `Open logs folder`;
-- `Open GitHub Actions`;
-- `Exit tray monitor`.
+Tooltip показывает:
+
+```text
+Ozon runner: running/stopped
+```
+
+Меню содержит:
+
+* `Start runner`;
+* `Stop runner`;
+* `Status`;
+* `Open logs folder`;
+* `Open GitHub Actions`;
+* `Exit tray monitor`.
 
 Если tray monitor не нужен, достаточно `.cmd` wrappers и `status-ozon-runner.cmd`.
 
@@ -185,21 +254,23 @@ tools\local-runner\windows\tray-ozon-runner.cmd
 1. Откройте `Actions`.
 2. Выберите `Local heavy pipeline`.
 3. Нажмите `Run workflow`.
-4. В branch dropdown выберите нужную branch/PR branch.
-5. Укажите параметры.
+4. В branch dropdown выберите нужную branch или PR branch.
+5. Укажите параметры запуска.
 
 Параметры:
 
-- `run_mode`: `pipeline`, `lookup`, `evaluation` или `full`;
-- `train_until_date`: конец окна, например `2024-04-30`;
-- `lookback_days`: размер окна, для smoke test используйте `1`;
-- `top_k`: top K для pipeline config override и preview;
-- `config_path`: по умолчанию `configs/baseline.yaml`;
-- `upload_artifact`: загружать безопасный artifact bundle.
+| Параметр           | Что означает                                                 |
+| ------------------ | ------------------------------------------------------------ |
+| `run_mode`         | режим запуска: `pipeline`, `lookup`, `evaluation` или `full` |
+| `train_until_date` | конец train-окна, например `2024-04-30`                      |
+| `lookback_days`    | размер окна; для smoke test используйте `1`                  |
+| `top_k`            | top-K для pipeline config override и preview                 |
+| `config_path`      | путь к конфигу; по умолчанию `configs/baseline.yaml`         |
+| `upload_artifact`  | загружать ли безопасный artifact bundle                      |
 
 ## Docker
 
-Базовый запуск использует:
+Базовый запуск использует Docker Compose:
 
 ```powershell
 docker compose -p ozon-local-heavy -f docker-compose.yml -f docker-compose.local-runner.yml run --rm pipeline ...
@@ -207,101 +278,115 @@ docker compose -p ozon-local-heavy -f docker-compose.yml -f docker-compose.local
 
 `docker-compose.local-runner.yml` монтирует:
 
-- `D:/ozon-local-runner/data/raw` -> `/app/data/raw:ro`;
-- `D:/ozon-local-runner/data/processed` -> `/app/data/processed`;
-- `D:/ozon-local-runner/outputs` -> `/app/outputs`;
-- `D:/ozon-local-runner/artifacts` -> `/app/artifacts`.
+| Локальный путь                        | Путь внутри контейнера |
+| ------------------------------------- | ---------------------- |
+| `D:/ozon-local-runner/data/raw`       | `/app/data/raw:ro`     |
+| `D:/ozon-local-runner/data/processed` | `/app/data/processed`  |
+| `D:/ozon-local-runner/outputs`        | `/app/outputs`         |
+| `D:/ozon-local-runner/artifacts`      | `/app/artifacts`       |
 
-Не используйте:
+Не используйте без отдельного решения:
 
-- `docker system prune`;
-- `docker volume prune`;
-- `docker compose down -v`;
-- удаление чужих images/containers/volumes без отдельного подтверждения.
+```text
+docker system prune
+docker volume prune
+docker compose down -v
+```
 
-## Outputs и artifact
+Также не удаляйте чужие images, containers и volumes без отдельного подтверждения.
 
-Локальные outputs:
+## Outputs и artifact bundle
+
+Локальные outputs сохраняются здесь:
 
 ```text
 D:\ozon-local-runner\outputs
 ```
 
-GitHub artifact получает только компактный bundle:
+В GitHub artifact попадает только компактный bundle:
 
-- `manifest.json` workflow bundle;
-- `outputs/latest/manifest.json`;
-- `outputs/demo/preview_recommendations.csv`;
-- `outputs/demo/preview_recommendations.json`;
-- `outputs/demo/preview_metadata.json`;
-- `outputs/evaluation/README.txt`, если evaluation script отсутствует;
-- logs;
-- file index.
+* `manifest.json` workflow bundle;
+* `outputs/latest/manifest.json`;
+* `outputs/demo/preview_recommendations.csv`;
+* `outputs/demo/preview_recommendations.json`;
+* `outputs/demo/preview_metadata.json`;
+* `outputs/evaluation/README.txt`, если evaluation script отсутствует;
+* logs;
+* file index.
 
-Raw data, processed data, parquet и файлы больше 100 MB не загружаются.
+В GitHub artifact не попадают:
 
-## Troubleshooting
+* raw-данные;
+* processed-данные;
+* parquet-файлы;
+* файлы больше 100 MB.
 
-Runner offline:
+## Если что-то пошло не так
 
-- запустите `status-ozon-runner.ps1`;
-- проверьте service status;
-- проверьте GitHub `Settings -> Actions -> Runners`;
-- проверьте label `ozon-local-heavy`.
+### Runner offline
 
-Docker not running:
-
-- откройте Docker Desktop;
-- проверьте `docker info`;
-- не переустанавливайте Docker без отдельного решения.
-
-Data path missing:
-
-- проверьте `D:\ozon-local-runner\data\raw\user_actions`;
-- проверьте `D:\ozon-local-runner\data\raw\product_information`;
-- raw mount должен быть read-only.
-
-OOM:
-
-- сначала запускайте `lookback_days=1`;
-- проверьте Docker Desktop/WSL memory;
-- не добавляйте `mem_limit` в compose service.
-
-Artifact empty:
-
-- проверьте `outputs/latest/manifest.json`;
-- проверьте `outputs/demo`;
-- проверьте logs step `Build safe artifact bundle`.
-
-Workflow button not visible:
-
-- workflow должен быть в default branch `main`;
-- Actions должны быть включены в репозитории.
-
-Branch not visible:
-
-- branch должна быть pushed в GitHub;
-- workflow выбирается из `main`, а branch для запуска выбирается в dropdown.
-
-Branch protection мешает merge:
-
-- зафиксируйте текущие settings;
-- временно ослабьте только нужное правило;
-- после merge верните исходное состояние.
-
-Docker path problems:
-
-- используйте forward slash в compose для Windows paths: `D:/ozon-local-runner/...`;
-- не монтируйте весь диск.
-
-## Удаление runner
-
-Для полного удаления runner сначала остановите service:
+Проверьте:
 
 ```powershell
-.\tools\local-runner\windows\stop-ozon-runner.ps1
+.\tools\local-runner\windows\status-ozon-runner.ps1
 ```
 
-Затем в `D:\ozon-local-runner\actions-runner` выполните официальный `config.cmd remove`
-с remove token из GitHub UI. Не удаляйте `D:\ozon-local-runner\data` и Docker volumes
-без отдельного подтверждения.
+Затем проверьте:
+
+* состояние Windows Service;
+* GitHub `Settings → Actions → Runners`;
+* label `ozon-local-heavy`.
+
+### Docker не запущен
+
+Проверьте:
+
+```powershell
+docker info
+```
+
+Также убедитесь, что открыт Docker Desktop.
+
+Не переустанавливайте Docker без отдельного решения.
+
+### Не найден путь к данным
+
+Проверьте, что существует папка:
+
+```text
+D:\ozon-local-runner\data\raw\user_actions
+```
+
+И справочник товаров:
+
+```text
+D:\ozon-local-runner\data\raw\product_information
+```
+
+### Artifact слишком большой
+
+Проверьте, что bundle не включает:
+
+```text
+data/raw
+data/processed
+*.parquet
+```
+
+и файлы больше 100 MB.
+
+## Коротко
+
+Локальный runner нужен только для тяжёлых запусков.
+
+Он запускается вручную, использует отдельную локальную папку `D:\ozon-local-runner\`, монтирует raw-данные только на чтение и загружает в GitHub только безопасный компактный artifact bundle.
+
+Главные правила:
+
+```text
+не запускать чужой код автоматически
+не монтировать весь диск
+не монтировать Docker socket/pipe
+не загружать raw/processed/parquet в artifact
+не использовать prune-команды без отдельного решения
+```

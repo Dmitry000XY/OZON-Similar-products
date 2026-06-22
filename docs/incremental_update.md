@@ -1,26 +1,63 @@
-# Incremental daily artifact update
+# Инкрементальный режим
 
-The pipeline supports two execution strategies:
+Этот документ описывает, как мы переиспользуем дневные артефакты при повторных запусках конвейера.
+
+Обычный безопасный режим — `full_retrain`. Инкрементальный режим в конфиге называется `incremental`. Он нужен, чтобы не
+пересобирать заново те части train-окна, которые уже были корректно построены и не изменились.
+
+## Стратегии запуска
+
+В конфиге есть настройка:
 
 ```yaml
 pipeline:
   update_strategy: full_retrain  # full_retrain | incremental
 ```
 
-`full_retrain` is the default and remains the correctness fallback. It rebuilds
-the train window daily artifacts, then runs the existing bucketed aggregation,
-scoring, top-K, fallback, and output path.
+Поддерживаются два режима:
 
-`incremental` reuses valid daily artifacts when their manifests and fingerprints
-match the current stage configuration. If an artifact is missing or invalid, the
-current implementation rebuilds conservatively from the rolling window start.
-That is intentionally less aggressive than partial replay, but it preserves
-cross-midnight session correctness while still making repeat scoring/config runs
-fast and stable when daily artifacts are valid.
+```text
+full_retrain
+incremental
+```
 
-## Daily Artifacts
+### `full_retrain`
 
-The reusable daily layers are:
+`full_retrain` — режим по умолчанию.
+
+Он заново строит дневные артефакты train-окна, а затем запускает обычные этапы:
+
+```text
+агрегация пар
+→ scoring
+→ top-K
+→ fallback
+→ сохранение результата
+```
+
+Этот режим проще и безопаснее. Его лучше использовать при разработке, проверке новой логики и в ситуациях, когда есть
+сомнения в старых артефактах.
+
+### `incremental`
+
+`incremental` пытается переиспользовать уже построенные дневные артефакты.
+
+Но мы не доверяем файлу только потому, что он лежит на диске. Для переиспользования должны совпасть:
+
+```text
+manifest
+fingerprint
+required files
+```
+
+То есть должны быть на месте манифест, совпадающий `fingerprint` и все обязательные файлы.
+
+Если артефакт отсутствует или не проходит проверку, текущая реализация перестраивает расчёт от начала скользящего окна.
+Это осторожнее, чем частичный пересчёт с середины окна, зато безопаснее для сессий, которые переходят через границу дня.
+
+## Какие артефакты можно переиспользовать
+
+Переиспользуются дневные артефакты:
 
 ```text
 data/processed/events_clean/date=YYYY-MM-DD.parquet
@@ -31,124 +68,329 @@ data/processed/item_pairs/user_keys/date=YYYY-MM-DD.parquet
 data/processed/item_pairs/session_keys/date=YYYY-MM-DD.parquet
 ```
 
-Each layer has a JSON sidecar manifest under `manifests/date=YYYY-MM-DD.json`.
-Manifests record the artifact type, date, schema version, fingerprint, relative
-paths, row counts, and metadata such as `processed_through_date` for daily pair
-stats.
-
-## Fingerprints
-
-Artifacts are not reused just because files exist. Reuse requires a matching
-manifest fingerprint and all required files.
-
-Clean event fingerprints include the clean stage schema, date, and event action
-types. Session state fingerprints include the clean fingerprint plus session
-builder settings such as timeout, max items per session, and user bucket count.
-Daily pair stat fingerprints include session state semantics, item-pair builder
-settings, graph distance decay settings, and the processed-through date used to
-build the artifact.
-
-Scoring, top-K, fallback, and graph time decay settings do not invalidate daily
-clean/session/pair artifacts. Time decay is applied during rolling aggregation,
-and scoring-only changes are handled after daily pair reuse.
-
-## Raw Input Identity
-
-Clean-event reuse is guarded by both stage configuration and raw input identity.
-For each `date=YYYY-MM-DD`, the manifest fingerprint includes the contributing
-raw parquet file identities: relative path, file size, and modification time.
-
-That means a raw correction, replacement, or newly arrived late file for an
-already processed day invalidates the clean artifact even when the config is
-unchanged. Because session-state and daily pair-stat fingerprints include the
-clean-event fingerprint, the invalidation flows downstream automatically and the
-incremental run rebuilds the affected day conservatively.
-
-## Pair Stat Idempotency
-
-Daily pair stats are written with a per-run idempotency rule:
+У каждого такого слоя рядом есть JSON-манифест:
 
 ```text
-first write for date D in the current run:
-  overwrite existing stale artifacts for D
-
-second or later write for date D in the same run:
-  merge with the already written artifact for D
+manifests/date=YYYY-MM-DD.json
 ```
 
-This prevents repeated full retrains on the same self-hosted runner from
-double-counting old pair stats, while preserving cross-midnight sessions that can
-produce pair stats for an earlier session-start date later in the same run. In
-those cases the artifact date / `pair_date` can be earlier than the
-`processed_through_date` recorded in the manifest.
-
-## Cutoff-Aware Pair Stat Reuse
-
-Daily pair stats are cutoff-aware. A `date=D` artifact may be written while the
-streaming session builder is processing a later day because cross-midnight
-sessions can emit pairs whose `pair_date` is less than the current
-`processed_through_date`. Reusing that artifact for a backfill ending at `D`
-would leak future-day events into an earlier training cutoff.
-
-To avoid that leakage, incremental reuse requires the daily pair stat
-manifest's `metadata.processed_through_date` and fingerprint to match the
-current window end. If the manifest is missing this metadata, or if the stored
-processed-through date differs from the requested cutoff, the artifact is marked
-invalid and the current implementation rebuilds conservatively from
-`window_start`.
-
-During streaming, a daily pair-stat manifest records the actual cutoff processed
-so far. That means `date=2026-05-10` may first be written with
-`processed_through_date=2026-05-10` while the window is still in progress. Only
-after the full window build succeeds do we finalize the manifest to the full
-`window_end`, without rewriting the parquet data.
-
-Example:
+Манифест хранит:
 
 ```text
-Window: 2026-05-10..2026-05-11
-
-During processing:
-  date=2026-05-10 may first be written with processed_through_date=2026-05-10.
-
-After successful window completion:
-  date=2026-05-10 manifest is finalized to processed_through_date=2026-05-11.
-
-Backfill ending 2026-05-10:
-  cannot reuse artifact finalized through 2026-05-11.
+artifact_type
+date
+schema_version
+fingerprint
+paths
+rows
+metadata
 ```
 
-This keeps earlier backfills safe from future leakage while still allowing
-multi-day reruns on the same cutoff to reuse all finalized pair stats.
+Для дневных статистик пар в `metadata` дополнительно сохраняется поле:
 
-## Why Not Global Cleanup
+```text
+processed_through_date
+```
 
-The incremental path must not depend on deleting `data/processed`. Global cleanup
-would hide stale-artifact bugs and remove the main benefit of daily reuse.
-Instead, stale artifacts are overwritten locally when a date is rebuilt, and
-valid artifacts are reused only through manifest validation.
+Оно показывает, до какой даты был обработан поток, когда артефакт был записан.
 
-## Why Not Delta Subtraction
+## Fingerprint
 
-Rolling pair aggregates are rebuilt by scanning the compact daily pair stats for
-the requested window. The pipeline does not subtract expired aggregate days from
-old aggregate tables because `unique_users` and `unique_sessions` cannot be
-safely subtracted without key-level state.
+`fingerprint` — это отпечаток артефакта.
 
-## Session Boundaries
+Он нужен, чтобы понять, можно ли переиспользовать старый файл в текущем запуске.
 
-The streaming session builder carries active session tails across days. The
-session state artifacts persist those active tails and per-user max session
-indices after each processed day. This preserves the production-like daily
-boundary model without re-enabling heavy `sessions_dir` materialization as the
-default.
+Артефакт считается пригодным только если:
 
-If any clean, session state, or pair stat artifact is invalid, the current
-implementation rebuilds from `window_start`. Future work can use persisted state
-to resume from the earliest safe affected date, but only if it can prove
-cross-midnight pair stats for earlier session-start dates remain correct.
+* манифест найден;
+* `fingerprint` совпадает с текущими настройками;
+* все обязательные файлы существуют;
+* схема и параметры соответствующего этапа не изменились.
 
-## Tuning
+Если хотя бы одно условие не выполнено, артефакт перестраивается.
 
-`pipeline.update_strategy` is config-only. It is not part of tuning search
-spaces or objective selection.
+## Что входит в fingerprint
+
+Для разных слоёв `fingerprint` строится из разных частей.
+
+### Очищенные события
+
+Для `events_clean` учитываются:
+
+* версия схемы clean-слоя;
+* дата;
+* типы действий, которые участвуют в обработке;
+* исходные parquet-файлы за эту дату.
+
+Для исходных файлов учитываются:
+
+```text
+relative path
+file size
+modification time
+```
+
+Если за уже обработанный день пришёл новый файл, файл заменили или поправили raw-данные, артефакт с очищенными событиями
+становится невалидным даже при тех же настройках.
+
+### Состояние сессий
+
+Для `session_state` учитываются отпечаток очищенных событий и настройки построения сессий:
+
+```text
+session timeout
+max items per session
+user bucket count
+```
+
+Если изменилась очистка событий или настройки сессий, состояние сессий тоже нельзя переиспользовать.
+
+### Дневные статистики пар
+
+Для дневных статистик пар учитываются:
+
+* состояние сессий;
+* настройки `ItemPairBuilder`;
+* настройки затухания по расстоянию внутри графа;
+* дата, до которой был обработан поток;
+* `processed_through_date`.
+
+Если меняется логика построения пар, старые дневные статистики нельзя переиспользовать.
+
+## Что не инвалидирует дневные артефакты
+
+Не все изменения требуют пересборки clean/session/pair-артефактов.
+
+Дневные артефакты не нужно пересобирать, если поменялись только:
+
+```text
+scoring settings
+top-K settings
+fallback settings
+graph time decay settings
+```
+
+Причина: scoring, top-K и fallback работают уже после дневных статистик пар.
+
+Затухание по времени применяется во время агрегации за окно, а не при записи дневных пар. Поэтому изменение таких
+настроек можно проверять быстрее: переиспользовать готовые train-артефакты и пересчитать только поздние этапы.
+
+## Идентичность исходных данных
+
+Для очищенных событий мы проверяем не только настройки этапа, но и исходные parquet-файлы.
+
+Для каждого `date=YYYY-MM-DD` в `fingerprint` входят:
+
+```text
+relative path
+file size
+modification time
+```
+
+Если raw-файл за день изменился, соответствующий clean-артефакт становится невалидным.
+
+Дальше это распространяется по цепочке:
+
+```text
+изменился raw-файл
+→ невалидны очищенные события
+→ невалидно состояние сессий
+→ невалидны дневные статистики пар
+```
+
+Так мы защищаемся от ситуации, когда данные изменились, а конвейер случайно использовал старую обработку.
+
+## Идемпотентность записи дневных статистик пар
+
+Дневные статистики пар пишутся с правилом идемпотентности внутри одного запуска.
+
+```text
+первый write для date D в текущем запуске:
+  перезаписать старые артефакты за D
+
+второй и следующий write для date D в текущем запуске:
+  объединить с уже записанным артефактом за D
+```
+
+Это нужно по двум причинам.
+
+Первая: повторный полный пересчёт на том же runner не должен удваивать старые pair stats.
+
+Вторая: при потоковой обработке сессии могут переходить через границу дня. Например, пользователь начал сессию вечером
+10 мая и продолжил утром 11 мая. Тогда часть пар может относиться к `pair_date=2026-05-10`, хотя фактически они
+появились при обработке 11 мая.
+
+## Проверка границы окна
+
+Дневные статистики пар зависят от конца train-окна.
+
+Артефакт за `date=D` мог быть записан, когда обработка уже дошла до более позднего дня. Из-за сессий, переходящих через
+полночь, в таком артефакте могут быть пары, которые стали известны только после `D`.
+
+Если потом использовать этот артефакт для пересчёта, который заканчивается ровно на `D`, получится утечка будущих
+событий в более раннее train-окно.
+
+Поэтому для переиспользования дневных pair stats проверяются:
+
+```text
+metadata.processed_through_date
+fingerprint
+current window end
+```
+
+Если `processed_through_date` отсутствует или не совпадает с текущим концом окна, артефакт считается невалидным.
+
+В таком случае текущая реализация перестраивает расчёт от `window_start`.
+
+## Пример с концом окна
+
+Окно:
+
+```text
+2026-05-10 ... 2026-05-11
+```
+
+Во время обработки:
+
+```text
+date=2026-05-10 может быть записан с processed_through_date=2026-05-10
+```
+
+После успешного завершения всего окна:
+
+```text
+манифест date=2026-05-10 финализируется до processed_through_date=2026-05-11
+```
+
+Если потом запускается пересчёт за прошлый период, который заканчивается 10 мая:
+
+```text
+window_end = 2026-05-10
+```
+
+то нельзя переиспользовать артефакт за 10 мая, который был финализирован через 11 мая.
+
+Так мы не допускаем утечки будущих событий в более ранний train cutoff.
+
+## Почему мы не чистим всё глобально
+
+Инкрементальный режим не должен зависеть от удаления всей папки:
+
+```text
+data/processed/
+```
+
+Глобальная очистка скрывала бы ошибки переиспользования и убирала бы главную пользу incremental-подхода.
+
+Вместо этого мы делаем так:
+
+* валидные артефакты переиспользуем только через проверку манифеста;
+* невалидные артефакты перестраиваем локально;
+* устаревшие файлы перезаписываем при пересборке конкретной даты.
+
+Так проще найти ошибку в `fingerprint` или `manifest`, если переиспользование работает неправильно.
+
+## Почему мы не вычитаем старые агрегаты
+
+Агрегация пар за скользящее окно строится сканированием компактных дневных pair stats.
+
+Мы не берём старую агрегированную таблицу и не вычитаем из неё дни, которые выпали из окна.
+
+Причина: `unique_users` и `unique_sessions` нельзя безопасно вычесть без состояния на уровне ключей.
+
+Пример:
+
+```text
+пользователь встретился в паре A → B в двух разных днях
+```
+
+Если один день выпал из окна, нельзя просто уменьшить `unique_users` на 1. Этот пользователь мог остаться в другом дне
+окна.
+
+Поэтому безопасный подход такой:
+
+```text
+daily pair stats за окно
+→ новая rolling aggregation
+```
+
+## Границы сессий
+
+Потоковый `SessionBuilder` переносит активные хвосты сессий между днями.
+
+Для этого сохраняются артефакты состояния:
+
+```text
+active_sessions
+max_session_indices
+```
+
+Это нужно, чтобы не ломать сессии на границе дат.
+
+При этом мы не возвращаем тяжёлое сохранение всех sessions как режим по умолчанию. Для incremental-логики достаточно
+хранить состояние, которое нужно для корректного продолжения обработки.
+
+## Что происходит при невалидном артефакте
+
+Если невалиден хотя бы один из ключевых дневных артефактов:
+
+```text
+events_clean
+session_state
+daily pair stats
+```
+
+текущая реализация перестраивает расчёт от `window_start`.
+
+В будущем можно сделать более точное восстановление от самой ранней безопасной даты. Но это можно делать только если мы
+сможем гарантировать корректность cross-midnight pair stats для более ранних `session_start_date`.
+
+Пока более безопасное поведение — консервативная пересборка окна.
+
+## Инкрементальный режим и подбор параметров
+
+`pipeline.update_strategy` — это настройка запуска, а не параметр подбора.
+
+Его не нужно включать в search space и objective selection.
+
+Для подбора scoring, top-K и fallback-параметров лучше переиспользовать готовые train-артефакты и пересчитывать только
+scoring/output-часть.
+
+## Когда использовать `incremental`
+
+Режим `incremental` полезен, когда:
+
+* raw-данные за старые дни не менялись;
+* настройки очистки, сессий и построения пар не менялись;
+* нужно быстро повторить запуск на том же train-окне;
+* нужно пересчитать scoring, top-K, fallback или output без повторной подготовки дневных артефактов.
+
+## Когда лучше использовать `full_retrain`
+
+Режим `full_retrain` лучше использовать, когда:
+
+* менялась логика очистки событий;
+* менялись настройки сессий;
+* менялась логика построения пар;
+* менялись raw-данные за уже обработанные дни;
+* есть сомнения в корректности старых манифестов;
+* нужно проверить поведение с нуля.
+
+## Коротко
+
+`incremental` переиспользует только те дневные артефакты, у которых совпали манифест, `fingerprint` и обязательные
+файлы.
+
+Если переиспользование небезопасно, конвейер перестраивает расчёт от начала окна.
+
+Главные правила:
+
+```text
+не доверяем файлу без manifest
+не доверяем manifest без matching fingerprint
+не переиспользуем pair stats с неправильной границей окна
+не чистим data/processed глобально ради incremental
+не вычитаем unique_users и unique_sessions из старых агрегатов
+```
+
+Так инкрементальный режим ускоряет повторные запуски, но не должен ломать корректность train-окна.
