@@ -18,9 +18,11 @@ from ozon_similar_products.business.fallback import (
     FallbackConfig,
     FallbackLayer,
 )
-from ozon_similar_products.config import PROJECT_ROOT, load_yaml_config
+from ozon_similar_products.config import PROJECT_ROOT, get_path_from_config, load_yaml_config
 from ozon_similar_products.data import load_configs, load_events, load_products, schemas
 from ozon_similar_products.data.frames import empty_contract_frame
+from ozon_similar_products.data.partitions import collect_event_parquet_files
+from ozon_similar_products.data.readers import find_parquet_payload_dir
 from ozon_similar_products.features.item_popularity import ItemPopularityBuilder
 from ozon_similar_products.output.writers import RecommendationWriter
 from ozon_similar_products.pipeline.artifact_manifest import (
@@ -216,6 +218,7 @@ def _clean_events_fingerprint(
         config: Mapping[str, Any],
         action_types: Sequence[str],
         partition_date: str,
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     return fingerprint_payload(
         {
@@ -228,6 +231,7 @@ def _clean_events_fingerprint(
                     "search_action_type",
                 ),
             },
+            "raw_input_identity": [dict(item) for item in (raw_input_identity or [])],
         }
     )
 
@@ -237,6 +241,7 @@ def _session_state_fingerprint(
         config: Mapping[str, Any],
         action_types: Sequence[str],
         partition_date: str,
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     pipeline_config = _as_mapping(config.get("pipeline", {}))
     return fingerprint_payload(
@@ -248,6 +253,7 @@ def _session_state_fingerprint(
                 config=config,
                 action_types=action_types,
                 partition_date=partition_date,
+                raw_input_identity=raw_input_identity,
             ),
             "pipeline": {
                 "session_timeout_minutes": pipeline_config.get("session_timeout_minutes"),
@@ -264,6 +270,7 @@ def _daily_pair_stats_fingerprint(
         action_types: Sequence[str],
         partition_date: str,
         processed_through_date: str,
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     return fingerprint_payload(
         {
@@ -275,6 +282,7 @@ def _daily_pair_stats_fingerprint(
                 config=config,
                 action_types=action_types,
                 partition_date=partition_date,
+                raw_input_identity=raw_input_identity,
             ),
             "item_pair_builder": _as_mapping(config.get("item_pair_builder", {})),
             "graph_distance_decay": _as_mapping(
@@ -291,6 +299,7 @@ def _finalize_daily_pair_stat_manifests(
         config: Mapping[str, Any],
         action_types: Sequence[str],
         processed_through_date: str,
+        raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> None:
     """Finalize built pair-stat manifests to the full processed cutoff."""
 
@@ -317,6 +326,7 @@ def _finalize_daily_pair_stat_manifests(
                     action_types=action_types,
                     partition_date=manifest.date,
                     processed_through_date=processed_through_date,
+                    raw_input_identity=raw_input_identity_by_date.get(manifest.date, []),
                 ),
                 paths=dict(manifest.paths),
                 rows=dict(manifest.rows),
@@ -350,6 +360,43 @@ def _partition_frame_by_date_column(
 
     daily_frames.sort(key=lambda item: item[0])
     return daily_frames
+
+
+def _raw_event_input_identity(
+        *,
+        data_config: dict[str, Any],
+        partition_date: str,
+        action_types: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Describe the raw parquet files contributing to one event partition."""
+    user_actions_base_dir = get_path_from_config(
+        config=data_config,
+        section="data",
+        key="user_actions_dir",
+    )
+    user_actions_config = data_config["data"]["user_actions"]
+    events_dir = find_parquet_payload_dir(
+        base_dir=user_actions_base_dir,
+        payload_root_names=user_actions_config["payload_root_names"],
+        parquet_glob=user_actions_config["parquet_glob"],
+    )
+    parquet_files = collect_event_parquet_files(
+        events_dir=events_dir,
+        dates=[partition_date],
+        action_types=action_types,
+    )
+
+    identity: list[dict[str, Any]] = []
+    for parquet_file in sorted(parquet_files):
+        stat = parquet_file.stat()
+        identity.append(
+            {
+                "path": parquet_file.relative_to(PROJECT_ROOT).as_posix(),
+                "size_bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    return identity
 
 
 def _write_daily_partitions(
@@ -525,6 +572,7 @@ class CleanEventsResult:
     clean_events_rows: int
     reused_days: list[str]
     rebuilt_days: list[str]
+    raw_input_identity_by_date: dict[str, list[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -566,15 +614,30 @@ def _load_or_build_clean_events(
     clean_events_rows = 0
     reused_days: list[str] = []
     rebuilt_days: list[str] = []
+    raw_input_identity_by_date: dict[str, list[dict[str, Any]]] = {}
     last_missing_error: FileNotFoundError | None = None
     missing_dates: list[str] = []
 
     for partition_date in _date_range_strings(window_start, window_end):
         output_path = _clean_events_path(output_dir, partition_date)
+        try:
+            raw_input_identity = _raw_event_input_identity(
+                data_config=data_config,
+                partition_date=partition_date,
+                action_types=action_types,
+            )
+        except (KeyError, TypeError):
+            raw_input_identity = []
+        except FileNotFoundError as error:
+            last_missing_error = error
+            missing_dates.append(partition_date)
+            continue
+        raw_input_identity_by_date[partition_date] = raw_input_identity
         fingerprint = _clean_events_fingerprint(
             config=config,
             action_types=action_types,
             partition_date=partition_date,
+            raw_input_identity=raw_input_identity,
         )
         status = validate_manifest(
             manifest_path=_clean_events_manifest_path(output_dir, partition_date),
@@ -617,6 +680,7 @@ def _load_or_build_clean_events(
                 fingerprint=fingerprint,
                 paths={"events": _relative_to_root(output_path, output_dir)},
                 rows={"raw_events": raw_day.height, "clean_events": clean_day.height},
+                metadata={"raw_input_identity": raw_input_identity},
             ),
         )
 
@@ -642,6 +706,7 @@ def _load_or_build_clean_events(
         clean_events_rows=clean_events_rows,
         reused_days=reused_days,
         rebuilt_days=rebuilt_days,
+        raw_input_identity_by_date=raw_input_identity_by_date,
     )
 
 
@@ -653,6 +718,7 @@ def _plan_reusable_daily_pair_stats(
         daily_pairs_output_dir: Path,
         session_state_output_dir: Path,
         processed_through_date: str,
+        raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> PairStatsPlan:
     count_paths: list[Path] = []
     user_key_paths: list[Path] = []
@@ -662,11 +728,13 @@ def _plan_reusable_daily_pair_stats(
     invalid_days: list[str] = []
 
     for partition_date in partition_dates:
+        raw_input_identity = raw_input_identity_by_date.get(partition_date, [])
         pair_fingerprint = _daily_pair_stats_fingerprint(
             config=config,
             action_types=action_types,
             partition_date=partition_date,
             processed_through_date=processed_through_date,
+            raw_input_identity=raw_input_identity,
         )
         pair_status = validate_manifest(
             manifest_path=_daily_pair_stats_manifest_path(daily_pairs_output_dir, partition_date),
@@ -685,6 +753,7 @@ def _plan_reusable_daily_pair_stats(
                 config=config,
                 action_types=action_types,
                 partition_date=partition_date,
+                raw_input_identity=raw_input_identity,
             ),
             required_path_keys=("active_sessions", "max_session_indices"),
         )
@@ -1206,6 +1275,7 @@ def _write_session_state_artifacts(
         output_dir: Path,
         config: Mapping[str, Any],
         action_types: Sequence[str],
+        raw_input_identity: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[Path, Path]:
     """Persist lightweight state needed to continue sessionization after a day."""
     active_dir = output_dir / "active_sessions"
@@ -1226,6 +1296,7 @@ def _write_session_state_artifacts(
             config=config,
             action_types=action_types,
             partition_date=partition_date,
+            raw_input_identity=raw_input_identity,
         ),
         paths={
             "active_sessions": _relative_to_root(active_path, output_dir),
@@ -1255,6 +1326,7 @@ def _build_streaming_sessions_and_pair_stats(
         session_state_output_dir: Path | None = None,
         config: Mapping[str, Any] | None = None,
         action_types: Sequence[str] | None = None,
+        raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
         session_batch_size: int = 10_000,
         session_user_buckets: int = 256,
 ) -> tuple[int, DailyPairStatsPaths]:
@@ -1434,6 +1506,10 @@ def _build_streaming_sessions_and_pair_stats(
                         action_types=action_types,
                         partition_date=stats_partition_date,
                         processed_through_date=processed_through_date,
+                        raw_input_identity=(raw_input_identity_by_date or {}).get(
+                            stats_partition_date,
+                            [],
+                        ),
                     ),
                     paths={
                         "counts": _relative_to_root(count_path, daily_pairs_output_dir),
@@ -1472,6 +1548,10 @@ def _build_streaming_sessions_and_pair_stats(
                 output_dir=session_state_output_dir,
                 config=config,
                 action_types=action_types,
+                raw_input_identity=(raw_input_identity_by_date or {}).get(
+                    partition_date,
+                    [],
+                ),
             )
 
     return sessions_rows, DailyPairStatsPaths(
@@ -1634,6 +1714,7 @@ def run_pipeline(
     clean_event_paths = clean_events_result.paths
     raw_events_rows = clean_events_result.raw_events_rows
     clean_events_rows = clean_events_result.clean_events_rows
+    raw_input_identity_by_date = clean_events_result.raw_input_identity_by_date
 
     if raw_events_rows == 0:
         logger.warning(
@@ -1705,6 +1786,7 @@ def run_pipeline(
             daily_pairs_output_dir=daily_pairs_output_dir,
             session_state_output_dir=session_state_output_dir,
             processed_through_date=window_end,
+            raw_input_identity_by_date=raw_input_identity_by_date,
         )
         if update_strategy == "incremental" and not clean_events_result.rebuilt_days
         else None
@@ -1741,6 +1823,7 @@ def run_pipeline(
             session_state_output_dir=session_state_output_dir,
             config=config,
             action_types=action_types,
+            raw_input_identity_by_date=raw_input_identity_by_date,
             session_batch_size=session_batch_size,
             session_user_buckets=session_user_buckets,
         )
@@ -1750,6 +1833,7 @@ def run_pipeline(
             config=config,
             action_types=action_types,
             processed_through_date=window_end,
+            raw_input_identity_by_date=raw_input_identity_by_date,
         )
         rebuilt_pair_stat_days = [
             path.stem.removeprefix("date=")

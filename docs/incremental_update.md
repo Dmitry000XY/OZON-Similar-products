@@ -52,6 +52,18 @@ Scoring, top-K, fallback, and graph time decay settings do not invalidate daily
 clean/session/pair artifacts. Time decay is applied during rolling aggregation,
 and scoring-only changes are handled after daily pair reuse.
 
+## Raw Input Identity
+
+Clean-event reuse is guarded by both stage configuration and raw input identity.
+For each `date=YYYY-MM-DD`, the manifest fingerprint includes the contributing
+raw parquet file identities: relative path, file size, and modification time.
+
+That means a raw correction, replacement, or newly arrived late file for an
+already processed day invalidates the clean artifact even when the config is
+unchanged. Because session-state and daily pair-stat fingerprints include the
+clean-event fingerprint, the invalidation flows downstream automatically and the
+incremental run rebuilds the affected day conservatively.
+
 ## Pair Stat Idempotency
 
 Daily pair stats are written with a per-run idempotency rule:

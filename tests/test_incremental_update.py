@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +73,18 @@ def _write_action_partition(
     partition_dir = events_root / f"date={partition_date}" / f"action_type={action_type}"
     partition_dir.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows).write_parquet(partition_dir / "part-0.parquet")
+
+
+def _write_action_partition_file(
+        events_root: Path,
+        partition_date: str,
+        action_type: str,
+        filename: str,
+        rows: list[dict[str, Any]],
+) -> None:
+    partition_dir = events_root / f"date={partition_date}" / f"action_type={action_type}"
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows).write_parquet(partition_dir / filename)
 
 
 def _write_project_configs(project_root: Path, *, update_strategy: str = "full_retrain") -> Path:
@@ -352,6 +366,20 @@ def _write_products(project_root: Path) -> None:
     ).write_parquet(products_dir / "part-0.parquet")
 
 
+def _raw_input_identity(project_root: Path, partition_date: str) -> list[dict[str, Any]]:
+    return run_pipeline._raw_event_input_identity(
+        data_config=run_pipeline.load_configs(project_root=project_root),
+        partition_date=partition_date,
+        action_types=["view", "click", "favorite", "to_cart"],
+    )
+
+
+def _set_distinct_mtime(path: Path) -> None:
+    stat = path.stat()
+    target_ns = max(time.time_ns(), stat.st_mtime_ns + 1_000_000_000)
+    os.utime(path, ns=(target_ns, target_ns))
+
+
 def _run_pipeline_fixture(
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -602,6 +630,7 @@ def test_pair_artifact_with_future_processed_through_date_rebuilds(
             action_types=["view", "click", "favorite", "to_cart"],
             partition_date="2026-05-10",
             processed_through_date="2026-05-11",
+            raw_input_identity=_raw_input_identity(tmp_path, "2026-05-10"),
         ),
         paths=manifest.paths,
         rows=manifest.rows,
@@ -684,6 +713,7 @@ def test_multi_day_full_build_finalizes_pair_stats_to_window_end(
             action_types=["view", "click", "favorite", "to_cart"],
             partition_date=partition_date,
             processed_through_date="2026-05-11",
+            raw_input_identity=_raw_input_identity(tmp_path, partition_date),
         )
 
 
@@ -721,6 +751,121 @@ def test_multi_day_incremental_rerun_reuses_finalized_pair_stats(
     assert incremental_recommendations.sort(["item_id", "rank"]).equals(
         full_recommendations.sort(["item_id", "rank"])
     )
+
+
+def test_raw_file_replacement_invalidates_clean_and_pair_reuse(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    _write_raw_events(tmp_path)
+    _write_products(tmp_path)
+    _run_pipeline_fixture(monkeypatch, tmp_path, update_strategy="full_retrain", run_id="full")
+
+    _write_action_partition(
+        tmp_path / "data" / "raw" / "user_actions" / "user_actions",
+        "2026-05-10",
+        "view",
+        [
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 1,
+            },
+            {
+                "user_id": 1,
+                "timestamp": "2026-05-10 10:05:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 2,
+            },
+            {
+                "user_id": 2,
+                "timestamp": "2026-05-10 11:00:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 10,
+            },
+        ],
+    )
+    _set_distinct_mtime(
+        tmp_path
+        / "data"
+        / "raw"
+        / "user_actions"
+        / "user_actions"
+        / "date=2026-05-10"
+        / "action_type=view"
+        / "part-0.parquet"
+    )
+
+    incremental = _run_pipeline_fixture(
+        monkeypatch,
+        tmp_path,
+        update_strategy="incremental",
+        run_id="replacement-invalidates",
+    )
+
+    assert incremental.manifest["incremental"]["reused_clean_event_days"] == []
+    assert incremental.manifest["incremental"]["reused_pair_stat_days"] == []
+    assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == ["2026-05-10"]
+    clean_manifest = run_pipeline.read_manifest(
+        tmp_path / "data" / "processed" / "events_clean" / "manifests" / "date=2026-05-10.json"
+    )
+    assert clean_manifest is not None
+    assert clean_manifest.rows["raw_events"] == 5
+
+
+def test_late_raw_file_invalidates_clean_and_pair_reuse(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    _write_raw_events(tmp_path)
+    _write_products(tmp_path)
+    _run_pipeline_fixture(monkeypatch, tmp_path, update_strategy="full_retrain", run_id="full")
+
+    _write_action_partition_file(
+        tmp_path / "data" / "raw" / "user_actions" / "user_actions",
+        "2026-05-10",
+        "click",
+        "part-1.parquet",
+        [
+            {
+                "user_id": 2,
+                "timestamp": "2026-05-10 11:10:00",
+                "widget_name": "catalog",
+                "search_query": None,
+                "item_id": 20,
+            }
+        ],
+    )
+    _set_distinct_mtime(
+        tmp_path
+        / "data"
+        / "raw"
+        / "user_actions"
+        / "user_actions"
+        / "date=2026-05-10"
+        / "action_type=click"
+        / "part-1.parquet"
+    )
+
+    incremental = _run_pipeline_fixture(
+        monkeypatch,
+        tmp_path,
+        update_strategy="incremental",
+        run_id="late-file-invalidates",
+    )
+
+    assert incremental.manifest["incremental"]["reused_clean_event_days"] == []
+    assert incremental.manifest["incremental"]["reused_pair_stat_days"] == []
+    assert incremental.manifest["incremental"]["rebuilt_pair_stat_days"] == ["2026-05-10"]
+    clean_manifest = run_pipeline.read_manifest(
+        tmp_path / "data" / "processed" / "events_clean" / "manifests" / "date=2026-05-10.json"
+    )
+    assert clean_manifest is not None
+    assert clean_manifest.rows["raw_events"] == 5
 
 
 def test_update_strategy_is_not_tuned() -> None:
