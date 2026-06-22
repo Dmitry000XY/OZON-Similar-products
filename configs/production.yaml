@@ -66,25 +66,25 @@ graph:
 
 scoring:
   method: calibrated_multichannel
-  count_source: weighted
+  count_source: raw
   count_transform:
-    method: log
-    smoothing: 1.0
+    method: linear
+    smoothing: 0.1
   business_weights:
-    view: 0.25
-    click: 1.0
-    favorite: 1.0
-    to_cart: 1.0
-  beta: 0.25
+    view: 0.5
+    click: 1.5
+    favorite: 3.0
+    to_cart: 4.0
+  beta: 0.0
   reference_action_type: view
   max_frequency_boost:
     view: 1.0
-    click: 10.0
-    favorite: 15.0
+    click: 12.0
+    favorite: 12.0
     to_cart: 30.0
-  min_pair_count: 2
+  min_pair_count: 1
   min_unique_users: 1
-  min_unique_sessions: 3
+  min_unique_sessions: 1
   min_weighted_pair_count: null
   min_score: null
   calibration:
