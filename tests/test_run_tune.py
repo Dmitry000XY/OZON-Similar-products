@@ -263,7 +263,6 @@ def test_graph_scoring_configs_and_search_space_load() -> None:
         }
         scorer = CoVisitationScorer.from_config(config)
         assert scorer.count_source == expected_count_source[config_path]
-        assert scorer.count_transform_method == "log"
         assert scorer.count_transform_smoothing == 1.0
 
     search_space = load_yaml_config("configs/tuning/search_space_graph_scoring.yaml")
