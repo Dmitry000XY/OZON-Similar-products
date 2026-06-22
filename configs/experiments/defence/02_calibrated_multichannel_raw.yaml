@@ -87,9 +87,9 @@ scoring:
     click: 10.0
     favorite: 15.0
     to_cart: 30.0
-  min_pair_count: 2
+  min_pair_count: 1
   min_unique_users: 1
-  min_unique_sessions: 3
+  min_unique_sessions: 1
   min_weighted_pair_count: null
   min_score: null
   calibration:
