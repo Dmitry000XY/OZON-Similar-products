@@ -208,6 +208,16 @@ uv run python scripts/preview_latest_recommendations.py --manifest-path outputs/
 
 Успешный запуск должен показать, что в manifest `recommendations > 0`, а lookup возвращает список `similar_items`.
 
+## Demo UI
+
+Для презентации доступно Streamlit demo-приложение:
+
+```bash
+uv run streamlit run apps/demo/app.py -- --manifest-path outputs/latest/manifest.json
+```
+
+Оно позволяет искать товар по `item_id` или названию, смотреть похожие товары, run summary и placeholder под Gephi graph.
+
 ---
 
 ## Оптимизированный pipeline
