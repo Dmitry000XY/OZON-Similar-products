@@ -29,10 +29,10 @@ graph:
     strategy: none
     max_distance: null
     weight_by_distance:
-      1: 1.0
-      2: 0.8
-      3: 0.6
-      5: 0.3
+      "1": 1.0
+      "2": 0.8
+      "3": 0.6
+      "5": 0.3
       default: 0.1
     exponential:
       alpha: 0.5
@@ -42,11 +42,11 @@ graph:
     enabled: false
     strategy: none
     weight_by_age_days:
-      0: 1.0
-      1: 0.9
-      3: 0.75
-      7: 0.5
-      14: 0.3
+      "0": 1.0
+      "1": 0.9
+      "3": 0.75
+      "7": 0.5
+      "14": 0.3
       default: 0.2
     exponential:
       half_life_days: 7
