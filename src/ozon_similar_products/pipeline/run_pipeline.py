@@ -1479,7 +1479,7 @@ def _build_streaming_sessions_and_pair_stats(
                 or bucket_id + 1 == session_user_buckets
             )
             if should_log_bucket:
-                progress_logger.debug(
+                progress_logger.info(
                     "[run_pipeline] pair-stat partition date=%s bucket=%s/%s clean_rows=%s active_rows=%s",
                     partition_date,
                     bucket_id + 1,
@@ -1538,7 +1538,7 @@ def _build_streaming_sessions_and_pair_stats(
                         pair_builder=pair_builder,
                         session_batch_size=session_batch_size,
                     )
-                    progress_logger.debug(
+                    progress_logger.info(
                         "[run_pipeline] pair-stat built date=%s source_partition=%s bucket=%s/%s sessions=%s raw_pairs=%s",
                         stats_partition_date,
                         partition_date,
