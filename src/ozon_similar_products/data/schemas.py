@@ -57,6 +57,7 @@ SESSIONS_COLUMNS = [
     "timestamp",
     "action_type",
     "item_id",
+    "widget_name",
 ]
 
 ITEM_POPULARITY_COLUMNS = [
@@ -87,6 +88,8 @@ DAILY_ITEM_PAIRS_COLUMNS = [
     "session_index",
     "source_action_type",
     "target_action_type",
+    "source_widget_name",
+    "target_widget_name",
     "signal_type",
 ]
 
@@ -94,6 +97,15 @@ DAILY_PAIR_COUNTS_COLUMNS = [
     "pair_date",
     "item_id",
     "similar_item_id",
+    *RAW_COUNT_COLUMNS,
+    *WEIGHTED_COUNT_COLUMNS,
+]
+
+DAILY_PAIR_WIDGET_COUNTS_COLUMNS = [
+    "pair_date",
+    "item_id",
+    "similar_item_id",
+    "target_widget_name",
     *RAW_COUNT_COLUMNS,
     *WEIGHTED_COUNT_COLUMNS,
 ]

@@ -12,7 +12,11 @@ from ozon_similar_products.cli import run_tune
 from ozon_similar_products.config import load_yaml_config
 from ozon_similar_products.evaluation import metrics_to_flat_dict
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
-from ozon_similar_products.retrieval.decay import DistanceDecayConfig, TimeDecayConfig
+from ozon_similar_products.retrieval.decay import (
+    DistanceDecayConfig,
+    TimeDecayConfig,
+    WidgetContextConfig,
+)
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 
 
@@ -237,15 +241,28 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
 
 
 def test_graph_scoring_configs_and_search_space_load() -> None:
-    for config_path in [
-        Path("configs/baseline.yaml"),
-        Path("configs/production.yaml"),
-    ]:
+    expected_count_source = {
+        Path("configs/baseline.yaml"): "raw",
+        Path("configs/production.yaml"): "weighted",
+    }
+    expected_widget_enabled = {
+        Path("configs/baseline.yaml"): False,
+        Path("configs/production.yaml"): True,
+    }
+
+    for config_path in expected_count_source:
         config = load_yaml_config(config_path)
         assert DistanceDecayConfig.from_config(config).strategy == "none"
         assert TimeDecayConfig.from_config(config).strategy == "none"
+        widget_context = WidgetContextConfig.from_config(config)
+        assert widget_context.enabled is expected_widget_enabled[config_path]
+        assert widget_context.use == "target"
+        assert widget_context.weights == {
+            "search_catalog_listing": 1.0,
+            "product_detailed_page": 1.1,
+        }
         scorer = CoVisitationScorer.from_config(config)
-        assert scorer.count_source == "raw"
+        assert scorer.count_source == expected_count_source[config_path]
         assert scorer.count_transform_method == "log"
         assert scorer.count_transform_smoothing == 1.0
 
@@ -253,6 +270,9 @@ def test_graph_scoring_configs_and_search_space_load() -> None:
     parameters = search_space["parameters"]
     assert "graph.distance_decay.enabled" in parameters
     assert "graph.time_decay.strategy" in parameters
+    assert "graph.widget_context.enabled" in parameters
+    assert "graph.widget_context.weights.search_catalog_listing" in parameters
+    assert "graph.widget_context.weights.product_detailed_page" in parameters
     assert "scoring.count_source" in parameters
     assert "scoring.min_weighted_pair_count" in parameters
 

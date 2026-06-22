@@ -52,9 +52,21 @@ graph:
       half_life_days: 7
       min_weight: 0.05
 
+  widget_context:
+    # Widget weights affect scoring when scoring.count_source is set to weighted.
+    enabled: true
+    use: target
+    default_weight: 1.0
+    unknown_weight: 1.0
+    # Direct item-action widgets observed in notebooks/01_eda.ipynb.
+    # Initial tunable values: keep catalog neutral, give product page a small boost.
+    weights:
+      search_catalog_listing: 1.0
+      product_detailed_page: 1.1
+
 scoring:
   method: calibrated_multichannel
-  count_source: raw
+  count_source: weighted
   count_transform:
     method: log
     smoothing: 1.0

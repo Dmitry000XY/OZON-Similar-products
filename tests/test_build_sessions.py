@@ -84,9 +84,11 @@ def test_session_builder_preserves_action_type_without_action_weight() -> None:
         "timestamp",
         "action_type",
         "item_id",
+        "widget_name",
     ]
     assert "action_weight" not in sessions.columns
     assert sessions["action_type"].to_list() == ["view", "to_cart"]
+    assert sessions["widget_name"].to_list() == ["test_widget", "test_widget"]
 
 
 def test_session_builder_drops_rows_without_item_or_time_context() -> None:
@@ -131,6 +133,7 @@ def test_session_builder_handles_empty_input() -> None:
         "timestamp",
         "action_type",
         "item_id",
+        "widget_name",
     ]
 
 
