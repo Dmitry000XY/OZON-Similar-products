@@ -8,7 +8,16 @@ from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
 
 
 def _pairs(rows: list[dict]) -> pl.DataFrame:
-    return pl.DataFrame(rows)
+    return pl.DataFrame(
+        [
+            {
+                "source_widget_name": "catalog",
+                "target_widget_name": "catalog",
+                **row,
+            }
+            for row in rows
+        ]
+    )
 
 
 def _daily_stats_from_pairs(

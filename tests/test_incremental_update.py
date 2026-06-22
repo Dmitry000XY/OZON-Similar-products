@@ -34,6 +34,10 @@ def _pair_stats(pair_count: int, weighted_pair_count: float) -> DailyPairStats:
             "weighted_to_cart_count": [0.0],
         }
     ).select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+    widget_counts = (
+        counts.with_columns(pl.lit("catalog").alias("target_widget_name"))
+        .select(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
+    )
     user_keys = pl.DataFrame(
         {
             "pair_date": ["2026-05-10"],
@@ -53,6 +57,7 @@ def _pair_stats(pair_count: int, weighted_pair_count: float) -> DailyPairStats:
     ).select(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS)
     return DailyPairStats(
         counts=counts,
+        widget_counts=widget_counts,
         user_keys=user_keys,
         session_keys=session_keys,
         raw_pair_rows=pair_count,

@@ -38,10 +38,28 @@ def _lazy_columns(frame: pl.LazyFrame) -> set[str]:
     return set(frame.collect_schema().names())
 
 
-def _with_distance_weight(pairs: pl.LazyFrame) -> pl.LazyFrame:
-    if "distance_weight" in _lazy_columns(pairs):
-        return pairs.with_columns(pl.col("distance_weight").cast(pl.Float64))
-    return pairs.with_columns(pl.lit(1.0).alias("distance_weight"))
+def _with_graph_weight(pairs: pl.LazyFrame) -> pl.LazyFrame:
+    columns = _lazy_columns(pairs)
+    expressions: list[pl.Expr] = []
+
+    if "distance_weight" in columns:
+        expressions.append(pl.col("distance_weight").cast(pl.Float64).alias("distance_weight"))
+    else:
+        expressions.append(pl.lit(1.0).alias("distance_weight"))
+
+    if "widget_weight" in columns:
+        expressions.append(pl.col("widget_weight").cast(pl.Float64).alias("widget_weight"))
+    else:
+        expressions.append(pl.lit(1.0).alias("widget_weight"))
+
+    weighted_pairs = pairs.with_columns(expressions)
+    if "graph_weight" in columns:
+        return weighted_pairs.with_columns(pl.col("graph_weight").cast(pl.Float64))
+    return weighted_pairs.with_columns(
+        (pl.col("distance_weight") * pl.col("widget_weight"))
+        .cast(pl.Float64)
+        .alias("graph_weight")
+    )
 
 
 def _with_weighted_count_columns(counts: pl.LazyFrame) -> pl.LazyFrame:
@@ -107,7 +125,7 @@ def _aggregate_pairs_lazy(
     start_date, end_date = _validate_window_bounds(window_start, window_end)
 
     filtered_pairs = (
-        _with_distance_weight(pairs_window)
+        _with_graph_weight(pairs_window)
         .with_columns(pl.col("pair_date").cast(pl.Date, strict=False).alias("pair_date"))
         .filter(pl.col("pair_date").is_between(start_date, end_date))
         .with_columns(
@@ -119,7 +137,7 @@ def _aggregate_pairs_lazy(
             time_decay.weight_expr(pl.col("__age_days")).cast(pl.Float64).alias("__time_weight")
         )
         .with_columns(
-            (pl.col("distance_weight") * pl.col("__time_weight")).alias("__weighted_count")
+            (pl.col("graph_weight") * pl.col("__time_weight")).alias("__weighted_count")
         )
     )
 

@@ -13,9 +13,10 @@ from ozon_similar_products.data.validation import (
     validate_daily_pair_counts,
     validate_daily_pair_session_keys,
     validate_daily_pair_user_keys,
+    validate_daily_pair_widget_counts,
     validate_sessions,
 )
-from ozon_similar_products.retrieval.decay import DistanceDecayConfig
+from ozon_similar_products.retrieval.decay import DistanceDecayConfig, WidgetContextConfig
 
 FrameLike = pl.DataFrame | pl.LazyFrame
 
@@ -35,6 +36,11 @@ def _empty_daily_pairs() -> pl.DataFrame:
 def _empty_daily_pair_counts() -> pl.DataFrame:
     """Return an empty daily pair-counts DataFrame with the public contract columns."""
     return empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS)
+
+
+def _empty_daily_pair_widget_counts() -> pl.DataFrame:
+    """Return an empty daily pair widget-counts DataFrame."""
+    return empty_contract_frame(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
 
 
 def _empty_daily_pair_user_keys() -> pl.DataFrame:
@@ -68,10 +74,14 @@ def _priority_expr(priority: Mapping[str, int]) -> pl.Expr:
     return expr.cast(pl.Int64).alias("signal_priority")
 
 
-def _weighted_sum_expr(signal_type: str, output_column: str) -> pl.Expr:
+def _weighted_sum_expr(
+        signal_type: str,
+        output_column: str,
+        weight_column: str = "graph_weight",
+) -> pl.Expr:
     return (
         pl.when(pl.col("signal_type") == signal_type)
-        .then(pl.col("distance_weight"))
+        .then(pl.col(weight_column))
         .otherwise(0.0)
         .sum()
         .alias(output_column)
@@ -89,6 +99,7 @@ class DailyPairStats:
     """Compact daily pair artifacts derived from raw directed pair rows."""
 
     counts: pl.DataFrame
+    widget_counts: pl.DataFrame
     user_keys: pl.DataFrame
     session_keys: pl.DataFrame
     raw_pair_rows: int
@@ -115,6 +126,7 @@ class ItemPairBuilder:
     )
     signal_priority: Mapping[str, int] | None = None
     distance_decay: DistanceDecayConfig = field(default_factory=DistanceDecayConfig)
+    widget_context: WidgetContextConfig = field(default_factory=WidgetContextConfig)
 
     def __post_init__(self) -> None:
         if self.max_items_per_session < 2:
@@ -171,6 +183,7 @@ class ItemPairBuilder:
             item_action_types=item_action_types,
             signal_priority=signal_priority,
             distance_decay=DistanceDecayConfig.from_config(config),
+            widget_context=WidgetContextConfig.from_config(config),
         )
 
     def transform_day(self, sessions: FrameLike) -> pl.DataFrame:
@@ -203,6 +216,8 @@ class ItemPairBuilder:
                 pl.col("session_index"),
                 pl.col("item_action_type").alias("source_action_type"),
                 pl.col("item_action_type_similar").alias("target_action_type"),
+                pl.col("item_widget_name").alias("source_widget_name"),
+                pl.col("item_widget_name_similar").alias("target_widget_name"),
                 pl.col("item_action_type_similar").alias("signal_type"),
                 pl.col("item_position").alias("source_position"),
                 pl.col("item_position_similar").alias("target_position"),
@@ -217,7 +232,17 @@ class ItemPairBuilder:
             .with_columns(
                 self.distance_decay.weight_expr(pl.col("position_distance"))
                 .cast(pl.Float64)
-                .alias("distance_weight")
+                .alias("distance_weight"),
+                self.widget_context.weight_expr(
+                    pl.col(self.widget_context.context_column_name)
+                )
+                .cast(pl.Float64)
+                .alias("widget_weight"),
+            )
+            .with_columns(
+                (pl.col("distance_weight") * pl.col("widget_weight"))
+                .cast(pl.Float64)
+                .alias("graph_weight")
             )
             .sort(["pair_date", "item_id", "similar_item_id", "user_id", "session_index"])
             .collect()
@@ -242,11 +267,13 @@ class ItemPairBuilder:
         if pairs.is_empty():
             stats = DailyPairStats(
                 counts=_empty_daily_pair_counts(),
+                widget_counts=_empty_daily_pair_widget_counts(),
                 user_keys=_empty_daily_pair_user_keys(),
                 session_keys=_empty_daily_pair_session_keys(),
                 raw_pair_rows=0,
             )
             validate_daily_pair_counts(stats.counts)
+            validate_daily_pair_widget_counts(stats.widget_counts)
             validate_daily_pair_user_keys(stats.user_keys)
             validate_daily_pair_session_keys(stats.session_keys)
             return stats
@@ -259,7 +286,7 @@ class ItemPairBuilder:
                 (pl.col("signal_type") == "click").sum().alias("click_count"),
                 (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
                 (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
-                pl.col("distance_weight").sum().alias("weighted_pair_count"),
+                pl.col("graph_weight").sum().alias("weighted_pair_count"),
                 _weighted_sum_expr("view", "weighted_view_count"),
                 _weighted_sum_expr("click", "weighted_click_count"),
                 _weighted_sum_expr("favorite", "weighted_favorite_count"),
@@ -267,6 +294,24 @@ class ItemPairBuilder:
             )
             .select(schemas.DAILY_PAIR_COUNTS_COLUMNS)
             .sort(["pair_date", "item_id", "similar_item_id"])
+        )
+
+        widget_counts = (
+            pairs.group_by(["pair_date", "item_id", "similar_item_id", "target_widget_name"])
+            .agg(
+                pl.len().alias("pair_count"),
+                (pl.col("signal_type") == "view").sum().alias("view_count"),
+                (pl.col("signal_type") == "click").sum().alias("click_count"),
+                (pl.col("signal_type") == "favorite").sum().alias("favorite_count"),
+                (pl.col("signal_type") == "to_cart").sum().alias("to_cart_count"),
+                pl.col("graph_weight").sum().alias("weighted_pair_count"),
+                _weighted_sum_expr("view", "weighted_view_count"),
+                _weighted_sum_expr("click", "weighted_click_count"),
+                _weighted_sum_expr("favorite", "weighted_favorite_count"),
+                _weighted_sum_expr("to_cart", "weighted_to_cart_count"),
+            )
+            .select(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
+            .sort(["pair_date", "item_id", "similar_item_id", "target_widget_name"])
         )
 
         user_keys = (
@@ -282,11 +327,13 @@ class ItemPairBuilder:
         )
 
         validate_daily_pair_counts(counts)
+        validate_daily_pair_widget_counts(widget_counts)
         validate_daily_pair_user_keys(user_keys)
         validate_daily_pair_session_keys(session_keys)
 
         return DailyPairStats(
             counts=counts,
+            widget_counts=widget_counts,
             user_keys=user_keys,
             session_keys=session_keys,
             raw_pair_rows=raw_pair_rows,
@@ -305,9 +352,13 @@ class ItemPairBuilder:
                 "timestamp",
                 "item_id",
                 "action_type",
+                "widget_name",
             )
             .filter(pl.col("item_id").is_not_null())
             .filter(pl.col("action_type").is_in(list(self.item_action_types)))
+            .with_columns(
+                pl.col("widget_name").cast(pl.String).fill_null("unknown").alias("widget_name")
+            )
             .with_columns(_priority_expr(priority))
             .sort(["user_id", "session_index", "timestamp", "item_id", "action_type"])
             .with_row_index("__event_position")
@@ -318,6 +369,10 @@ class ItemPairBuilder:
                 .first()
                 .alias("item_action_type"),
                 pl.col("signal_priority").max().alias("item_signal_priority"),
+                pl.col("widget_name")
+                .sort_by(pl.col("signal_priority"), descending=True)
+                .first()
+                .alias("item_widget_name"),
                 pl.col("__event_position").min().cast(pl.Int64).alias("item_position"),
             )
         )

@@ -31,6 +31,23 @@ def test_daily_pair_stats_schema_columns_are_defined() -> None:
         "weighted_to_cart_count",
     ]
 
+    assert schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS == [
+        "pair_date",
+        "item_id",
+        "similar_item_id",
+        "target_widget_name",
+        "pair_count",
+        "view_count",
+        "click_count",
+        "favorite_count",
+        "to_cart_count",
+        "weighted_pair_count",
+        "weighted_view_count",
+        "weighted_click_count",
+        "weighted_favorite_count",
+        "weighted_to_cart_count",
+    ]
+
     assert schemas.DAILY_PAIR_USER_KEYS_COLUMNS == [
         "pair_date",
         "item_id",

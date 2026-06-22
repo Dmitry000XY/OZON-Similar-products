@@ -70,6 +70,34 @@ parameters:
     max: 3
     step: 1
 
+  graph.widget_context.enabled:
+    type: choice
+    values: [ false, true ]
+
+  graph.widget_context.use:
+    type: choice
+    values: [ target ]
+
+  graph.widget_context.default_weight:
+    type: choice
+    values: [ 1.0 ]
+
+  graph.widget_context.unknown_weight:
+    type: choice
+    values: [ 1.0 ]
+
+  graph.widget_context.weights.search_catalog_listing:
+    type: choice
+    values: [ 0.95, 1.0, 1.05 ]
+
+  graph.widget_context.weights.product_detailed_page:
+    type: choice
+    values: [ 1.0, 1.05, 1.1, 1.2 ]
+
+  scoring.count_source:
+    type: choice
+    values: [ raw, weighted ]
+
   scoring.normalize_by_item_popularity:
     type: choice
     values: [ false, true ]

@@ -21,6 +21,7 @@ def _sessions_for_distance() -> pl.DataFrame:
                 "timestamp": datetime(2026, 5, 1, 10, 0),
                 "action_type": "view",
                 "item_id": 10,
+                "widget_name": "catalog",
             },
             {
                 "user_id": 1,
@@ -30,6 +31,7 @@ def _sessions_for_distance() -> pl.DataFrame:
                 "timestamp": datetime(2026, 5, 1, 10, 1),
                 "action_type": "view",
                 "item_id": 20,
+                "widget_name": "catalog",
             },
             {
                 "user_id": 1,
@@ -39,6 +41,7 @@ def _sessions_for_distance() -> pl.DataFrame:
                 "timestamp": datetime(2026, 5, 1, 10, 2),
                 "action_type": "view",
                 "item_id": 30,
+                "widget_name": "catalog",
             },
         ]
     )
