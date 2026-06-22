@@ -359,6 +359,7 @@ class DailyPairStatsPaths:
     """Paths to compact daily pair-stat artifacts built for a pipeline run."""
 
     count_paths: list[Path]
+    widget_count_paths: list[Path]
     user_key_paths: list[Path]
     session_key_paths: list[Path]
     raw_pair_rows: int
@@ -415,6 +416,7 @@ def _combine_daily_pair_stats(stats_list: Sequence[DailyPairStats]) -> DailyPair
     if not non_empty_stats:
         return DailyPairStats(
             counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
+            widget_counts=empty_contract_frame(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS),
             user_keys=empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS),
             session_keys=empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS),
             raw_pair_rows=raw_pair_rows,
@@ -442,6 +444,38 @@ def _combine_daily_pair_stats(stats_list: Sequence[DailyPairStats]) -> DailyPair
         .sort(["pair_date", "item_id", "similar_item_id"])
     )
 
+    non_empty_widget_stats = [
+        stats for stats in stats_list
+        if not stats.widget_counts.is_empty()
+    ]
+    if non_empty_widget_stats:
+        widget_counts = (
+            pl.concat(
+                [
+                    _with_weighted_count_columns(stats.widget_counts)
+                    for stats in non_empty_widget_stats
+                ],
+                how="vertical",
+            )
+            .group_by(["pair_date", "item_id", "similar_item_id", "target_widget_name"])
+            .agg(
+                pl.col("pair_count").sum().alias("pair_count"),
+                pl.col("view_count").sum().alias("view_count"),
+                pl.col("click_count").sum().alias("click_count"),
+                pl.col("favorite_count").sum().alias("favorite_count"),
+                pl.col("to_cart_count").sum().alias("to_cart_count"),
+                pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+                pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+                pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+                pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+                pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
+            )
+            .select(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
+            .sort(["pair_date", "item_id", "similar_item_id", "target_widget_name"])
+        )
+    else:
+        widget_counts = empty_contract_frame(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
+
     user_keys = (
         pl.concat([stats.user_keys for stats in non_empty_stats], how="vertical")
         .select(schemas.DAILY_PAIR_USER_KEYS_COLUMNS)
@@ -458,9 +492,39 @@ def _combine_daily_pair_stats(stats_list: Sequence[DailyPairStats]) -> DailyPair
 
     return DailyPairStats(
         counts=counts,
+        widget_counts=widget_counts,
         user_keys=user_keys,
         session_keys=session_keys,
         raw_pair_rows=raw_pair_rows,
+    )
+
+
+def _merge_daily_pair_widget_counts(
+        existing: pl.DataFrame,
+        new: pl.DataFrame,
+) -> pl.DataFrame:
+    existing = _with_weighted_count_columns(existing)
+    new = _with_weighted_count_columns(new)
+    merged = pl.concat([existing, new], how="vertical")
+    if merged.is_empty():
+        return empty_contract_frame(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
+
+    return (
+        merged.group_by(["pair_date", "item_id", "similar_item_id", "target_widget_name"])
+        .agg(
+            pl.col("pair_count").sum().alias("pair_count"),
+            pl.col("view_count").sum().alias("view_count"),
+            pl.col("click_count").sum().alias("click_count"),
+            pl.col("favorite_count").sum().alias("favorite_count"),
+            pl.col("to_cart_count").sum().alias("to_cart_count"),
+            pl.col("weighted_pair_count").sum().alias("weighted_pair_count"),
+            pl.col("weighted_view_count").sum().alias("weighted_view_count"),
+            pl.col("weighted_click_count").sum().alias("weighted_click_count"),
+            pl.col("weighted_favorite_count").sum().alias("weighted_favorite_count"),
+            pl.col("weighted_to_cart_count").sum().alias("weighted_to_cart_count"),
+        )
+        .select(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS)
+        .sort(["pair_date", "item_id", "similar_item_id", "target_widget_name"])
     )
 
 
@@ -524,21 +588,25 @@ def _write_daily_pair_stats(
         stats: DailyPairStats,
         partition_date: str,
         output_dir: Path,
-) -> tuple[Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path]:
     """Write compact daily pair-stat artifacts and return their paths."""
     counts_dir = output_dir / "counts"
+    widget_counts_dir = output_dir / "widget_counts"
     user_keys_dir = output_dir / "user_keys"
     session_keys_dir = output_dir / "session_keys"
 
     counts_dir.mkdir(parents=True, exist_ok=True)
+    widget_counts_dir.mkdir(parents=True, exist_ok=True)
     user_keys_dir.mkdir(parents=True, exist_ok=True)
     session_keys_dir.mkdir(parents=True, exist_ok=True)
 
     count_path = counts_dir / f"date={partition_date}.parquet"
+    widget_count_path = widget_counts_dir / f"date={partition_date}.parquet"
     user_key_path = user_keys_dir / f"date={partition_date}.parquet"
     session_key_path = session_keys_dir / f"date={partition_date}.parquet"
 
     counts = stats.counts
+    widget_counts = stats.widget_counts
     user_keys = stats.user_keys
     session_keys = stats.session_keys
 
@@ -546,6 +614,11 @@ def _write_daily_pair_stats(
         counts = _merge_daily_pair_counts(
             pl.read_parquet(count_path),
             counts,
+        )
+    if widget_count_path.exists():
+        widget_counts = _merge_daily_pair_widget_counts(
+            pl.read_parquet(widget_count_path),
+            widget_counts,
         )
     if user_key_path.exists():
         user_keys = _merge_daily_pair_keys(
@@ -563,9 +636,10 @@ def _write_daily_pair_stats(
         )
 
     counts.write_parquet(count_path)
+    widget_counts.write_parquet(widget_count_path)
     user_keys.write_parquet(user_key_path)
     session_keys.write_parquet(session_key_path)
-    return count_path, user_key_path, session_key_path
+    return count_path, widget_count_path, user_key_path, session_key_path
 
 
 def _build_daily_pair_stats_in_memory(
@@ -601,6 +675,7 @@ def _build_and_write_daily_pair_stats(
 ) -> DailyPairStatsPaths:
     """Build compact daily pair stats for each sessions partition and write once per day."""
     count_paths: list[Path] = []
+    widget_count_paths: list[Path] = []
     user_key_paths: list[Path] = []
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
@@ -626,13 +701,14 @@ def _build_and_write_daily_pair_stats(
 
         combined_stats = _combine_daily_pair_stats(batch_stats)
 
-        count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+        count_path, widget_count_path, user_key_path, session_key_path = _write_daily_pair_stats(
             stats=combined_stats,
             partition_date=partition_date,
             output_dir=output_dir,
         )
 
         count_paths.append(count_path)
+        widget_count_paths.append(widget_count_path)
         user_key_paths.append(user_key_path)
         session_key_paths.append(session_key_path)
 
@@ -641,6 +717,7 @@ def _build_and_write_daily_pair_stats(
 
     return DailyPairStatsPaths(
         count_paths=count_paths,
+        widget_count_paths=widget_count_paths,
         user_key_paths=user_key_paths,
         session_key_paths=session_key_paths,
         raw_pair_rows=raw_pair_rows,
@@ -677,10 +754,11 @@ def _sessions_to_clean_events(sessions: pl.DataFrame) -> pl.DataFrame:
             "timestamp",
             "action_type",
             "item_id",
+            "widget_name",
         )
         .with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("search_query"),
-            pl.lit(None, dtype=pl.Utf8).alias("widget_name"),
+            pl.col("widget_name").cast(pl.String).fill_null("unknown").alias("widget_name"),
         )
         .select(schemas.CLEAN_EVENTS_COLUMNS)
     )
@@ -852,12 +930,14 @@ def _build_streaming_sessions_and_pair_stats(
     if not clean_event_paths:
         return 0, DailyPairStatsPaths(
             count_paths=[],
+            widget_count_paths=[],
             user_key_paths=[],
             session_key_paths=[],
             raw_pair_rows=0,
         )
 
     count_paths: list[Path] = []
+    widget_count_paths: list[Path] = []
     user_key_paths: list[Path] = []
     session_key_paths: list[Path] = []
     raw_pair_rows = 0
@@ -978,13 +1058,14 @@ def _build_streaming_sessions_and_pair_stats(
             )
 
             combined_stats = _combine_daily_pair_stats(stats_list)
-            count_path, user_key_path, session_key_path = _write_daily_pair_stats(
+            count_path, widget_count_path, user_key_path, session_key_path = _write_daily_pair_stats(
                 stats=combined_stats,
                 partition_date=stats_partition_date,
                 output_dir=daily_pairs_output_dir,
             )
 
             count_paths.append(count_path)
+            widget_count_paths.append(widget_count_path)
             user_key_paths.append(user_key_path)
             session_key_paths.append(session_key_path)
 
@@ -994,6 +1075,7 @@ def _build_streaming_sessions_and_pair_stats(
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),
+        widget_count_paths=_unique_paths(widget_count_paths),
         user_key_paths=_unique_paths(user_key_paths),
         session_key_paths=_unique_paths(session_key_paths),
         raw_pair_rows=raw_pair_rows,
@@ -1501,6 +1583,12 @@ def run_pipeline(
             "enriched_recommendations_path": enriched_relative_path,
             "widget_recommendations_path": widget_relative_path,
             "lookup_recommendations_path": widget_relative_path,
+        },
+        "artifact_partitions": {
+            "daily_pair_counts": len(daily_pair_stats_paths.count_paths),
+            "daily_pair_widget_counts": len(daily_pair_stats_paths.widget_count_paths),
+            "daily_pair_user_keys": len(daily_pair_stats_paths.user_key_paths),
+            "daily_pair_session_keys": len(daily_pair_stats_paths.session_key_paths),
         },
         "rows": {
             "raw_events": raw_events_rows,

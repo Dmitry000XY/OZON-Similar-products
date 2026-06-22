@@ -11,6 +11,7 @@ import polars as pl
 
 _VALID_DISTANCE_STRATEGIES = {"none", "weight_table", "exponential"}
 _VALID_TIME_STRATEGIES = {"none", "weight_table", "exponential"}
+_VALID_WIDGET_CONTEXT_USES = {"source", "target"}
 
 DEFAULT_DISTANCE_WEIGHTS: dict[int | str, float] = {
     1: 1.0,
@@ -67,6 +68,56 @@ def _as_float(value: Any, *, default: float, name: str) -> float:
     if isinstance(value, int | float | str):
         return float(value)
     raise TypeError(f"{name} must be a number")
+
+
+def _as_str(value: Any, *, default: str, name: str) -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"{name} must be a string")
+
+
+def _as_string_tuple(value: Any, *, name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, list | tuple):
+        values = tuple(value)
+    else:
+        raise TypeError(f"{name} must be a string or a sequence of strings")
+
+    if any(not isinstance(item, str) or not item for item in values):
+        raise ValueError(f"{name} must contain non-empty strings")
+    return values
+
+
+def _parse_widget_weights(raw_weights: Any) -> dict[str, float]:
+    if raw_weights is None:
+        return {}
+    if not isinstance(raw_weights, Mapping):
+        raise TypeError("graph.widget_context.weights must be a mapping")
+
+    weights: dict[str, float] = {}
+    for raw_widget_name, raw_weight in raw_weights.items():
+        widget_name = str(raw_widget_name)
+        if not widget_name:
+            raise ValueError("graph.widget_context.weights keys must be non-empty strings")
+        weight = float(raw_weight)
+        if weight < 0.0:
+            raise ValueError("graph.widget_context.weights values must be non-negative")
+        weights[widget_name] = weight
+    return weights
+
+
+def _normalized_widget_expr(widget_expr: pl.Expr) -> pl.Expr:
+    widget = widget_expr.cast(pl.String).str.strip_chars()
+    return (
+        pl.when(widget.is_null() | (widget == ""))
+        .then(pl.lit("unknown"))
+        .otherwise(widget)
+    )
 
 
 def _parse_weight_table(
@@ -200,6 +251,88 @@ class DistanceDecayConfig:
             (-(float(self.alpha)) * (distance_expr.cast(pl.Float64) - 1.0)).exp(),
             pl.lit(float(self.min_weight)),
         )
+
+
+@dataclass(frozen=True)
+class WidgetContextConfig:
+    """Configurable widget-name filtering and graph weighting."""
+
+    enabled: bool = False
+    use: str = "target"
+    default_weight: float = 1.0
+    unknown_weight: float = 1.0
+    weights: Mapping[str, float] = field(default_factory=dict)
+    blocked_widgets: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.use not in _VALID_WIDGET_CONTEXT_USES:
+            raise ValueError("graph.widget_context.use must be source or target")
+        if self.default_weight < 0.0:
+            raise ValueError("graph.widget_context.default_weight must be non-negative")
+        if self.unknown_weight < 0.0:
+            raise ValueError("graph.widget_context.unknown_weight must be non-negative")
+        for widget_name, weight in self.weights.items():
+            if not isinstance(widget_name, str) or not widget_name:
+                raise ValueError("graph.widget_context.weights keys must be non-empty strings")
+            if float(weight) < 0.0:
+                raise ValueError("graph.widget_context.weights values must be non-negative")
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "WidgetContextConfig":
+        graph = _as_mapping(config.get("graph", {}))
+        raw = _as_mapping(graph.get("widget_context", {}))
+        return cls(
+            enabled=_as_bool(
+                raw.get("enabled"),
+                default=False,
+                name="graph.widget_context.enabled",
+            ),
+            use=_as_str(
+                raw.get("use"),
+                default="target",
+                name="graph.widget_context.use",
+            ),
+            default_weight=_as_float(
+                raw.get("default_weight"),
+                default=1.0,
+                name="graph.widget_context.default_weight",
+            ),
+            unknown_weight=_as_float(
+                raw.get("unknown_weight"),
+                default=1.0,
+                name="graph.widget_context.unknown_weight",
+            ),
+            weights=_parse_widget_weights(raw.get("weights")),
+            blocked_widgets=_as_string_tuple(
+                raw.get("blocked_widgets"),
+                name="graph.widget_context.blocked_widgets",
+            ),
+        )
+
+    @property
+    def context_column_name(self) -> str:
+        if self.use == "source":
+            return "source_widget_name"
+        return "target_widget_name"
+
+    def filter_expr(self, widget_expr: pl.Expr) -> pl.Expr:
+        if not self.enabled or not self.blocked_widgets:
+            return pl.lit(True)
+        return ~_normalized_widget_expr(widget_expr).is_in(list(self.blocked_widgets))
+
+    def weight_expr(self, widget_expr: pl.Expr) -> pl.Expr:
+        if not self.enabled:
+            return pl.lit(1.0)
+
+        widget = _normalized_widget_expr(widget_expr)
+        expr = (
+            pl.when(widget == "unknown")
+            .then(float(self.unknown_weight))
+            .otherwise(float(self.default_weight))
+        )
+        for widget_name, weight in self.weights.items():
+            expr = pl.when(widget == widget_name).then(float(weight)).otherwise(expr)
+        return expr
 
 
 @dataclass(frozen=True)

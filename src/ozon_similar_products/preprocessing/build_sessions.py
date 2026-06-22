@@ -49,10 +49,14 @@ class SessionBuilder:
                 "timestamp",
                 "action_type",
                 "item_id",
+                "widget_name",
             )
             .filter(pl.col("user_id").is_not_null())
             .filter(pl.col("timestamp").is_not_null())
             .filter(pl.col("item_id").is_not_null())
+            .with_columns(
+                pl.col("widget_name").cast(pl.String).fill_null("unknown").alias("widget_name")
+            )
             .sort(["user_id", "timestamp", "item_id", "action_type"])
             .with_columns(
                 pl.col("timestamp")

@@ -5,10 +5,18 @@ import pytest
 
 from ozon_similar_products.data import schemas
 from ozon_similar_products.retrieval.build_pairs import DailyPairStats, ItemPairBuilder
+from ozon_similar_products.retrieval.decay import WidgetContextConfig
 
 
 def _sessions(rows: list[dict]) -> pl.DataFrame:
-    return pl.DataFrame(rows)
+    return pl.DataFrame(
+        [
+            {"widget_name": "catalog", **row}
+            if "widget_name" not in row
+            else row
+            for row in rows
+        ]
+    )
 
 
 def test_build_pairs_uses_target_signal_type() -> None:
@@ -53,7 +61,10 @@ def test_build_pairs_uses_target_signal_type() -> None:
     assert result.filter(pl.col("item_id") == pl.col("similar_item_id")).is_empty()
     assert "session_id" not in result.columns
     assert "session_index" in result.columns
+    assert "source_widget_name" in result.columns
+    assert "target_widget_name" in result.columns
     assert result["session_index"].to_list() == [1, 1, 1, 1, 1, 1]
+    assert result["target_widget_name"].to_list() == ["catalog"] * 6
 
 
 def test_build_daily_pair_stats_matches_raw_pair_semantics() -> None:
@@ -122,6 +133,7 @@ def test_build_daily_pair_stats_matches_raw_pair_semantics() -> None:
     assert stats.raw_pair_rows == 6
 
     assert stats.counts.columns == schemas.DAILY_PAIR_COUNTS_COLUMNS
+    assert stats.widget_counts.columns == schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS
     assert stats.user_keys.columns == schemas.DAILY_PAIR_USER_KEYS_COLUMNS
     assert stats.session_keys.columns == schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS
 
@@ -135,6 +147,14 @@ def test_build_daily_pair_stats_matches_raw_pair_semantics() -> None:
     assert row["click_count"] == 1
     assert row["favorite_count"] == 0
     assert row["to_cart_count"] == 1
+
+    widget_row = stats.widget_counts.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+        & (pl.col("target_widget_name") == "catalog")
+    ).row(0, named=True)
+    assert widget_row["pair_count"] == 3
+    assert widget_row["to_cart_count"] == 1
 
     user_keys = stats.user_keys.filter(
         (pl.col("item_id") == 10)
@@ -169,9 +189,11 @@ def test_build_daily_pair_stats_returns_empty_contracts_for_no_pairs() -> None:
 
     assert stats.raw_pair_rows == 0
     assert stats.counts.is_empty()
+    assert stats.widget_counts.is_empty()
     assert stats.user_keys.is_empty()
     assert stats.session_keys.is_empty()
     assert stats.counts.columns == schemas.DAILY_PAIR_COUNTS_COLUMNS
+    assert stats.widget_counts.columns == schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS
     assert stats.user_keys.columns == schemas.DAILY_PAIR_USER_KEYS_COLUMNS
     assert stats.session_keys.columns == schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS
 
@@ -336,6 +358,99 @@ def test_build_pairs_from_config_treats_string_action_type_as_single_value() -> 
     )
 
     assert tuple(builder.item_action_types) == ("to_cart",)
+
+
+def test_widget_context_weights_target_widget_in_weighted_counts() -> None:
+    sessions = _sessions(
+        [
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+                "widget_name": "product_card",
+            },
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 1),
+                "action_type": "click",
+                "item_id": 20,
+                "widget_name": "search_results",
+            },
+        ]
+    )
+
+    stats = ItemPairBuilder(
+        widget_context=WidgetContextConfig(
+            enabled=True,
+            use="target",
+            weights={"search_results": 2.0},
+        )
+    ).build_daily_pair_stats(sessions)
+
+    target_search = stats.counts.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+    ).row(0, named=True)
+    target_product = stats.counts.filter(
+        (pl.col("item_id") == 20)
+        & (pl.col("similar_item_id") == 10)
+    ).row(0, named=True)
+
+    assert target_search["pair_count"] == 1
+    assert target_search["weighted_pair_count"] == pytest.approx(2.0)
+    assert target_search["weighted_click_count"] == pytest.approx(2.0)
+    assert target_product["weighted_pair_count"] == pytest.approx(1.0)
+
+
+def test_widget_context_blocks_noisy_target_widgets() -> None:
+    sessions = _sessions(
+        [
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 0),
+                "action_type": "view",
+                "item_id": 10,
+                "widget_name": "catalog",
+            },
+            {
+                "user_id": 1,
+                "session_index": 1,
+                "session_start_date": date(2026, 5, 1),
+                "event_date": date(2026, 5, 1),
+                "timestamp": datetime(2026, 5, 1, 10, 1),
+                "action_type": "click",
+                "item_id": 20,
+                "widget_name": "noisy_recommendations",
+            },
+        ]
+    )
+
+    pairs = ItemPairBuilder(
+        widget_context=WidgetContextConfig(
+            enabled=True,
+            use="target",
+            blocked_widgets=("noisy_recommendations",),
+        )
+    ).transform_day(sessions)
+
+    assert pairs.filter(
+        (pl.col("item_id") == 10)
+        & (pl.col("similar_item_id") == 20)
+    ).is_empty()
+    assert pairs.filter(
+        (pl.col("item_id") == 20)
+        & (pl.col("similar_item_id") == 10)
+    ).height == 1
 
 
 @pytest.mark.parametrize(

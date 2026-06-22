@@ -51,6 +51,15 @@ graph:
       half_life_days: 7
       min_weight: 0.05
 
+  widget_context:
+    # Widget weights affect scoring when scoring.count_source is set to weighted.
+    enabled: false
+    use: target
+    default_weight: 1.0
+    unknown_weight: 1.0
+    blocked_widgets: []
+    weights: {}
+
 scoring:
   method: calibrated_multichannel
   count_source: raw

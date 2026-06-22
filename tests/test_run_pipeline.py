@@ -81,6 +81,7 @@ def test_partition_sessions_by_session_start_date_keeps_cross_midnight_session_t
             ],
             "action_type": ["view", "click"],
             "item_id": [10, 20],
+            "widget_name": ["catalog", "catalog"],
         }
     ).with_columns(
         pl.col("timestamp").str.to_datetime(),
@@ -345,6 +346,7 @@ def test_run_pipeline_updates_latest_with_empty_recommendations_only_when_allowe
         def build_daily_pair_stats(self, _: pl.DataFrame) -> run_pipeline.DailyPairStats:
             return run_pipeline.DailyPairStats(
                 counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
+                widget_counts=empty_contract_frame(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS),
                 user_keys=empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS),
                 session_keys=empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS),
                 raw_pair_rows=0,
@@ -493,6 +495,7 @@ def test_run_pipeline_logs_warnings_on_empty_input_and_output(
         def build_daily_pair_stats(self, _: pl.DataFrame) -> run_pipeline.DailyPairStats:
             return run_pipeline.DailyPairStats(
                 counts=empty_contract_frame(schemas.DAILY_PAIR_COUNTS_COLUMNS),
+                widget_counts=empty_contract_frame(schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS),
                 user_keys=empty_contract_frame(schemas.DAILY_PAIR_USER_KEYS_COLUMNS),
                 session_keys=empty_contract_frame(schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS),
                 raw_pair_rows=0,
@@ -998,8 +1001,11 @@ def test_run_pipeline_loads_raw_events_day_by_day(
 
         def save_manifest(self, manifest: dict[str, object], output_path: str | Path) -> Path:
             rows = cast(dict[str, int], manifest["rows"])
+            artifact_partitions = cast(dict[str, int], manifest["artifact_partitions"])
             assert rows["raw_events"] == 4
             assert rows["clean_events"] == 4
+            assert artifact_partitions["daily_pair_counts"] == 2
+            assert artifact_partitions["daily_pair_widget_counts"] == 2
             return Path(output_path) / "manifest.json"
 
         def update_latest_manifest(self, run_manifest_path: str | Path, latest_dir: str | Path) -> Path:
@@ -1043,6 +1049,7 @@ def test_run_pipeline_loads_raw_events_day_by_day(
     item_pairs_dir = tmp_path / "data" / "processed" / "item_pairs"
 
     count_files = sorted((item_pairs_dir / "counts").glob("*.parquet"))
+    widget_count_files = sorted((item_pairs_dir / "widget_counts").glob("*.parquet"))
     user_key_files = sorted((item_pairs_dir / "user_keys").glob("*.parquet"))
     session_key_files = sorted((item_pairs_dir / "session_keys").glob("*.parquet"))
 
@@ -1051,6 +1058,10 @@ def test_run_pipeline_loads_raw_events_day_by_day(
         "date=2026-05-10.parquet",
     ]
     assert [path.name for path in count_files] == [
+        "date=2026-05-09.parquet",
+        "date=2026-05-10.parquet",
+    ]
+    assert [path.name for path in widget_count_files] == [
         "date=2026-05-09.parquet",
         "date=2026-05-10.parquet",
     ]
@@ -1165,6 +1176,7 @@ def test_build_and_write_daily_pair_stats_writes_compact_artifacts(tmp_path: Pat
             ],
             "action_type": ["view", "to_cart"],
             "item_id": [10, 20],
+            "widget_name": ["catalog", "product_card"],
         }
     ).with_columns(
         pl.col("timestamp").str.to_datetime(),
@@ -1178,14 +1190,17 @@ def test_build_and_write_daily_pair_stats_writes_compact_artifacts(tmp_path: Pat
 
     assert paths.raw_pair_rows == 2
     assert [path.name for path in paths.count_paths] == ["date=2026-05-10.parquet"]
+    assert [path.name for path in paths.widget_count_paths] == ["date=2026-05-10.parquet"]
     assert [path.name for path in paths.user_key_paths] == ["date=2026-05-10.parquet"]
     assert [path.name for path in paths.session_key_paths] == ["date=2026-05-10.parquet"]
 
     counts = pl.read_parquet(paths.count_paths[0])
+    widget_counts = pl.read_parquet(paths.widget_count_paths[0])
     user_keys = pl.read_parquet(paths.user_key_paths[0])
     session_keys = pl.read_parquet(paths.session_key_paths[0])
 
     assert counts.columns == schemas.DAILY_PAIR_COUNTS_COLUMNS
+    assert widget_counts.columns == schemas.DAILY_PAIR_WIDGET_COUNTS_COLUMNS
     assert user_keys.columns == schemas.DAILY_PAIR_USER_KEYS_COLUMNS
     assert session_keys.columns == schemas.DAILY_PAIR_SESSION_KEYS_COLUMNS
 
