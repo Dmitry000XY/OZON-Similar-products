@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +18,7 @@ from ozon_similar_products.business.fallback import (
 )
 from ozon_similar_products.config import PROJECT_ROOT
 from ozon_similar_products.data import load_configs, load_products, schemas
+from ozon_similar_products.data.frames import empty_contract_frame
 from ozon_similar_products.output.writers import RecommendationWriter
 from ozon_similar_products.pipeline.run_pipeline import (
     PipelineRunResult,
@@ -34,11 +35,28 @@ from ozon_similar_products.pipeline.run_pipeline import (
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 from ozon_similar_products.retrieval.topk import TopKSelector
 
+FrameLike = pl.DataFrame | pl.LazyFrame
+
+
+def _pair_aggregate_parts(pair_aggregates: FrameLike | Sequence[FrameLike]) -> tuple[FrameLike, ...]:
+    """Normalize single or bucketed pair-aggregate inputs."""
+    if isinstance(pair_aggregates, pl.DataFrame | pl.LazyFrame):
+        return (pair_aggregates,)
+    return tuple(pair_aggregates)
+
+
+def _concat_recommendation_parts(parts: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    """Concat recommendation chunks while preserving optional diagnostic columns."""
+    if not parts:
+        return empty_contract_frame(schemas.RECOMMENDATIONS_COLUMNS)
+
+    return pl.concat(parts, how="diagonal_relaxed")
+
 
 def run_scoring_output_from_artifacts(
     *,
     config: Mapping[str, Any],
-    pair_aggregates: pl.DataFrame | pl.LazyFrame,
+    pair_aggregates: FrameLike | Sequence[FrameLike],
     item_popularity: pl.DataFrame | pl.LazyFrame,
     action_distribution: pl.DataFrame,
     train_until_date: str,
@@ -66,24 +84,16 @@ def run_scoring_output_from_artifacts(
             parameter_name="pipeline.allow_empty_latest_update",
         )
 
-    logger.info("[scoring_output] score pairs")
+    pair_aggregate_parts = _pair_aggregate_parts(pair_aggregates)
+    logger.info(
+        "[scoring_output] score pairs pair_aggregate_parts=%s",
+        len(pair_aggregate_parts),
+    )
     scorer = CoVisitationScorer.from_config(config)
     if scorer.action_shares is None:
         derived_action_shares = _action_shares_from_distribution(action_distribution)
         if derived_action_shares is not None:
             scorer = replace(scorer, action_shares=derived_action_shares)
-
-    if scorer.normalize_by_item_popularity:
-        pair_scores = scorer.score_lazy(pair_aggregates, item_popularity=item_popularity)
-    else:
-        pair_scores = scorer.score_lazy(pair_aggregates)
-
-    pair_scores_rows = pair_scores.select(pl.len()).collect().item()
-    logger.info(
-        "[scoring_output] pair scores rows=%s calibration_used=%s",
-        pair_scores_rows,
-        scorer.action_shares is not None,
-    )
 
     top_k = _as_positive_int(
         value=topk_config.get("top_k", pipeline_config.get("top_k")),
@@ -101,7 +111,37 @@ def run_scoring_output_from_artifacts(
         min_unique_users=_as_optional_int(topk_config.get("min_unique_users")),
         min_unique_sessions=_as_optional_int(topk_config.get("min_unique_sessions")),
     )
-    recommendations = selector.select(pair_scores)
+
+    pair_scores_rows = 0
+    recommendation_parts: list[pl.DataFrame] = []
+    for part_index, pair_aggregate_part in enumerate(pair_aggregate_parts, start=1):
+        if scorer.normalize_by_item_popularity:
+            pair_scores_lazy = scorer.score_lazy(
+                pair_aggregate_part,
+                item_popularity=item_popularity,
+            )
+        else:
+            pair_scores_lazy = scorer.score_lazy(pair_aggregate_part)
+
+        pair_scores = pair_scores_lazy.collect()
+        pair_scores_rows += pair_scores.height
+        bucket_recommendations = selector.select(pair_scores)
+        if not bucket_recommendations.is_empty():
+            recommendation_parts.append(bucket_recommendations)
+        logger.debug(
+            "[scoring_output] pair aggregate part=%s/%s pair_scores_rows=%s recommendations_rows=%s",
+            part_index,
+            len(pair_aggregate_parts),
+            pair_scores.height,
+            bucket_recommendations.height,
+        )
+
+    logger.info(
+        "[scoring_output] pair scores rows=%s calibration_used=%s",
+        pair_scores_rows,
+        scorer.action_shares is not None,
+    )
+    recommendations = _concat_recommendation_parts(recommendation_parts)
 
     fallback_config = FallbackConfig.from_config(config, top_k=top_k)
     if fallback_config.enabled:

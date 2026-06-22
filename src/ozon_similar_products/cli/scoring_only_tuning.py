@@ -32,17 +32,26 @@ from ozon_similar_products.evaluation.validation_cache import (
     validation_cache_metadata,
 )
 from ozon_similar_products.output.writers import RecommendationWriter
-from ozon_similar_products.pipeline.run_pipeline import PipelineRunResult, run_pipeline
+from ozon_similar_products.pipeline.run_pipeline import (
+    PipelineRunResult,
+    _as_mapping,
+    _as_positive_int,
+    _daily_pair_stats_paths_for_date,
+    _date_range_strings,
+    _pair_aggregator_from_config,
+    run_pipeline,
+)
 from ozon_similar_products.pipeline.scoring_output import run_scoring_output_from_artifacts
 
 SAFE_SCORING_ONLY_PREFIXES = ("scoring.", "topk.", "business.fallback.")
+FrameLike = pl.DataFrame | pl.LazyFrame
 
 
 @dataclass(frozen=True)
 class FastScoringContext:
     """Prebuilt artifacts that are safe to reuse across scoring-only trials."""
 
-    pair_aggregates: pl.DataFrame
+    pair_aggregate_parts: tuple[FrameLike, ...]
     item_popularity: pl.DataFrame
     action_distribution: pl.DataFrame
     ground_truth: pl.DataFrame
@@ -57,6 +66,13 @@ class FastScoringContext:
     validation_cache_hit: bool
     validation_cache_dir: Path
     base_pipeline_result: PipelineRunResult
+
+    @property
+    def pair_aggregates(self) -> FrameLike | tuple[FrameLike, ...]:
+        """Backward-compatible access to the prebuilt aggregate inputs."""
+        if len(self.pair_aggregate_parts) == 1:
+            return self.pair_aggregate_parts[0]
+        return self.pair_aggregate_parts
 
 
 def validate_scoring_only_search_space(search_space: Mapping[str, Any]) -> None:
@@ -112,6 +128,140 @@ def _window_artifact_path(config: Mapping[str, Any], key: str, default: str, win
     return artifact_dir / f"window_start={window_start}_window_end={window_end}.parquet"
 
 
+def _artifact_dir(config: Mapping[str, Any], key: str, default: str) -> Path:
+    artifacts = config.get("artifacts", {})
+    if not isinstance(artifacts, Mapping):
+        return Path(default)
+    return Path(str(artifacts.get(key, default)))
+
+
+def _pair_aggregate_part_path(
+        output_dir: Path,
+        *,
+        window_start: str,
+        window_end: str,
+        bucket_id: int,
+        bucket_count: int,
+) -> Path:
+    return (
+        output_dir
+        / f"window_start={window_start}_window_end={window_end}_bucket={bucket_id:05d}-of-{bucket_count:05d}.parquet"
+    )
+
+
+def _daily_pair_stat_paths_for_window(
+        *,
+        config: Mapping[str, Any],
+        window_start: str,
+        window_end: str,
+) -> tuple[list[Path], list[Path], list[Path]]:
+    daily_pairs_dir = _artifact_dir(
+        config,
+        "daily_pairs_dir",
+        "data/processed/item_pairs",
+    )
+    count_paths: list[Path] = []
+    user_key_paths: list[Path] = []
+    session_key_paths: list[Path] = []
+    incomplete_dates: list[str] = []
+
+    for partition_date in _date_range_strings(window_start, window_end):
+        count_path, widget_count_path, user_key_path, session_key_path = (
+            _daily_pair_stats_paths_for_date(daily_pairs_dir, partition_date)
+        )
+        required_paths = (count_path, widget_count_path, user_key_path, session_key_path)
+        existing_count = sum(path.exists() for path in required_paths)
+        if existing_count == len(required_paths):
+            count_paths.append(count_path)
+            user_key_paths.append(user_key_path)
+            session_key_paths.append(session_key_path)
+        elif existing_count != 0:
+            incomplete_dates.append(partition_date)
+
+    if incomplete_dates:
+        raise FileNotFoundError(
+            "Incomplete daily pair stats for fast scoring-only bucketed aggregation: "
+            f"dates={incomplete_dates}, daily_pairs_dir={daily_pairs_dir}"
+        )
+
+    return count_paths, user_key_paths, session_key_paths
+
+
+def _build_pair_aggregate_part_paths(
+        *,
+        config: Mapping[str, Any],
+        window_start: str,
+        window_end: str,
+        output_dir: Path,
+        logger: logging.Logger,
+) -> tuple[Path, ...]:
+    pipeline_config = _as_mapping(config.get("pipeline", {}))
+    aggregation_item_buckets = _as_positive_int(
+        value=pipeline_config.get("aggregation_item_buckets"),
+        default=1,
+        parameter_name="pipeline.aggregation_item_buckets",
+    )
+
+    if aggregation_item_buckets == 1:
+        return (
+            _window_artifact_path(
+                config,
+                "pair_aggregates_dir",
+                "data/processed/pair_aggregates",
+                window_start,
+                window_end,
+            ),
+        )
+
+    count_paths, user_key_paths, session_key_paths = _daily_pair_stat_paths_for_window(
+        config=config,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    aggregator = _pair_aggregator_from_config(config)
+    part_paths: list[Path] = []
+
+    logger.info(
+        "[scoring_only] build bucketed pair aggregate parts buckets=%s from_daily_stat_partitions=%s",
+        aggregation_item_buckets,
+        len(count_paths),
+    )
+    for bucket_id in range(aggregation_item_buckets):
+        pair_aggregates = aggregator.aggregate_window_from_daily_stats_paths(
+            count_paths=count_paths,
+            user_key_paths=user_key_paths,
+            session_key_paths=session_key_paths,
+            window_start=window_start,
+            window_end=window_end,
+            item_bucket_id=bucket_id,
+            item_bucket_count=aggregation_item_buckets,
+        )
+        part_path = _pair_aggregate_part_path(
+            output_dir,
+            window_start=window_start,
+            window_end=window_end,
+            bucket_id=bucket_id,
+            bucket_count=aggregation_item_buckets,
+        )
+        pair_aggregates.write_parquet(part_path)
+        part_paths.append(part_path)
+        logger.debug(
+            "[scoring_only] pair aggregate part=%s/%s rows=%s path=%s",
+            bucket_id + 1,
+            aggregation_item_buckets,
+            pair_aggregates.height,
+            part_path,
+        )
+
+    logger.info(
+        "[scoring_only] built pair aggregate parts buckets=%s output_dir=%s",
+        len(part_paths),
+        output_dir,
+    )
+    return tuple(part_paths)
+
+
 def _row_counts_from_manifest(manifest: Mapping[str, Any]) -> dict[str, int]:
     rows = manifest.get("rows")
     if not isinstance(rows, Mapping):
@@ -151,14 +301,15 @@ def build_fast_scoring_context(
     window_start = str(pipeline_result.manifest["window_start"])
     window_end = str(pipeline_result.manifest["window_end"])
 
-    pair_aggregates = pl.read_parquet(
-        _window_artifact_path(
-            base_train_config,
-            "pair_aggregates_dir",
-            "data/processed/pair_aggregates",
-            window_start,
-            window_end,
-        )
+    pair_aggregate_part_paths = _build_pair_aggregate_part_paths(
+        config=base_train_config,
+        window_start=window_start,
+        window_end=window_end,
+        output_dir=artifact_root / "pair_aggregate_parts",
+        logger=logger,
+    )
+    pair_aggregate_parts = tuple(
+        pl.scan_parquet(path.as_posix()) for path in pair_aggregate_part_paths
     )
     item_popularity = pl.read_parquet(
         _window_artifact_path(
@@ -214,7 +365,7 @@ def build_fast_scoring_context(
     )
 
     return FastScoringContext(
-        pair_aggregates=pair_aggregates,
+        pair_aggregate_parts=pair_aggregate_parts,
         item_popularity=item_popularity,
         action_distribution=action_distribution,
         ground_truth=validation_cache.ground_truth,
@@ -246,7 +397,7 @@ def execute_scoring_only_trial(
     config = _config_with_top_k_override(trial_config, top_k)
     pipeline_result = run_scoring_output_from_artifacts(
         config=config,
-        pair_aggregates=context.pair_aggregates,
+        pair_aggregates=context.pair_aggregate_parts,
         item_popularity=context.item_popularity,
         action_distribution=context.action_distribution,
         train_until_date=context.train_until_date.isoformat(),
