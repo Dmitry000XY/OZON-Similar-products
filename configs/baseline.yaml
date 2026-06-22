@@ -57,7 +57,7 @@ graph:
 # Final calibrated recommendation scoring is done only in CoVisitationScorer.
 # Earlier layers preserve action_type and channel counts, but do not assign weights.
 scoring:
-  method: calibrated_multichannel
+  method: pair_count
   count_source: raw
   count_transform:
     method: log
@@ -117,7 +117,7 @@ evaluation:
 
 business:
   fallback:
-    enabled: true
+    enabled: false
     top_k: 20
     candidate_pool_size: 200
     global_candidate_pool_size: 200
