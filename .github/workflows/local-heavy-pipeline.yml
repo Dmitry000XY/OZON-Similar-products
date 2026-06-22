@@ -102,6 +102,7 @@ permissions:
 concurrency:
   group: ozon-local-heavy-pipeline
   cancel-in-progress: false
+  queue: max
 
 jobs:
   local-heavy:
