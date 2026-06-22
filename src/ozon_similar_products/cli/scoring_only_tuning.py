@@ -147,6 +147,7 @@ def build_fast_scoring_context(
         output_dir=fast_root,
         run_id="fast_scoring_base",
         update_latest=False,
+        export_demo_graph=False,
     )
     window_start = str(pipeline_result.manifest["window_start"])
     window_end = str(pipeline_result.manifest["window_end"])

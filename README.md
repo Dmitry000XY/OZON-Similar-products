@@ -73,6 +73,21 @@ uv run ozon-preview-recommendations
 uv run ozon-preview-recommendations --item-id 113
 ```
 
+### Demo site
+
+Для защиты и ручного просмотра run artifacts можно запустить Streamlit demo:
+
+```bash
+uv run streamlit run apps/demo/app.py
+```
+
+По умолчанию сайт читает `outputs/latest/manifest.json` и показывает похожие товары, summary run-а, метрики и граф
+рекомендаций. Graph artifacts обычного production/full run сохраняются внутри run-а:
+
+```text
+outputs/runs/<run_id>/demo/graph/
+```
+
 ### 5. Запустить полный сценарий с оценкой качества
 
 ```bash
@@ -122,6 +137,12 @@ outputs/runs/<run_id>/
     detailed.parquet
     enriched.parquet
     lookup.parquet
+  demo/
+    graph/
+      recommendations_graph.html
+      recommendations_graph.json
+      recommendations_graph.gexf
+      manifest.json
   manifest.json
 
 outputs/latest/
@@ -185,6 +206,7 @@ outputs/latest/
 * [`scripts/README.md`](scripts/README.md) — команды запуска;
 * [`configs/README.md`](configs/README.md) — настройки проекта;
 * [`docs/evaluation_metrics.md`](docs/evaluation_metrics.md) — метрики качества;
+* [`docs/demo_site_graph.md`](docs/demo_site_graph.md) — demo site и graph artifacts;
 * [`docs/incremental_update.md`](docs/incremental_update.md) — incremental-режим;
 * [`docs/local_runner.md`](docs/local_runner.md) — локальный self-hosted runner для тяжёлых запусков.
 

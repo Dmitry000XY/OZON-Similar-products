@@ -31,6 +31,10 @@ from apps.demo.demo_data import (  # noqa: E402
     source_explanation,
     source_group,
 )
+from ozon_similar_products.visualization import (  # noqa: E402
+    RecommendationGraphConfig,
+    export_recommendation_graph,
+)
 
 PAGE_TITLE = "Ozon Similar Products Demo"
 DEFAULT_MANIFEST_PATH = Path("outputs/latest/manifest.json")
@@ -103,10 +107,10 @@ def main() -> None:
 
 @st.cache_data(show_spinner=False)
 def _load_state(
-        *,
-        manifest_path: Path | None,
-        enriched_path: Path | None,
-        detailed_path: Path | None,
+    *,
+    manifest_path: Path | None,
+    enriched_path: Path | None,
+    detailed_path: Path | None,
 ) -> dict[str, Any]:
     recommendation_path = find_recommendation_path(
         manifest_path=manifest_path,
@@ -204,10 +208,7 @@ def _render_similar_items_tab(*, state: dict[str, Any], top_k: int) -> None:
 
 def _render_selected_item_card(item: dict[str, Any], recommendations: pl.DataFrame) -> None:
     distribution = source_distribution(recommendations)
-    distribution_rows = {
-        row["source"]: int(row["count"])
-        for row in distribution.to_dicts()
-    }
+    distribution_rows = {row["source"]: int(row["count"]) for row in distribution.to_dicts()}
     behavioral_count = distribution_rows.get("behavioral", 0)
     fallback_count = sum(
         count for source, count in distribution_rows.items() if str(source).startswith("fallback_")
@@ -250,26 +251,23 @@ def _render_source_badges(distribution: pl.DataFrame) -> None:
 
 
 def _display_recommendations(recommendations: pl.DataFrame) -> pl.DataFrame:
-    return (
-        recommendations.with_columns(
-            pl.col("score").round(6).alias("score"),
-            pl.col("source")
-            .fill_null("")
-            .map_elements(_source_label, return_dtype=pl.Utf8)
-            .alias("source"),
-            pl.col("source")
-            .fill_null("")
-            .map_elements(source_explanation, return_dtype=pl.Utf8)
-            .alias("explanation"),
-        )
-        .select(
-            "rank",
-            "similar_item_id",
-            "similar_item_name",
-            "score",
-            "source",
-            "explanation",
-        )
+    return recommendations.with_columns(
+        pl.col("score").round(6).alias("score"),
+        pl.col("source")
+        .fill_null("")
+        .map_elements(_source_label, return_dtype=pl.Utf8)
+        .alias("source"),
+        pl.col("source")
+        .fill_null("")
+        .map_elements(source_explanation, return_dtype=pl.Utf8)
+        .alias("explanation"),
+    ).select(
+        "rank",
+        "similar_item_id",
+        "similar_item_name",
+        "score",
+        "source",
+        "explanation",
     )
 
 
@@ -285,7 +283,9 @@ def _render_run_summary_tab(*, state: dict[str, Any], top_k: int) -> None:
         "recommendation artifact": recommendation_path.as_posix(),
         "train window": _train_window(manifest),
         "top_k": _manifest_value(manifest, "top_k", top_k),
-        "created_at": _manifest_value(manifest, "created_at", _manifest_value(manifest, "generated_at", "—")),
+        "created_at": _manifest_value(
+            manifest, "created_at", _manifest_value(manifest, "generated_at", "—")
+        ),
     }
     columns = st.columns(3)
     for index, (label, value) in enumerate(summary.items()):
@@ -315,9 +315,7 @@ def _render_run_summary_tab(*, state: dict[str, Any], top_k: int) -> None:
     st.subheader("Metrics")
     flattened = _flatten_metrics(metrics)
     metric_rows = [
-        {"metric": key, "value": flattened.get(key, "—")}
-        for key in METRIC_KEYS
-        if key in flattened
+        {"metric": key, "value": flattened.get(key, "—")} for key in METRIC_KEYS if key in flattened
     ]
     if metric_rows:
         st.dataframe(pl.DataFrame(metric_rows), use_container_width=True, hide_index=True)
@@ -327,8 +325,61 @@ def _render_run_summary_tab(*, state: dict[str, Any], top_k: int) -> None:
 
 def _render_graph_tab(*, state: dict[str, Any]) -> None:
     run_dir: Path = state["run_dir"]
-    graph_html = _find_graph_html(run_dir)
+    recommendation_path: Path = state["recommendation_path"]
+    selected_item_id = st.session_state.get("selected_item_id")
+
+    graph_type = st.radio(
+        "Graph type",
+        ["Overview", "Selected item neighborhood"],
+        horizontal=True,
+    )
+    control_columns = st.columns([0.18, 0.2, 0.18, 0.16, 0.28], vertical_alignment="bottom")
+    with control_columns[0]:
+        max_rank = st.selectbox("Max rank", [5, 10, 20], index=1)
+    with control_columns[1]:
+        max_edges = st.selectbox("Max edges", [500, 1000, 2000], index=2)
+    with control_columns[2]:
+        include_behavioral = st.checkbox("behavioral", value=True)
+    with control_columns[3]:
+        include_fallback = st.checkbox("fallback", value=True)
+    with control_columns[4]:
+        build_clicked = st.button("Build graph", use_container_width=True)
+
+    is_ego = graph_type == "Selected item neighborhood"
+    if is_ego and selected_item_id is None:
+        st.info("Select an item first in the Similar items tab.")
+
+    if build_clicked:
+        if is_ego and selected_item_id is None:
+            st.warning("Select an item before building a selected item graph.")
+        elif not include_behavioral and not include_fallback:
+            st.warning("Select at least one source type.")
+        else:
+            output_dir = _graph_output_dir(
+                run_dir=run_dir, selected_item_id=selected_item_id if is_ego else None
+            )
+            export_recommendation_graph(
+                recommendation_path=recommendation_path,
+                output_dir=output_dir,
+                config=RecommendationGraphConfig(
+                    mode="ego" if is_ego else "overview",
+                    selected_item_id=selected_item_id if is_ego else None,
+                    max_rank=int(max_rank),
+                    max_edges=int(max_edges),
+                    max_nodes=500,
+                    include_behavioral=include_behavioral,
+                    include_fallback=include_fallback,
+                ),
+                manifest_path=state["manifest_path"],
+            )
+            st.rerun()
+
+    if st.button("Reload graph"):
+        st.rerun()
+
+    graph_html = _find_graph_html(run_dir, selected_item_id=selected_item_id if is_ego else None)
     if graph_html is not None:
+        st.caption(f"Graph artifact: `{graph_html.as_posix()}`")
         components.html(graph_html.read_text(encoding="utf-8"), height=800, scrolling=True)
         return
 
@@ -338,14 +389,14 @@ def _render_graph_tab(*, state: dict[str, Any]) -> None:
         <section class="empty-state graph-placeholder">
           <h2>Graph visualization placeholder</h2>
           <p>
-            Later we will export a Gephi/Sigma.js graph for this run and place it here:
+            Build a recommendation graph for this run or place a polished Gephi export here:
           </p>
           <code>outputs/runs/{_html_escape(str(run_id))}/demo/gephi/index.html</code>
           <p class="muted">Expected graph artifacts:</p>
           <ul>
-            <li>graph.gexf for Gephi</li>
-            <li>graph.html or gephi/index.html for browser embedding</li>
-            <li>graph.json if needed</li>
+            <li>recommendations_graph.gexf for Gephi</li>
+            <li>recommendations_graph.html for browser embedding</li>
+            <li>recommendations_graph.json for inspection</li>
           </ul>
         </section>
         """,
@@ -389,15 +440,38 @@ def _load_metrics(run_dir: Path) -> dict[str, Any] | None:
     return None
 
 
-def _find_graph_html(run_dir: Path) -> Path | None:
-    for path in (
-        run_dir / "demo" / "gephi" / "index.html",
-        run_dir / "demo" / "graph.html",
-        Path("apps/demo/assets/graph/index.html"),
-    ):
+def _find_graph_html(run_dir: Path, *, selected_item_id: Any | None = None) -> Path | None:
+    candidate_paths = [run_dir / "demo" / "gephi" / "index.html"]
+    if selected_item_id is not None:
+        candidate_paths.append(
+            _graph_output_dir(run_dir=run_dir, selected_item_id=selected_item_id) / "ego_graph.html"
+        )
+    candidate_paths.extend(
+        [
+            run_dir / "demo" / "graph" / "recommendations_graph.html",
+            run_dir / "demo" / "graph.html",
+            Path("apps/demo/assets/graph/index.html"),
+        ]
+    )
+    for path in candidate_paths:
         if path.exists():
             return path
     return None
+
+
+def _graph_output_dir(run_dir: Path, selected_item_id: Any | None = None) -> Path:
+    graph_dir = run_dir / "demo" / "graph"
+    if selected_item_id is None:
+        return graph_dir
+    return graph_dir / "ego" / f"item_id={_safe_item_id_path(selected_item_id)}"
+
+
+def _safe_item_id_path(value: Any) -> str:
+    text = str(value)
+    safe = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_" for character in text
+    )
+    return safe or "unknown"
 
 
 def _display_name(value: Any) -> str:
@@ -490,10 +564,7 @@ def _flatten_metrics(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _html_escape(value: str) -> str:
     return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 

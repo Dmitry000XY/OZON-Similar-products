@@ -578,6 +578,7 @@ def _run_trial(
             run_dir=trial_dir,
             keep_evaluation_artifacts=False,
             publish_latest=False,
+            export_demo_graph=False,
         )
     else:
         result = execute_scoring_only_trial(

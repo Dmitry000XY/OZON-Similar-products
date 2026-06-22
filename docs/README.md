@@ -18,16 +18,17 @@
 
 ## Быстрая навигация
 
-| Задача                             | Куда идти                                        |
-|------------------------------------|--------------------------------------------------|
-| Понять проект целиком              | [`../README.md`](../README.md)                   |
-| Запустить проект                   | [`../scripts/README.md`](../scripts/README.md)   |
-| Настроить конфиги                  | [`../configs/README.md`](../configs/README.md)   |
-| Понять архитектуру                 | [`architecture.md`](architecture.md)             |
-| Разобраться с таблицами            | [`data_contract.md`](data_contract.md)           |
-| Понять метрики качества            | [`evaluation_metrics.md`](evaluation_metrics.md) |
-| Понять incremental-режим           | [`incremental_update.md`](incremental_update.md) |
-| Настроить локальный тяжёлый запуск | [`local_runner.md`](local_runner.md)             |
+| Задача                              | Куда идти                                        |
+|-------------------------------------|--------------------------------------------------|
+| Понять проект целиком               | [`../README.md`](../README.md)                   |
+| Запустить проект                    | [`../scripts/README.md`](../scripts/README.md)   |
+| Настроить конфиги                   | [`../configs/README.md`](../configs/README.md)   |
+| Понять архитектуру                  | [`architecture.md`](architecture.md)             |
+| Разобраться с таблицами             | [`data_contract.md`](data_contract.md)           |
+| Понять метрики качества             | [`evaluation_metrics.md`](evaluation_metrics.md) |
+| Посмотреть demo site и graph export | [`demo_site_graph.md`](demo_site_graph.md)       |
+| Понять incremental-режим            | [`incremental_update.md`](incremental_update.md) |
+| Настроить локальный тяжёлый запуск  | [`local_runner.md`](local_runner.md)             |
 
 ## Основные документы
 
@@ -36,6 +37,7 @@
 | [`architecture.md`](architecture.md)             | как устроен проект и как данные проходят путь от сырых событий до рекомендаций                            |
 | [`data_contract.md`](data_contract.md)           | какие таблицы используются, какие поля в них ожидаются и где появляются `score`, `rank` и итоговый lookup |
 | [`evaluation_metrics.md`](evaluation_metrics.md) | какие offline-метрики считаются и как отличать основные метрики от диагностических                        |
+| [`demo_site_graph.md`](demo_site_graph.md)       | как устроен Streamlit demo site, recommendation graph artifacts и опциональная доводка через Gephi        |
 | [`incremental_update.md`](incremental_update.md) | как переиспользуются дневные артефакты и как устроена защита от некорректного reuse                       |
 | [`local_runner.md`](local_runner.md)             | как запускать тяжёлые сценарии через локальный self-hosted GitHub Actions runner                          |
 
@@ -96,4 +98,5 @@
 | понять таблицы           | [`data_contract.md`](data_contract.md)                                                                                         |
 | изменить конкретный слой | README нужного модуля в [`../src/ozon_similar_products/`](../src/ozon_similar_products/)                                       |
 | проверить качество       | [`evaluation_metrics.md`](evaluation_metrics.md) и [`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md) |
+| подготовить demo         | [`demo_site_graph.md`](demo_site_graph.md)                                                                                     |
 | изменить настройки       | [`../configs/README.md`](../configs/README.md)                                                                                 |

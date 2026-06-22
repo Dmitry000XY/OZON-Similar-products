@@ -39,6 +39,11 @@ from ozon_similar_products.retrieval.aggregate_pairs import PairAggregator
 from ozon_similar_products.retrieval.build_pairs import DailyPairStats, ItemPairBuilder
 from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 from ozon_similar_products.retrieval.topk import TopKSelector
+from ozon_similar_products.visualization import (
+    GraphExportResult,
+    RecommendationGraphConfig,
+    export_recommendation_graph,
+)
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,15 @@ def _as_optional_int(value: Any) -> int | None:
     if parsed < 0:
         raise ValueError("Expected non-negative integer threshold or null")
     return parsed
+
+
+def _as_optional_float(value: Any, parameter_name: str) -> float | None:
+    """Parse an optional numeric config value."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{parameter_name} must be a number or null")
+    return float(value)
 
 
 def _as_positive_int(value: Any, default: int, parameter_name: str) -> int:
@@ -1741,6 +1755,83 @@ def _outputs_root(outputs_config: Mapping[str, Any]) -> Path:
     return _as_path(outputs_config.get("root_dir"), "outputs")
 
 
+def _demo_graph_export_config(config: Mapping[str, Any]) -> RecommendationGraphConfig | None:
+    demo_config = _as_mapping(config.get("demo", {}))
+    graph_config = _as_mapping(demo_config.get("graph", {}))
+    enabled = _as_bool(
+        graph_config.get("enabled"),
+        default=False,
+        parameter_name="demo.graph.enabled",
+    )
+    if not enabled:
+        return None
+
+    mode = str(graph_config.get("mode", "overview"))
+    if mode not in {"overview", "ego"}:
+        raise ValueError("demo.graph.mode must be 'overview' or 'ego'")
+
+    return RecommendationGraphConfig(
+        mode=mode,
+        max_rank=_as_positive_int(
+            graph_config.get("max_rank"),
+            default=10,
+            parameter_name="demo.graph.max_rank",
+        ),
+        max_edges=_as_positive_int(
+            graph_config.get("max_edges"),
+            default=2000,
+            parameter_name="demo.graph.max_edges",
+        ),
+        max_nodes=_as_positive_int(
+            graph_config.get("max_nodes"),
+            default=500,
+            parameter_name="demo.graph.max_nodes",
+        ),
+        include_fallback=_as_bool(
+            graph_config.get("include_fallback"),
+            default=True,
+            parameter_name="demo.graph.include_fallback",
+        ),
+        min_score=_as_optional_float(
+            graph_config.get("min_score"),
+            parameter_name="demo.graph.min_score",
+        ),
+        export_html=_as_bool(
+            graph_config.get("export_html"),
+            default=True,
+            parameter_name="demo.graph.export_html",
+        ),
+        export_json=_as_bool(
+            graph_config.get("export_json"),
+            default=True,
+            parameter_name="demo.graph.export_json",
+        ),
+        export_gexf=_as_bool(
+            graph_config.get("export_gexf"),
+            default=True,
+            parameter_name="demo.graph.export_gexf",
+        ),
+    )
+
+
+def _demo_graph_manifest_payload(
+        result: GraphExportResult,
+        run_dir: Path,
+) -> dict[str, Any]:
+    def relative(path: Path | None) -> str | None:
+        return path.relative_to(run_dir).as_posix() if path is not None else None
+
+    return {
+        "enabled": True,
+        "html_path": relative(result.html_path),
+        "json_path": relative(result.json_path),
+        "gexf_path": relative(result.gexf_path),
+        "manifest_path": relative(result.manifest_path),
+        "nodes_count": result.nodes_count,
+        "edges_count": result.edges_count,
+    }
+
+
 def publish_latest_run(run_result: PipelineRunResult, latest_dir: str | Path) -> Path:
     """Copy public recommendation outputs and manifest into the latest snapshot."""
     writer = RecommendationWriter()
@@ -1787,6 +1878,7 @@ def run_pipeline(
         output_dir: str | Path | None = None,
         run_id: str | None = None,
         update_latest: bool = True,
+        export_demo_graph: bool = True,
 ) -> PipelineRunResult:
     """Run recommendation pipeline over a rolling train window.
 
@@ -2256,6 +2348,16 @@ def run_pipeline(
     del recommendations
     del products
 
+    graph_export_result: GraphExportResult | None = None
+    graph_config = _demo_graph_export_config(config) if export_demo_graph else None
+    if graph_config is not None:
+        logger.info("[run_pipeline] export demo recommendation graph")
+        graph_export_result = export_recommendation_graph(
+            recommendation_path=enriched_path,
+            output_dir=run_dir / "demo" / "graph",
+            config=graph_config,
+        )
+
     detailed_relative_path = detailed_path.relative_to(run_dir).as_posix()
     enriched_relative_path = enriched_path.relative_to(run_dir).as_posix()
     widget_relative_path = widget_path.relative_to(run_dir).as_posix()
@@ -2306,6 +2408,10 @@ def run_pipeline(
             "earliest_affected_date": earliest_affected_date,
         },
     }
+    if graph_export_result is not None:
+        manifest["demo"] = {
+            "graph": _demo_graph_manifest_payload(graph_export_result, run_dir),
+        }
     run_manifest_path = writer.save_manifest(manifest, run_dir)
     result = PipelineRunResult(
         run_id=run_id,
