@@ -1,0 +1,28 @@
+# Tune noise filters. Higher thresholds can improve precision but reduce coverage.
+objective:
+  # Main business metric: whether recommendations catch future to_cart relations.
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+
+parameters:
+  scoring.min_pair_count:
+    type: choice
+    values: [1, 2, 3, 5]
+  scoring.min_unique_users:
+    type: choice
+    values: [1, 2, 3]
+  scoring.min_unique_sessions:
+    type: choice
+    values: [1, 2, 3, 5]
+  scoring.min_score:
+    type: choice
+    values: [null, 0.01, 0.05]

@@ -1,0 +1,148 @@
+# Defense experiment config.
+# Use the same train_until_date, lookback_days, validation_days and top_k for fair comparison.
+# Recommended run:
+# uv run python scripts/run_full.py 2024-04-23 --lookback-days 7 --validation-days 3 --top-k 20 --config-path <this_file>
+
+pipeline:
+  session_timeout_minutes: 20
+  max_items_per_session: 50
+  top_k: 20
+  lookback_days: 2
+  update_strategy: full_retrain
+  session_batch_size: 500
+  session_user_buckets: 256
+  aggregation_item_buckets: 128
+
+events:
+  item_action_types:
+    - view
+    - click
+    - favorite
+    - to_cart
+  search_action_type: search
+
+item_pair_builder:
+  # Inside one session the strongest item action wins: to_cart > favorite > click > view.
+  signal_priority:
+    view: 1
+    click: 2
+    favorite: 3
+    to_cart: 4
+
+graph:
+  distance_decay:
+    enabled: false
+    strategy: none
+    max_distance: null
+    # Numeric keys are quoted to keep artifact fingerprints stable.
+    weight_by_distance:
+      "1": 1.0
+      "2": 0.8
+      "3": 0.6
+      "5": 0.3
+      default: 0.1
+    exponential:
+      alpha: 0.5
+      min_weight: 0.05
+
+  time_decay:
+    enabled: false
+    strategy: none
+    weight_by_age_days:
+      "0": 1.0
+      "1": 0.9
+      "3": 0.75
+      "7": 0.5
+      "14": 0.3
+      default: 0.2
+    exponential:
+      half_life_days: 7
+      min_weight: 0.05
+
+  widget_context:
+    enabled: false
+    use: target
+    default_weight: 1.0
+    unknown_weight: 1.0
+    weights: {}
+
+# Experiment purpose:
+# Action-aware baseline: calibrated_multichannel over raw channel counts; no popularity normalization, no decay, no fallback.
+
+scoring:
+  method: calibrated_multichannel
+  count_source: raw
+  count_transform:
+    method: log
+    smoothing: 1.0
+  business_weights:
+    view: 0.25
+    click: 1.0
+    favorite: 1.0
+    to_cart: 1.0
+  beta: 0.25
+  reference_action_type: view
+  max_frequency_boost:
+    view: 1.0
+    click: 10.0
+    favorite: 15.0
+    to_cart: 30.0
+  min_pair_count: 2
+  min_unique_users: 1
+  min_unique_sessions: 3
+  min_weighted_pair_count: null
+  min_score: null
+  calibration:
+    action_shares_used_for_calibration: null
+    calibration_start: null
+    calibration_end: null
+  normalize_by_item_popularity: false
+  popularity_normalization:
+    popularity_column: unique_users
+    smoothing: 1.0
+    power: 0.75
+
+artifacts:
+  events_clean_dir: data/processed/events_clean
+  sessions_dir: null
+  session_state_dir: data/processed/session_state
+  item_popularity_dir: data/processed/item_popularity
+  action_type_distribution_dir: data/processed/action_type_distribution
+  daily_pairs_dir: data/processed/item_pairs
+  pair_aggregates_dir: data/processed/pair_aggregates
+
+outputs:
+  root_dir: outputs
+  latest_dir: outputs/latest
+
+evaluation:
+  relevance_mode: binary
+  relevance_weights:
+    view: 0.1
+    click: 0.3
+    favorite: 0.6
+    to_cart: 1.0
+  ranking_relevant_action_types:
+    - click
+    - favorite
+    - to_cart
+  min_ranking_relevance: 0.3
+
+business:
+  fallback:
+    enabled: false
+    top_k: 20
+    candidate_pool_size: 200
+    global_candidate_pool_size: 500
+    metadata_candidate_pool_size: 200
+    min_item_events: 2
+    enable_category_type: true
+    enable_category: true
+    enable_type: true
+    enable_brand: true
+    enable_global: true
+    include_cold_start_items: false
+    include_catalog_only_sources: false
+
+topk:
+  top_k: 20

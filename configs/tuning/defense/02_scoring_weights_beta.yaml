@@ -1,0 +1,41 @@
+# Tune business weights and beta for calibrated_multichannel.
+# Use after method comparison proves calibrated scoring is promising.
+objective:
+  # Main business metric: whether recommendations catch future to_cart relations.
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+
+parameters:
+  scoring.method:
+    type: choice
+    values: [calibrated_multichannel]
+  scoring.count_source:
+    type: choice
+    values: [raw]
+  scoring.count_transform.method:
+    type: choice
+    values: [log]
+  scoring.business_weights.view:
+    type: choice
+    values: [0.0, 0.1, 0.25, 0.5, 1.0]
+  scoring.business_weights.click:
+    type: choice
+    values: [1.0, 2.0, 3.0, 4.0]
+  scoring.business_weights.favorite:
+    type: choice
+    values: [1.0, 3.0, 6.0, 8.0]
+  scoring.business_weights.to_cart:
+    type: choice
+    values: [1.0, 4.0, 8.0, 12.0, 16.0]
+  scoring.beta:
+    type: choice
+    values: [0.0, 0.25, 0.5, 0.75, 1.0]

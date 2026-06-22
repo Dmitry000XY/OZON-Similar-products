@@ -1,0 +1,41 @@
+# Tune distance/time decay. Use with a base config where weighted count columns are available.
+# If scoring.count_source=weighted fails, first run a graph-decay experiment config that enables decay.
+objective:
+  # Main business metric: whether recommendations catch future to_cart relations.
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+
+parameters:
+  graph.distance_decay.enabled:
+    type: choice
+    values: [false, true]
+  graph.distance_decay.strategy:
+    type: choice
+    values: [none, exponential]
+  graph.distance_decay.max_distance:
+    type: choice
+    values: [null, 5, 10]
+  graph.distance_decay.exponential.alpha:
+    type: choice
+    values: [0.25, 0.5, 0.75, 1.0]
+  graph.time_decay.enabled:
+    type: choice
+    values: [false, true]
+  graph.time_decay.strategy:
+    type: choice
+    values: [none, exponential]
+  graph.time_decay.exponential.half_life_days:
+    type: choice
+    values: [3, 7, 14]
+  scoring.count_source:
+    type: choice
+    values: [raw, weighted]

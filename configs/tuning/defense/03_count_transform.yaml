@@ -1,0 +1,29 @@
+# Tune count transform. This controls how much repeated events grow the score.
+# linear is strongest, sqrt is medium, log is most conservative for high counts.
+objective:
+  # Main business metric: whether recommendations catch future to_cart relations.
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+
+parameters:
+  scoring.method:
+    type: choice
+    values: [calibrated_multichannel]
+  scoring.count_source:
+    type: choice
+    values: [raw]
+  scoring.count_transform.method:
+    type: choice
+    values: [linear, sqrt, log]
+  scoring.count_transform.smoothing:
+    type: choice
+    values: [1.0, 2.0]

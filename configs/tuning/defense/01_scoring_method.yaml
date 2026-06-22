@@ -1,0 +1,32 @@
+# Compare scoring families.
+# pair_count/raw: pure co-visitation count.
+# pair_count/weighted: decay-weighted pair count, but still no action-channel weights.
+# calibrated_multichannel/raw: action-aware scoring without graph decay.
+# calibrated_multichannel/weighted: action-aware scoring with weighted counts if graph decay is enabled in base config.
+objective:
+  # Main business metric: whether recommendations catch future to_cart relations.
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+
+parameters:
+  scoring.method:
+    type: choice
+    values: [pair_count, calibrated_multichannel]
+  scoring.count_source:
+    type: choice
+    values: [raw]
+  scoring.count_transform.method:
+    type: choice
+    values: [log]
+  scoring.beta:
+    type: choice
+    values: [0.0, 0.25, 0.5]
