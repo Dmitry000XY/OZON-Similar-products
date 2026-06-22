@@ -1,79 +1,36 @@
 # OZON Similar Products
 
-Offline-пайплайн для кейса **Ozon Fresh**: построение виджета **«Похожие товары по интересам пользователей»**.
+Проект строит блок **«Похожие товары»** на основе поведения пользователей Ozon Fresh.
 
-Проект строит item-to-item рекомендации на основе поведения пользователей: для каждого товара (`item_id`) формируется
-список похожих товаров, который затем можно использовать в виджете или проверять через lookup.
+На вход подаются пользовательские события и информация о товарах. На выходе получается список похожих товаров для
+каждого исходного товара: его можно анализировать, проверять offline-метриками или использовать как основу для
+рекомендательного виджета.
 
-В постановке кейса используется название `sku`; в локальных данных проекта ему соответствует колонка `item_id`.
+## Демонстрация результата
 
----
+Проект строит похожие товары по действиям пользователей: просмотрам, кликам, добавлениям в избранное и добавлениям в
+корзину.
 
-## Что делает проект
+Ниже показан демонстрационный макет того, как результат модели может выглядеть в карточке товара.
 
-Pipeline строит baseline-рекомендации по цепочке:
+![Демонстрационный экран похожих товаров для кофе](docs/assets/recommendation_demo_coffee.png)
 
-```text
-daily raw user actions
-→ daily clean events parquet
-→ streaming sessions with cross-day carry-over
-→ compact daily item-pair stats
-→ pair aggregates over the rolling window
-→ lazy pair scoring
-→ top-K recommendations
-→ saved artifacts
-→ lookup
-```
+*Демонстрационный макет интерфейса. Товары и `item_id` взяты из выходных артефактов пайплайна; изображение показывает,
+как результаты модели могут быть использованы в карточке товара.*
 
-Крупные промежуточные слои записываются как parquet-артефакты и переиспользуются через path/lazy scan там, где это
-возможно. Это снижает потребление RAM на длинных rolling window и позволяет не держать в памяти full-window raw events,
-full-window item pairs и full-window sessions.
+## Быстрый запуск
 
-На выходе создаются:
+### 1. Установить зависимости
 
-```text
-outputs/runs/.../recommendations/detailed.parquet
-outputs/runs/.../recommendations/lookup.parquet
-outputs/runs/.../manifest.json
-outputs/latest/manifest.json
-```
-
-`latest/manifest.json` указывает на актуальную версию рекомендаций.
-
-Промежуточные pipeline-артефакты по умолчанию пишутся в `data/processed/`:
-
-```text
-data/processed/events_clean/date=YYYY-MM-DD.parquet
-data/processed/sessions/date=YYYY-MM-DD.parquet
-data/processed/item_pairs/counts/date=YYYY-MM-DD.parquet
-data/processed/item_pairs/user_keys/date=YYYY-MM-DD.parquet
-data/processed/item_pairs/session_keys/date=YYYY-MM-DD.parquet
-data/processed/pair_aggregates/window_start=..._window_end=....parquet
-data/processed/item_popularity/window_start=..._window_end=....parquet
-data/processed/action_type_distribution/window_start=..._window_end=....parquet
-```
-
-`item_pairs/counts` хранит агрегированные дневные счётчики по directed item-pair.
-
-`item_pairs/user_keys` и `item_pairs/session_keys` хранят deduplicated keys для точного подсчёта `unique_users` и
-`unique_sessions` на rolling window.
-
-В manifest поле `rows.daily_pairs` сохраняет старый смысл: количество raw directed pair rows, которое было бы построено
-до compact aggregation. При этом сами raw daily pair rows больше не являются основным сохраняемым артефактом pipeline.
-
----
-
-## Установка
+Проект использует `uv`.
 
 ```bash
 uv sync
 ```
 
----
+### 2. Подготовить данные
 
-## Подготовка данных
-
-Положи исходные архивы в директорию:
+Исходные архивы должны лежать в папке:
 
 ```text
 data/raw/archives/
@@ -86,7 +43,7 @@ product_information.tar.gz
 user_actions.tar.gz
 ```
 
-Подготовить raw parquet data:
+Подготовить данные:
 
 ```bash
 uv run python scripts/prepare_raw_data.py
@@ -98,219 +55,220 @@ uv run python scripts/prepare_raw_data.py
 uv run python scripts/check_project_structure.py
 ```
 
----
-
-## Запуски
-
-Построить только рекомендации на train window:
+### 3. Построить рекомендации
 
 ```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+uv run ozon-run-pipeline 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
 ```
 
-Полный запуск для demo/защиты: рекомендации строятся на train window, затем validation window вычисляется автоматически
-как следующие `validation_days` дней после `train_until_date`, после чего считаются offline metrics.
+### 4. Посмотреть результат
 
 ```bash
-uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
-```
-
-Для примера выше train window будет `2024-04-23 .. 2024-04-23`, а validation window:
-`2024-04-24 .. 2024-04-24`.
-
-Запуск tuning по явному search space:
-
-```bash
-uv run python scripts/run_tune.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
-```
-
-На текущем этапе `full` и `tune` безопаснее запускать с `lookback_days=1`: 7-day OOM в pair aggregation считается
-отдельной задачей и в этот change set не входит.
-
-Офлайн-оценка по умолчанию использует `evaluation.relevance_mode: binary`: любая наблюдаемая validation pair считается
-релевантной с `relevance=1.0`, а информация о действиях сохраняется в ground truth через `view_count`, `click_count`,
-`favorite_count`, `to_cart_count`. Graded relevance с ручными весами остается опциональным диагностическим режимом.
-
-Основные offline metrics теперь делятся на три слоя:
-
-- general ranking metrics: `hit_rate_at_k`, `recall_at_k`, `ndcg_at_k`, `mrr_at_k`, `coverage_at_k`;
-- action-specific metrics: `view_*`, `click_*`, `favorite_*`, `to_cart_*`, где business-фокусом остаются
-  `to_cart_hit_rate_at_k` и `to_cart_recall_at_k`.
-- fallback-метрики: `fallback_*_share_at_k`, `fallback_hit_rate_at_k`, `fallback_recall_at_k`,
-  `fallback_to_cart_hit_rate_at_k`, `fallback_to_cart_recall_at_k`.
-
-Tuning использует balanced objective:
-
-- основная метрика: `to_cart_hit_rate_at_k`;
-- вспомогательные метрики: `ndcg_at_k`, `recall_at_k`, `mrr_at_k`, `coverage_at_k`, `to_cart_recall_at_k`,
-  `fallback_hit_rate_at_k`;
-- штрафные метрики: `popularity_bias_at_k`, `fallback_global_share_at_k`;
-- итоговый `objective_score` считается как primary-gated geometric mean и пишется в `results.csv`, `best_metrics.json`.
-
-`configs/tuning/search_space.yaml` теперь поддерживает `choice`, `int_range`, `float_range`, `log_float_range`, а
-`run_tune.py` умеет `grid`, truly-random `random`, `successive_halving` и `simulated_annealing`.
-Тюнинг fallback подробнее описан в `docs/fallback_tuning_evaluation.md`.
-
-Основные outputs:
-
-```text
-data/processed/                 # reusable intermediate pipeline tables
-outputs/runs/<run_id>/          # one full run: config, manifest, recommendations, evaluation
-outputs/latest/                 # latest full run snapshot
-outputs/tuning/<sweep_id>/      # tuning results, best_config.yaml, best_metrics.json
-```
-
-`configs/production.yaml` изначально совпадает с baseline. После tuning выбранный
-`outputs/tuning/<sweep_id>/best_config.yaml`
-можно перенести в `configs/production.yaml` отдельным осознанным изменением.
-
-В GitHub Actions доступны только режимы `full` и `tune`.
-
----
-
-## Посмотреть результат
-
-После запуска проверь latest manifest и таблицы рекомендаций:
-
-```bash
-uv run python scripts/preview_latest_recommendations.py
-# или через package CLI
 uv run ozon-preview-recommendations
 ```
 
-Скрипт выводит:
+Посмотреть рекомендации для конкретного товара:
+
+```bash
+uv run ozon-preview-recommendations --item-id 113
+```
+
+### 5. Запустить полный сценарий с оценкой качества
+
+```bash
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+```
+
+Полный сценарий сначала строит рекомендации на обучающем периоде, а затем проверяет качество на следующем временном
+периоде.
+
+## Что делает проект
+
+Проект решает задачу:
 
 ```text
-RUN / WINDOW / SCORE / TOP_K
-ROWS по этапам pipeline
-preview detailed recommendations
-preview compact lookup output
-пример SimilarItemsLookup
+товар → список похожих товаров
 ```
 
-Вернуть больше похожих товаров:
+Общая идея:
+
+```text
+товарные действия пользователей
+→ сессии
+→ пары товаров
+→ оценка похожести
+→ top-K рекомендаций
+→ fallback
+→ готовый lookup
+```
+
+Главный принцип реализации: сначала проект сохраняет факты о поведении пользователей, затем отдельно считает оценку
+похожести и только после этого формирует итоговые рекомендации.
+
+Подробнее:
+
+* [архитектура проекта](docs/architecture.md);
+* [контракты данных](docs/data_contract.md);
+* [README модуля `retrieval`](src/ozon_similar_products/retrieval/README.md);
+* [README модуля `pipeline`](src/ozon_similar_products/pipeline/README.md).
+
+## Что появляется после запуска
+
+Основные результаты сохраняются в `outputs/`.
+
+```text
+outputs/runs/<run_id>/
+  recommendations/
+    detailed.parquet
+    enriched.parquet
+    lookup.parquet
+  manifest.json
+
+outputs/latest/
+  recommendations/
+    detailed.parquet
+    enriched.parquet
+    lookup.parquet
+  manifest.json
+```
+
+Главные файлы:
+
+| Файл               | Зачем нужен                                                                |
+|--------------------|----------------------------------------------------------------------------|
+| `detailed.parquet` | подробные рекомендации со score, rank и диагностическими полями            |
+| `enriched.parquet` | рекомендации с дополнительной информацией о товарах                        |
+| `lookup.parquet`   | компактный формат для быстрого получения похожих товаров                   |
+| `manifest.json`    | параметры запуска, даты периода, пути к результатам и служебная информация |
+
+Подробнее:
+
+* [README модуля `output`](src/ozon_similar_products/output/README.md);
+* [README модуля `serving`](src/ozon_similar_products/serving/README.md);
+* [контракты выходных таблиц](docs/data_contract.md).
+
+## Структура репозитория
+
+| Путь                                                       | Что находится                                                     |
+|------------------------------------------------------------|-------------------------------------------------------------------|
+| [`configs/`](configs/)                                     | настройки данных, пайплайна, оценки качества и подбора параметров |
+| [`docs/`](docs/)                                           | подробная документация и карта документов                         |
+| [`notebooks/`](notebooks/)                                 | исследовательские ноутбуки                                        |
+| [`scripts/`](scripts/)                                     | пользовательские команды запуска                                  |
+| [`src/ozon_similar_products/`](src/ozon_similar_products/) | основной Python-пакет                                             |
+| [`tests/`](tests/)                                         | тесты                                                             |
+| `data/`                                                    | локальные данные, не коммитятся в Git                             |
+| `outputs/`                                                 | результаты запусков, не коммитятся в Git                          |
+
+## Основные модули
+
+| Модуль                                                               | Ответственность                             |
+|----------------------------------------------------------------------|---------------------------------------------|
+| [`data`](src/ozon_similar_products/data/README.md)                   | чтение данных, схемы и валидация            |
+| [`preprocessing`](src/ozon_similar_products/preprocessing/README.md) | очистка событий и построение сессий         |
+| [`features`](src/ozon_similar_products/features/README.md)           | популярность товаров и служебные статистики |
+| [`retrieval`](src/ozon_similar_products/retrieval/README.md)         | пары товаров, агрегация, scoring и top-K    |
+| [`business`](src/ozon_similar_products/business/README.md)           | fallback-рекомендации и бизнес-правила      |
+| [`evaluation`](src/ozon_similar_products/evaluation/README.md)       | offline-оценка качества                     |
+| [`pipeline`](src/ozon_similar_products/pipeline/README.md)           | полный запуск конвейера                     |
+| [`output`](src/ozon_similar_products/output/README.md)               | сохранение результатов                      |
+| [`serving`](src/ozon_similar_products/serving/README.md)             | чтение готового lookup-результата           |
+| [`diagnostics`](src/ozon_similar_products/diagnostics/README.md)     | диагностика данных и результатов            |
+
+## Документация
+
+Начинать лучше с карты документации:
+
+* [`docs/README.md`](docs/README.md) — куда идти за подробностями;
+* [`docs/architecture.md`](docs/architecture.md) — архитектура и путь данных;
+* [`docs/data_contract.md`](docs/data_contract.md) — контракты таблиц и границы ответственности;
+* [`scripts/README.md`](scripts/README.md) — команды запуска;
+* [`configs/README.md`](configs/README.md) — настройки проекта;
+* [`docs/evaluation_metrics.md`](docs/evaluation_metrics.md) — метрики качества;
+* [`docs/incremental_update.md`](docs/incremental_update.md) — incremental-режим;
+* [`docs/local_runner.md`](docs/local_runner.md) — локальный self-hosted runner для тяжёлых запусков.
+
+README по модулям:
+
+* [`data`](src/ozon_similar_products/data/README.md);
+* [`preprocessing`](src/ozon_similar_products/preprocessing/README.md);
+* [`features`](src/ozon_similar_products/features/README.md);
+* [`retrieval`](src/ozon_similar_products/retrieval/README.md);
+* [`business`](src/ozon_similar_products/business/README.md);
+* [`evaluation`](src/ozon_similar_products/evaluation/README.md);
+* [`pipeline`](src/ozon_similar_products/pipeline/README.md);
+* [`output`](src/ozon_similar_products/output/README.md);
+* [`serving`](src/ozon_similar_products/serving/README.md);
+* [`diagnostics`](src/ozon_similar_products/diagnostics/README.md).
+
+## Подбор параметров
+
+Для подбора параметров есть отдельный сценарий:
 
 ```bash
-uv run python scripts/preview_latest_recommendations.py --top-k 20
+uv run ozon-run-tune 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
 ```
 
-Посмотреть lookup для конкретного товара:
+Результаты сохраняются в:
 
-```bash
-uv run python scripts/preview_latest_recommendations.py --item-id 113
+```text
+outputs/tuning/<sweep_id>/
+  results.csv
+  best_config.yaml
+  best_metrics.json
 ```
 
-Использовать другой manifest:
+Подробнее:
 
-```bash
-uv run python scripts/preview_latest_recommendations.py --manifest-path outputs/latest/manifest.json
-```
-
-Успешный запуск должен показать, что в manifest `recommendations > 0`, а lookup возвращает список `similar_items`.
-
----
-
-## Оптимизированный pipeline
-
-Текущая версия pipeline ориентирована на длинные rolling window и большие объёмы пользовательских событий.
-
-Основные оптимизации:
-
-- raw events читаются по дням, а не одним full-window DataFrame;
-- clean events сразу пишутся как daily parquet checkpoints;
-- сессии строятся streaming-проходом по daily clean partitions;
-- активные сессии, которые могут продолжиться на следующий день, переносятся через cross-day carry-over;
-- сессии используют компактную идентичность через `user_id`, `session_index`, `session_start_date` вместо строкового
-  `session_id`;
-- raw daily item-pair rows не сохраняются как основной артефакт;
-- вместо них пишутся compact daily pair stats: `counts`, `user_keys`, `session_keys`;
-- pair aggregation строится из compact stats paths;
-- pair scoring выполняется lazy-планом перед top-K selection.
-
-Такая схема уменьшает memory pressure в наиболее тяжёлых местах pipeline: sessionization, pair building, pair
-aggregation и scoring.
-
----
+* [`scripts/README.md`](scripts/README.md);
+* [`configs/README.md`](configs/README.md);
+* [`docs/evaluation_metrics.md`](docs/evaluation_metrics.md);
+* [`evaluation/README.md`](src/ozon_similar_products/evaluation/README.md).
 
 ## Тесты и проверки
 
-Запустить все тесты:
+Запустить тесты:
 
 ```bash
 uv run pytest
 ```
 
-Проверить pipeline runner:
-
-```bash
-uv run pytest tests/test_run_pipeline.py tests/test_run_full.py tests/test_run_tune.py
-```
-
-Проверить retrieval layer:
-
-```bash
-uv run pytest tests/test_build_pairs.py tests/test_aggregate_pairs.py tests/test_scoring.py tests/test_topk.py
-```
-
-Проверить recommendation output layer:
-
-```bash
-uv run pytest tests/test_topk.py tests/test_recommendation_writer.py tests/test_lookup.py tests/test_recommendation_manifest.py tests/test_recommendation_output_integration.py
-```
-
-Lint:
+Проверить стиль кода:
 
 ```bash
 uv run ruff check src scripts tests
 ```
 
-Type checking:
+Проверить типы:
 
 ```bash
 uv run pyrefly check src scripts tests
 ```
 
----
+## Ограничения текущей версии
 
-## Основные файлы
+* Проект рассчитан на пакетный пересчёт, а не на мгновенную онлайн-выдачу.
+* Качество рекомендаций зависит от плотности пользовательских событий.
+* Слой fallback-рекомендаций является базовой реализацией и требует отдельной настройки для больших каталогов.
+* Проект пока не использует персонализацию под конкретного пользователя.
+* Более сложные методы, например товарные эмбеддинги или отдельная модель ранжирования, остаются возможным направлением
+  развития.
+
+## Коротко
+
+Проект строит похожие товары через поведенческий граф:
 
 ```text
-configs/baseline.yaml                         # параметры baseline
-configs/production.yaml                       # параметры production full run
-configs/tuning/search_space.yaml              # явное пространство tuning
-scripts/run_pipeline.py                       # построение рекомендаций
-scripts/run_full.py                           # рекомендации + offline evaluation
-scripts/run_tune.py                           # подбор параметров
-scripts/preview_latest_recommendations.py     # просмотр результата и lookup
-src/ozon_similar_products/preprocessing/      # clean events и session builder
-src/ozon_similar_products/features/           # item popularity и calibration stats
-src/ozon_similar_products/retrieval/          # pairs, aggregation, scoring, top-K
-src/ozon_similar_products/diagnostics/        # reusable EDA/profiling/session diagnostics
-src/ozon_similar_products/business/           # fallback and business rules
-src/ozon_similar_products/evaluation/         # offline metrics and scorecards
-src/ozon_similar_products/output/             # writers, manifest, lookup
-docs/archive/                                 # archived EDA code and historical notes
-tests/                                        # unit и integration tests
+события пользователей
+→ сессии
+→ пары товаров
+→ score
+→ top-K
+→ fallback
+→ lookup
 ```
 
----
+Для первого запуска достаточно подготовить данные, запустить `ozon-run-pipeline` и посмотреть результат через
+`ozon-preview-recommendations`.
 
-## Текущий статус
-
-Реализован offline baseline:
-
-- подготовка и чтение данных;
-- очистка событий по дневным partition-ам;
-- streaming-построение сессий с переносом активной сессии между днями;
-- компактная идентичность сессии через `user_id`, `session_index`, `session_start_date`;
-- построение compact daily item-pair stats вместо сохранения raw daily pair rows;
-- агрегация пар из compact stats;
-- item popularity и action-type calibration stats;
-- lazy scoring перед top-K selection;
-- top-K selection;
-- сохранение рекомендаций;
-- manifest/latest snapshot;
-- lookup похожих товаров;
-- тесты ключевых слоёв.
-
-Проект пока является offline baseline, а не online serving-системой.
+За подробностями переходите в [`docs/README.md`](docs/README.md).

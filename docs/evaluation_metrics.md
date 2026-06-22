@@ -1,31 +1,43 @@
-# Evaluation metrics
+# Метрики оценки качества
 
-Offline evaluation keeps two ground-truth views for the same validation data.
+Этот документ описывает, как мы оцениваем качество рекомендаций в offline-режиме.
 
-## Full ground truth
+Здесь не описан полный запуск оценки. Полный сценарий лежит в [
+`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md), а команды запуска — в [
+`../scripts/README.md`](../scripts/README.md).
 
-`full_ground_truth` contains every validation item pair that survived ground-truth
-construction:
+## Что мы проверяем
+
+Мы строим рекомендации на одном периоде, а проверяем их на следующих действиях пользователей.
 
 ```text
-item_id
-relevant_item_id
-relevance
-target_action_type
-evidence_count
-view_count
-click_count
-favorite_count
-to_cart_count
+train period
+→ recommendations
+
+validation period
+→ ground truth
+
+recommendations + ground truth
+→ metrics
 ```
 
-View-only pairs stay here intentionally. They are useful for diagnostics and for
-checking how much recommendation traffic matches weak browsing evidence.
+Идея простая: если после train-периода пользователь взаимодействовал с товарами, похожими на рекомендованные, это можно
+использовать как offline-подтверждение качества.
 
-## Ranking ground truth
+## Почему у нас два ground truth
 
-`ranking_ground_truth` is the filtered subset used by the primary ranking metrics.
-By default it keeps pairs whose strongest validation action is one of:
+В оценке есть две версии ground truth:
+
+```text
+full_ground_truth
+ranking_ground_truth
+```
+
+Они нужны для разных задач.
+
+`full_ground_truth` сохраняет все найденные пары, включая пары, подтверждённые только просмотрами.
+
+`ranking_ground_truth` оставляет только более сильные действия:
 
 ```text
 click
@@ -33,11 +45,79 @@ favorite
 to_cart
 ```
 
-This prevents accidental `view-only` matches from inflating ranking quality. For
-example, if rank 1 is a view-only match and rank 2 is a click match, `mrr_at_k`
-is `1 / 2`, not `1.0`.
+Мы разделяем их специально. Просмотр товара — полезный сигнал для диагностики, но слишком слабый для основной оценки
+качества ранжирования. Если считать `view-only` совпадение полноценным попаданием, метрики могут выглядеть лучше, чем
+результат на самом деле.
 
-The default evaluation config is:
+## `full_ground_truth`
+
+`full_ground_truth` — полный набор validation-пар.
+
+Контракт:
+
+| Поле                 | Что означает                                                           |
+|----------------------|------------------------------------------------------------------------|
+| `item_id`            | исходный товар                                                         |
+| `relevant_item_id`   | товар, который оказался связан с исходным товаром в validation-периоде |
+| `relevance`          | численная релевантность пары                                           |
+| `target_action_type` | самый сильный тип действия в validation                                |
+| `evidence_count`     | общее число подтверждений пары                                         |
+| `view_count`         | число подтверждений через `view`                                       |
+| `click_count`        | число подтверждений через `click`                                      |
+| `favorite_count`     | число подтверждений через `favorite`                                   |
+| `to_cart_count`      | число подтверждений через `to_cart`                                    |
+
+Эта таблица нужна для диагностики.
+
+По ней можно понять:
+
+* сколько пар подтверждается хотя бы слабым будущим интересом;
+* сколько в validation только просмотров;
+* как отличаются слабые и сильные действия;
+* не теряем ли мы слишком много данных при фильтрации.
+
+Контракты таблиц проекта описаны в [`data_contract.md`](data_contract.md).
+
+## `ranking_ground_truth`
+
+`ranking_ground_truth` — версия ground truth для основных метрик качества.
+
+По умолчанию сюда попадают пары, где самый сильный validation-сигнал — один из:
+
+```text
+click
+favorite
+to_cart
+```
+
+`view-only` пары в основные ranking-метрики не попадают.
+
+Пример:
+
+```text
+rank 1 → совпал только с view
+rank 2 → совпал с click
+```
+
+Для основной `mrr_at_k` первым хорошим попаданием будет позиция 2, а не позиция 1.
+
+Значит вклад будет:
+
+```text
+1 / 2
+```
+
+а не:
+
+```text
+1.0
+```
+
+Так мы не завышаем качество за счёт слабых просмотров.
+
+## Настройки релевантности
+
+Базовые настройки лежат в конфиге оценки качества.
 
 ```yaml
 evaluation:
@@ -54,12 +134,23 @@ evaluation:
   min_ranking_relevance: 0.3
 ```
 
-`binary` relevance is still supported, but the ranking action filter continues
-to protect the primary metrics from view-only hits.
+Смысл настроек:
 
-## Metric groups
+| Параметр                        | Что означает                                                     |
+|---------------------------------|------------------------------------------------------------------|
+| `relevance_mode`                | как считать релевантность: graded или binary                     |
+| `relevance_weights`             | какой вес даём каждому действию в ground truth                   |
+| `ranking_relevant_action_types` | какие действия считаем достаточно сильными для основных метрик   |
+| `min_ranking_relevance`         | минимальная релевантность для попадания в `ranking_ground_truth` |
 
-These metrics are computed on `ranking_ground_truth`:
+Даже в `binary`-режиме фильтр по сильным действиям остаётся важным. Он отделяет основную оценку качества от
+диагностических совпадений по просмотрам.
+
+Подробнее о настройках: [`../configs/README.md`](../configs/README.md).
+
+## Основные метрики
+
+Главные метрики считаются на `ranking_ground_truth`.
 
 ```text
 hit_rate_at_k
@@ -67,11 +158,77 @@ recall_at_k
 mrr_at_k
 ndcg_at_k
 coverage_at_k
-fallback_hit_rate_at_k
-fallback_recall_at_k
 ```
 
-The explicit strong-action aliases use the same ranking ground truth:
+Их стоит смотреть в первую очередь при сравнении запусков.
+
+### `hit_rate_at_k`
+
+Показывает, для какой доли товаров мы нашли хотя бы одно хорошее попадание в top-K.
+
+```text
+есть сильное попадание в top-K → hit
+нет сильного попадания в top-K → miss
+```
+
+Эта метрика отвечает на практический вопрос:
+
+```text
+У скольких товаров рекомендации вообще попали в будущий сильный интерес?
+```
+
+### `recall_at_k`
+
+Показывает, какую часть релевантных товаров мы нашли в top-K.
+
+Если у товара в ground truth есть 5 релевантных кандидатов, а мы нашли 2, то recall для этого товара:
+
+```text
+2 / 5
+```
+
+Эта метрика полезна, когда важно не просто попасть хоть куда-то, а покрыть больше будущих связей.
+
+### `mrr_at_k`
+
+`mrr_at_k` показывает, насколько рано в списке появляется первое хорошее попадание.
+
+Если первый релевантный товар стоит на первой позиции:
+
+```text
+1 / 1
+```
+
+Если первый релевантный товар стоит на четвёртой позиции:
+
+```text
+1 / 4
+```
+
+Для рекомендаций это важная метрика: пользователю полезнее увидеть хороший товар выше, а не в конце списка.
+
+### `ndcg_at_k`
+
+`ndcg_at_k` учитывает и позицию, и силу релевантности.
+
+Она особенно полезна в `graded`-режиме, где разные действия имеют разную силу:
+
+```text
+view < click < favorite < to_cart
+```
+
+Если товар с `to_cart` стоит выше товара с `click`, это лучше, чем наоборот.
+
+### `coverage_at_k`
+
+`coverage_at_k` показывает, для какой доли товаров удалось построить выдачу, которую можно использовать и оценивать.
+
+Эта метрика помогает заметить ситуацию, когда качество на оценённых товарах выглядит нормально, но рекомендаций
+получается слишком мало.
+
+## Метрики сильных действий
+
+В отчёте также есть отдельные strong-метрики:
 
 ```text
 strong_hit_rate_at_k
@@ -80,14 +237,27 @@ strong_mrr_at_k
 strong_ndcg_at_k
 ```
 
-To-cart ranking quality is computed on pairs with `to_cart_count > 0`:
+Они считаются по той же логике, что и основные ranking-метрики.
+
+Мы оставляем их явно, чтобы в отчёте сразу было видно качество по сильным действиям, без смешивания с `view-only`
+диагностикой.
+
+## Метрики по добавлениям в корзину
+
+Отдельно считаются метрики для пар, где в validation есть `to_cart`.
 
 ```text
 to_cart_mrr_at_k
 to_cart_ndcg_at_k
 ```
 
-Action-specific hit/recall metrics remain diagnostics over `full_ground_truth`:
+Это важный срез, потому что добавление в корзину сильнее простого просмотра или клика.
+
+Эти метрики показывают, насколько хорошо рекомендации ранжируют товары, которые пользователи потом добавляли в корзину.
+
+## Диагностические метрики по типам действий
+
+Эти метрики считаются по `full_ground_truth`.
 
 ```text
 view_hit_rate_at_k
@@ -100,15 +270,163 @@ to_cart_hit_rate_at_k
 to_cart_recall_at_k
 ```
 
-The evaluation output also reports ground-truth sizes:
+Они нужны не для главного вывода “стало лучше / стало хуже”, а для диагностики.
+
+Например:
+
+* `view_*` показывает слабые совпадения с будущими просмотрами;
+* `click_*` показывает совпадения с будущими кликами;
+* `favorite_*` показывает совпадения с будущими добавлениями в избранное;
+* `to_cart_*` показывает совпадения с будущими добавлениями в корзину.
+
+Если `view_*` растёт, а сильные метрики не растут, это может означать, что рекомендации стали попадать в слабый интерес,
+но не в более ценные действия.
+
+## Метрики fallback-рекомендаций
+
+Fallback-метрики показывают, помогает ли резервный слой.
+
+```text
+fallback_hit_rate_at_k
+fallback_recall_at_k
+```
+
+Они считаются на `ranking_ground_truth`.
+
+Смотреть их нужно вместе с тем, как часто fallback вообще срабатывает.
+
+Если fallback почти не используется, эти метрики мало что говорят.
+
+Если fallback часто используется, но не даёт попаданий в сильные действия, значит резервные правила нужно
+пересматривать.
+
+Если fallback добавляет попадания для редких или холодных товаров, значит он закрывает проблему нехватки поведенческих
+данных.
+
+Подробнее о fallback-слое: [`business/README.md`](../src/ozon_similar_products/business/README.md).
+
+## Размеры ground truth
+
+В отчёте сохраняются не только метрики, но и размеры выборки.
+
+| Поле                           | Что означает                                                   |
+|--------------------------------|----------------------------------------------------------------|
+| `ground_truth_pairs`           | общее число пар в ground truth                                 |
+| `all_evaluated_items`          | число товаров, которые можно оценить по `full_ground_truth`    |
+| `ranking_evaluated_items`      | число товаров, которые можно оценить по `ranking_ground_truth` |
+| `view_only_ground_truth_pairs` | число пар, подтверждённых только просмотрами                   |
+| `ranking_ground_truth_pairs`   | число пар, используемых в основных ranking-метриках            |
+
+Поле `evaluated_items` оставлено как совместимый alias для:
+
+```text
+ranking_evaluated_items
+```
+
+Перед сравнением экспериментов стоит смотреть на размеры ground truth. Если оценка построена на слишком малом числе пар
+или товаров, метрики могут быть нестабильными.
+
+## Как мы обычно читаем отчёт
+
+Для общего сравнения запусков смотрим:
+
+```text
+hit_rate_at_k
+recall_at_k
+mrr_at_k
+ndcg_at_k
+coverage_at_k
+```
+
+Для проверки сильных сигналов:
+
+```text
+strong_hit_rate_at_k
+strong_recall_at_k
+strong_mrr_at_k
+strong_ndcg_at_k
+to_cart_mrr_at_k
+to_cart_ndcg_at_k
+```
+
+Для диагностики по типам действий:
+
+```text
+view_hit_rate_at_k
+click_hit_rate_at_k
+favorite_hit_rate_at_k
+to_cart_hit_rate_at_k
+```
+
+Для fallback:
+
+```text
+fallback_hit_rate_at_k
+fallback_recall_at_k
+```
+
+Для проверки надёжности оценки:
 
 ```text
 ground_truth_pairs
+ranking_ground_truth_pairs
+view_only_ground_truth_pairs
 all_evaluated_items
 ranking_evaluated_items
-view_only_ground_truth_pairs
-ranking_ground_truth_pairs
 ```
 
-`evaluated_items` is kept as a compatibility alias for
-`ranking_evaluated_items`.
+## На что обращать внимание
+
+### Не делать выводы по одним `view_*`
+
+Просмотры полезны для диагностики, но не должны быть главным доказательством качества.
+
+Основной вывод лучше делать по `ranking_ground_truth`, где остаются `click`, `favorite` и `to_cart`.
+
+### Не смотреть только на `hit_rate_at_k`
+
+`hit_rate_at_k` показывает, было ли хотя бы одно попадание.
+
+Но он не показывает, где это попадание стояло.
+
+Если `hit_rate_at_k` растёт, а `mrr_at_k` и `ndcg_at_k` падают, значит хорошие кандидаты могли уехать ниже в списке.
+
+### Проверять размер ground truth
+
+Если `ranking_ground_truth_pairs` маленький, результаты могут шуметь.
+
+Перед сравнением двух конфигов нужно проверить, что они оценивались на сопоставимом объёме ground truth.
+
+### Читать fallback отдельно
+
+Fallback может улучшать покрытие, но портить точность, если добавляет слишком общие популярные товары.
+
+Поэтому fallback-метрики нужно читать отдельно от поведенческих рекомендаций.
+
+## Связанные документы
+
+* [`docs/README.md`](README.md) — карта документации;
+* [`data_contract.md`](data_contract.md) — контракты таблиц;
+* [`../configs/README.md`](../configs/README.md) — настройки оценки качества;
+* [`../scripts/README.md`](../scripts/README.md) — команды запуска оценки;
+* [`evaluation/README.md`](../src/ozon_similar_products/evaluation/README.md) — реализация оценки качества;
+* [`business/README.md`](../src/ozon_similar_products/business/README.md) — fallback-рекомендации;
+* [`retrieval/README.md`](../src/ozon_similar_products/retrieval/README.md) — построение рекомендаций до оценки
+  качества.
+
+## Коротко
+
+У нас есть два ground truth:
+
+```text
+full_ground_truth      → всё, включая view-only пары
+ranking_ground_truth   → сильные действия для основных ranking-метрик
+```
+
+Основное качество смотрим по `ranking_ground_truth`.
+
+`view-only` совпадения используем для диагностики.
+
+Для бизнес-смысла отдельно смотрим `to_cart`-метрики.
+
+Перед сравнением запусков всегда проверяем размер ground truth и покрытие.
