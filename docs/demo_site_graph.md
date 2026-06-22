@@ -1,26 +1,29 @@
-# Demo site and recommendation graph
+# Demo site и recommendation graph
 
-Streamlit demo site is a small presentation layer for the case "similar products by user interests". It reads run
-artifacts from `outputs/latest/manifest.json` by default, or from explicit `--manifest-path`, `--enriched-path`, or
-`--detailed-path` arguments.
+Streamlit demo site показывает итоговые рекомендации проекта Ozon Similar
+Products: поиск товара, таблицу похожих товаров, сводку run-а и интерактивный
+граф. По умолчанию сайт читает `outputs/latest/manifest.json`, но можно
+передать `--manifest-path`, `--enriched-path` или `--detailed-path`.
 
-The site is intentionally tied to already produced pipeline outputs. It does not change recommendation logic and does
-not read raw data.
+Сайт намеренно привязан к уже построенным pipeline artifacts. Он не читает raw
+data и не меняет scoring logic.
 
-## Why the graph uses recommendations
+## Почему граф строится из recommendations
 
-The demo graph is built from final recommendations, not from all pair statistics. Pair stats can be very large and are
-hard to explain visually. Recommendation rows are smaller, ranked, and directly match what users see in the widget:
+Граф строится из финальных recommendation rows, а не из всех pair statistics.
+Pair stats могут быть очень большими и плохо объясняются на защите. Финальные
+рекомендации уже отфильтрованы, ранжированы и совпадают с тем, что видно в
+таблице:
 
 ```text
 item_id -> similar_item_id
 ```
 
-This keeps the graph presentation-focused and avoids rendering a huge unreadable network.
+Так граф остаётся презентационным и не превращается в нечитаемую сеть.
 
-## Nodes and edges
+## Узлы и рёбра
 
-Each item is a node. Node fields include:
+Каждый товар становится узлом. Основные поля узла:
 
 ```text
 id
@@ -31,9 +34,13 @@ recommendation_count
 in_degree
 out_degree
 degree
+is_center
+label_visible
+x
+y
 ```
 
-Each recommendation is a directed edge. Edge fields include:
+Каждая рекомендация становится направленным ребром. Основные поля ребра:
 
 ```text
 source
@@ -43,9 +50,10 @@ score
 rank
 recommendation_source
 source_group
+color
 ```
 
-Known source labels are preserved:
+Известные источники сохраняются как raw labels:
 
 ```text
 behavioral
@@ -57,26 +65,31 @@ fallback_global_popular
 unknown
 ```
 
-Fallback recommendations are not errors. They are grouped and colored separately so the presenter can explain where
-behavioral coverage ends and business fallback begins.
+Fallback-рекомендации не являются ошибкой. Они подсвечиваются отдельно, чтобы
+на защите было видно, где хватает behavioral-сигнала, а где pipeline подключает
+популярные товары из категории, типа, бренда или глобального fallback.
 
-## Graph modes
+## Режимы графа
 
-Overview graph is generated for a run. Default limits:
+Overview graph строится для run-а целиком. Production config по умолчанию:
 
 ```text
+mode = overview
 max_rank = 10
 max_edges = 2000
-max_nodes = 500
+max_nodes = null
+labels_mode = important
+theme = auto
+include_behavioral = true
 include_fallback = true
-prefer_behavioral = true
 min_score = null
 ```
 
-The exporter keeps higher-quality edges first: behavioral edges, higher score, then lower rank. If the node limit is
-exceeded, it keeps high-degree source nodes first and drops dangling edges.
+`max_nodes = null` означает “без ограничения числа узлов”. В CLI и UI то же
+поведение обозначается как `All`. Для `max_edges` также можно указать `All`,
+если нужно показать весь отфильтрованный граф.
 
-Selected item graph is an on-demand ego graph:
+Ego graph строится по требованию вокруг выбранного товара:
 
 ```text
 center item
@@ -84,12 +97,29 @@ center item
 + top M neighbors for each similar item
 ```
 
-The Streamlit app builds ego graphs only after a user selects an item and clicks `Build graph`. It does not generate an
-ego graph for every item.
+Streamlit создаёт ego-граф только после выбора товара и нажатия `Build graph`.
+Это защищает demo run от множества лишних generated files.
+
+## HTML-граф
+
+Автоматический HTML export включает:
+
+- zoom колесом мыши;
+- pan перетаскиванием;
+- reset view;
+- поиск по `item_id` и названию;
+- tooltip по узлу;
+- подсветку соседей при hover;
+- режимы подписей `Auto`, `Important`, `All`, `Off`;
+- светлую, тёмную или auto-тему.
+
+SVG занимает почти всю высоту вкладки, поэтому граф удобнее показывать на
+проекторе. Подписи по умолчанию включаются только для важных узлов, чтобы
+крупные overview-графы не превращались в облако текста.
 
 ## Artifacts
 
-Normal production/full runs can generate overview graph artifacts under the run directory:
+Production/full run сохраняет обзорный граф внутри run directory:
 
 ```text
 outputs/runs/<run_id>/demo/graph/
@@ -99,7 +129,7 @@ outputs/runs/<run_id>/demo/graph/
   manifest.json
 ```
 
-Selected item graphs created from Streamlit are written to:
+Ego-граф из Streamlit сохраняется отдельно:
 
 ```text
 outputs/runs/<run_id>/demo/graph/ego/item_id=<item_id>/
@@ -109,48 +139,42 @@ outputs/runs/<run_id>/demo/graph/ego/item_id=<item_id>/
   manifest.json
 ```
 
-Tune trials do not generate graph artifacts. Tuning writes many trial directories, and graph export would add noise and
-heavy generated files that are not useful for objective selection.
+Tune trials не генерируют graph artifacts: tuning создаёт много trial
+directories, и графы в них только добавили бы шум к objective selection.
 
-## Automatic and manual steps
+## Gephi polish
 
-Automatic:
+Gephi остаётся опциональным ручным шагом для финальной презентации:
 
-1. `configs/production.yaml` enables `demo.graph`.
-2. `run_pipeline` exports graph artifacts after recommendation files are written.
-3. `run_full` preserves the same run artifacts and adds evaluation metadata.
-4. The run manifest includes `demo.graph` paths and node/edge counts.
-5. Streamlit embeds the graph HTML when it exists.
+1. Откройте `outputs/runs/<run_id>/demo/graph/recommendations_graph.gexf`.
+2. Примените ForceAtlas2 или похожий layout.
+3. Включите prevent overlap.
+4. Размер узлов задайте по `degree` или `recommendation_count`.
+5. Толщину рёбер задайте по `score`.
+6. Цвет рёбер задайте по `source_group`.
+7. Экспортируйте интерактивный HTML через Gephi/Sigma plugin.
+8. Положите результат в `outputs/runs/<run_id>/demo/gephi/index.html`.
 
-Manual:
+Вкладка Graph сначала ищет `demo/gephi/index.html`, поэтому ручной polished
+export автоматически перекрывает generated HTML. Если Gephi недоступен,
+generated HTML/JSON/GEXF artifacts уже достаточны для demo site.
 
-1. Open `outputs/runs/<run_id>/demo/graph/recommendations_graph.gexf` in Gephi.
-2. Apply layout such as ForceAtlas2.
-3. Enable prevent overlap.
-4. Size nodes by `degree` or `recommendation_count`.
-5. Size edges by `score`.
-6. Color edges by `source_group`.
-7. Export interactive HTML with a Gephi/Sigma plugin if available.
-8. Put it at `outputs/runs/<run_id>/demo/gephi/index.html`.
+## Сценарий защиты
 
-The Streamlit Graph tab checks `demo/gephi/index.html` first, so a polished manual export overrides the automatic HTML.
-Gephi remains optional: the site works with the generated HTML/JSON/GEXF artifacts.
-
-## Demo defense flow
-
-Recommended flow for a defense run:
+Рекомендуемый запуск:
 
 ```bash
 uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
 uv run streamlit run apps/demo/app.py
 ```
 
-Then use the site to show:
+Порядок показа:
 
-1. product search;
-2. similar products for a selected item;
-3. behavioral and fallback source labels;
-4. run summary and metrics;
-5. overview graph;
-6. selected item neighborhood graph;
-7. optional Gephi-polished graph.
+1. переключить RU/EN при необходимости;
+2. найти товар по `item_id` или названию;
+3. показать карточку выбранного товара и таблицу похожих товаров;
+4. объяснить behavioral и fallback источники;
+5. открыть run summary и метрики;
+6. показать overview graph;
+7. построить ego graph выбранного товара;
+8. при наличии открыть Gephi-polished graph.

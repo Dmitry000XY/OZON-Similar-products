@@ -19,10 +19,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["overview", "ego"], default="overview")
     parser.add_argument("--selected-item-id", default=None)
     parser.add_argument("--max-rank", type=int, default=10)
-    parser.add_argument("--max-edges", type=int, default=2000)
-    parser.add_argument("--max-nodes", type=int, default=500)
+    parser.add_argument("--max-edges", type=_optional_positive_int, default=2000)
+    parser.add_argument("--max-nodes", type=_optional_positive_int, default=None)
     parser.add_argument("--ego-top-k", type=int, default=20)
     parser.add_argument("--second-hop-top-k", type=int, default=3)
+    parser.add_argument(
+        "--labels-mode",
+        choices=["auto", "important", "all", "off"],
+        default="important",
+    )
+    parser.add_argument("--theme", choices=["auto", "dark", "light"], default="auto")
     parser.add_argument("--min-score", type=float, default=None)
     parser.add_argument("--exclude-fallback", action="store_true")
     parser.add_argument("--exclude-behavioral", action="store_true")
@@ -30,6 +36,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-json", action="store_true")
     parser.add_argument("--no-gexf", action="store_true")
     return parser.parse_args()
+
+
+def _optional_positive_int(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        if value <= 0:
+            raise argparse.ArgumentTypeError("value must be positive or All")
+        return value
+    normalized = value.strip().lower()
+    if normalized in {"all", "none", "null", "unlimited"}:
+        return None
+    try:
+        parsed = int(normalized)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("value must be a positive integer or All") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be positive or All")
+    return parsed
 
 
 def main() -> int:
@@ -42,6 +67,8 @@ def main() -> int:
         max_nodes=args.max_nodes,
         ego_top_k=args.ego_top_k,
         second_hop_top_k=args.second_hop_top_k,
+        labels_mode=args.labels_mode,
+        theme=args.theme,
         include_behavioral=not args.exclude_behavioral,
         include_fallback=not args.exclude_fallback,
         min_score=args.min_score,

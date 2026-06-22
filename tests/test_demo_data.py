@@ -14,6 +14,14 @@ from apps.demo.demo_data import (
     search_items,
     source_explanation,
 )
+from apps.demo.texts import (
+    get_texts,
+    recommendation_column_names,
+    source_label,
+)
+from apps.demo.texts import (
+    source_explanation as localized_source_explanation,
+)
 
 
 def test_normalize_recommendations_for_enriched_like_frame() -> None:
@@ -139,6 +147,32 @@ def test_source_explanation_maps_known_and_unknown_sources() -> None:
     assert source_explanation("behavioral") == "Users interacted with these items in similar sessions"
     assert source_explanation("not_a_real_source") == "Unknown source"
     assert source_explanation(None) == "Unknown source"
+
+
+def test_localized_source_texts_cover_english_and_russian() -> None:
+    assert source_label("behavioral", "EN") == "Behavioral"
+    assert source_label("behavioral", "RU") == "Поведенческий"
+    assert "sessions" in localized_source_explanation("behavioral", "EN")
+    assert "сессиях" in localized_source_explanation("behavioral", "RU")
+    assert localized_source_explanation("not_a_real_source", "RU") == "Неизвестный источник"
+
+
+def test_recommendation_column_names_are_localized() -> None:
+    english = recommendation_column_names("EN")
+    russian = recommendation_column_names("RU")
+
+    assert english["similar_item_name"] == "Recommendation"
+    assert russian["similar_item_name"] == "Рекомендация"
+    assert english["source_label"] == "Source"
+    assert russian["source_label"] == "Источник"
+
+
+def test_get_texts_falls_back_to_english_and_returns_copy() -> None:
+    first = get_texts("EN")
+    second = get_texts("DE")
+
+    first["hero_title"] = "changed"
+    assert second["hero_title"] == "Ozon Similar Products Demo"
 
 
 def test_find_recommendation_path_prefers_explicit_enriched_path(tmp_path: Path) -> None:

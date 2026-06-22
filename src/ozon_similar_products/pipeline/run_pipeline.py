@@ -123,6 +123,31 @@ def _as_positive_int(value: Any, default: int, parameter_name: str) -> int:
     return parsed
 
 
+def _as_optional_positive_int(
+    value: Any,
+    default: int | None,
+    parameter_name: str,
+) -> int | None:
+    """Parse a positive integer config value where All/null disables the limit."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{parameter_name} must be a positive integer or null")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"all", "none", "null", "unlimited"}:
+            return None
+        parsed = int(normalized)
+    else:
+        raise TypeError(f"{parameter_name} must be a positive integer or null")
+
+    if parsed <= 0:
+        raise ValueError(f"{parameter_name} must be a positive integer or null")
+    return parsed
+
+
 def _as_non_empty_str(value: Any, default: str, parameter_name: str) -> str:
     """Parse a non-empty string config value."""
     if value is None:
@@ -1769,6 +1794,12 @@ def _demo_graph_export_config(config: Mapping[str, Any]) -> RecommendationGraphC
     mode = str(graph_config.get("mode", "overview"))
     if mode not in {"overview", "ego"}:
         raise ValueError("demo.graph.mode must be 'overview' or 'ego'")
+    labels_mode = str(graph_config.get("labels_mode", "important"))
+    if labels_mode not in {"auto", "important", "all", "off"}:
+        raise ValueError("demo.graph.labels_mode must be auto, important, all, or off")
+    theme = str(graph_config.get("theme", "auto"))
+    if theme not in {"auto", "dark", "light"}:
+        raise ValueError("demo.graph.theme must be auto, dark, or light")
 
     return RecommendationGraphConfig(
         mode=mode,
@@ -1777,15 +1808,22 @@ def _demo_graph_export_config(config: Mapping[str, Any]) -> RecommendationGraphC
             default=10,
             parameter_name="demo.graph.max_rank",
         ),
-        max_edges=_as_positive_int(
+        max_edges=_as_optional_positive_int(
             graph_config.get("max_edges"),
             default=2000,
             parameter_name="demo.graph.max_edges",
         ),
-        max_nodes=_as_positive_int(
+        max_nodes=_as_optional_positive_int(
             graph_config.get("max_nodes"),
-            default=500,
+            default=None,
             parameter_name="demo.graph.max_nodes",
+        ),
+        labels_mode=labels_mode,
+        theme=theme,
+        include_behavioral=_as_bool(
+            graph_config.get("include_behavioral"),
+            default=True,
+            parameter_name="demo.graph.include_behavioral",
         ),
         include_fallback=_as_bool(
             graph_config.get("include_fallback"),

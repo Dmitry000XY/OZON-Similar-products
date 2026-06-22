@@ -81,8 +81,10 @@ uv run ozon-preview-recommendations --item-id 113
 uv run streamlit run apps/demo/app.py
 ```
 
-По умолчанию сайт читает `outputs/latest/manifest.json` и показывает похожие товары, summary run-а, метрики и граф
-рекомендаций. Graph artifacts обычного production/full run сохраняются внутри run-а:
+По умолчанию сайт читает `outputs/latest/manifest.json` и показывает похожие товары, summary run-а, метрики и
+интерактивный граф рекомендаций. В интерфейсе есть переключатель `EN/RU`, overview graph, ego graph выбранного товара,
+поиск по графу, zoom/pan/reset и опциональный приоритет polished Gephi export. Graph artifacts обычного
+production/full run сохраняются внутри run-а:
 
 ```text
 outputs/runs/<run_id>/demo/graph/

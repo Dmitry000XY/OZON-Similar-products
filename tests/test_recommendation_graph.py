@@ -22,6 +22,8 @@ def test_build_recommendation_graph_creates_nodes_and_edges() -> None:
     assert graph.edges[0]["source"] == "1"
     assert graph.edges[0]["target"] == "2"
     assert graph.edges[0]["recommendation_source"] == "behavioral"
+    assert all("x" in node and "y" in node for node in graph.nodes)
+    assert any(node["label_visible"] for node in graph.nodes)
 
 
 def test_build_recommendation_graph_filters_max_rank() -> None:
@@ -45,6 +47,17 @@ def test_build_recommendation_graph_limits_edges() -> None:
     assert len(graph.edges) == 2
 
 
+def test_build_recommendation_graph_accepts_unlimited_edges_and_nodes() -> None:
+    graph = build_recommendation_graph(
+        _recommendations(),
+        RecommendationGraphConfig(max_edges=None, max_nodes=None),
+    )
+
+    assert len(graph.edges) == 5
+    assert graph.metadata["max_edges"] is None
+    assert graph.metadata["max_nodes"] is None
+
+
 def test_build_recommendation_graph_builds_ego_graph_with_second_hop() -> None:
     graph = build_recommendation_graph(
         _recommendations(),
@@ -62,6 +75,31 @@ def test_build_recommendation_graph_builds_ego_graph_with_second_hop() -> None:
     assert ("1", "3") in edge_pairs
     assert ("2", "4") in edge_pairs
     assert any(node["id"] == "1" and node["is_center"] for node in graph.nodes)
+    center = next(node for node in graph.nodes if node["id"] == "1")
+    assert center["x"] == 600.0
+    assert center["y"] == 430.0
+    assert center["label_visible"] is True
+
+
+def test_build_recommendation_graph_respects_labels_mode() -> None:
+    without_labels = build_recommendation_graph(
+        _recommendations(),
+        RecommendationGraphConfig(labels_mode="off"),
+    )
+    all_labels = build_recommendation_graph(
+        _recommendations(),
+        RecommendationGraphConfig(labels_mode="all"),
+    )
+
+    assert {node["label_visible"] for node in without_labels.nodes} == {False}
+    assert {node["label_visible"] for node in all_labels.nodes} == {True}
+
+
+def test_build_recommendation_graph_keeps_stable_source_colors() -> None:
+    graph = build_recommendation_graph(_recommendations(), RecommendationGraphConfig())
+
+    assert graph.metadata["source_groups"]["behavioral"] == "#159895"
+    assert graph.metadata["source_groups"]["category_fallback"] == "#f59e0b"
 
 
 def test_export_recommendation_graph_writes_artifacts(tmp_path: Path) -> None:
@@ -81,6 +119,17 @@ def test_export_recommendation_graph_writes_artifacts(tmp_path: Path) -> None:
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["artifact_type"] == "recommendation_graph"
     assert manifest["paths"]["html"] == "recommendations_graph.html"
+    html = result.html_path.read_text(encoding="utf-8")
+    assert "resetView" in html
+    assert "wheel" in html
+    assert "pointerdown" in html
+    assert "labels-mode" in html
+    gexf = result.gexf_path.read_text(encoding="utf-8")
+    assert 'title="is_center"' in gexf
+    assert 'title="label_visible"' in gexf
+    assert 'title="x"' in gexf
+    assert 'title="color"' in gexf
+    assert 'for="is_center" value="false"' in gexf
 
 
 def test_build_recommendation_graph_handles_empty_input() -> None:

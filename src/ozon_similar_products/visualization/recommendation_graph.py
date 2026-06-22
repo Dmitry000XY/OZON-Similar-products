@@ -50,10 +50,12 @@ class RecommendationGraphConfig:
     mode: Literal["overview", "ego"] = "overview"
     selected_item_id: str | int | None = None
     max_rank: int = 10
-    max_edges: int = 2000
-    max_nodes: int = 500
+    max_edges: int | None = 2000
+    max_nodes: int | None = None
     ego_top_k: int = 20
     second_hop_top_k: int = 3
+    labels_mode: Literal["auto", "important", "all", "off"] = "important"
+    theme: Literal["auto", "dark", "light"] = "auto"
     include_behavioral: bool = True
     include_fallback: bool = True
     min_score: float | None = None
@@ -99,12 +101,14 @@ def build_recommendation_graph(
         selected_edges = _select_overview_edges(filtered, config)
 
     edge_rows = selected_edges.to_dicts()
-    if len(edge_rows) > config.max_edges:
+    if config.max_edges is not None and len(edge_rows) > config.max_edges:
         edge_rows = edge_rows[: config.max_edges]
 
     edge_rows = _drop_edges_for_node_limit(edge_rows, config)
     nodes = _build_nodes(edge_rows, config)
     edges = [_edge_payload(index, row) for index, row in enumerate(edge_rows)]
+    _apply_layout(nodes, edges, config)
+    _apply_label_visibility(nodes, config)
 
     metadata = {
         **asdict(config),
@@ -182,9 +186,9 @@ def export_recommendation_graph(
 def _validate_config(config: RecommendationGraphConfig) -> None:
     if config.mode not in {"overview", "ego"}:
         raise ValueError("graph mode must be overview or ego")
-    if config.max_edges <= 0:
+    if config.max_edges is not None and config.max_edges <= 0:
         raise ValueError("max_edges must be positive")
-    if config.max_nodes <= 0:
+    if config.max_nodes is not None and config.max_nodes <= 0:
         raise ValueError("max_nodes must be positive")
     if config.max_rank <= 0:
         raise ValueError("max_rank must be positive")
@@ -192,6 +196,10 @@ def _validate_config(config: RecommendationGraphConfig) -> None:
         raise ValueError("ego_top_k must be positive")
     if config.second_hop_top_k < 0:
         raise ValueError("second_hop_top_k must be non-negative")
+    if config.labels_mode not in {"auto", "important", "all", "off"}:
+        raise ValueError("labels_mode must be auto, important, all, or off")
+    if config.theme not in {"auto", "dark", "light"}:
+        raise ValueError("theme must be auto, dark, or light")
 
 
 def _normalize_recommendations(recommendations: pl.DataFrame) -> pl.DataFrame:
@@ -244,7 +252,7 @@ def _select_overview_edges(
     recommendations: pl.DataFrame,
     config: RecommendationGraphConfig,
 ) -> pl.DataFrame:
-    return recommendations.head(config.max_edges)
+    return recommendations if config.max_edges is None else recommendations.head(config.max_edges)
 
 
 def _select_ego_edges(
@@ -272,20 +280,22 @@ def _select_ego_edges(
     if not non_empty:
         return recommendations.head(0)
 
-    return (
-        _sort_for_graph(pl.concat(non_empty, how="vertical"))
-        .unique(
+    selected = (
+        _sort_for_graph(pl.concat(non_empty, how="vertical")).unique(
             subset=["item_id", "similar_item_id"],
             keep="first",
         )
-        .head(config.max_edges)
     )
+    return selected if config.max_edges is None else selected.head(config.max_edges)
 
 
 def _drop_edges_for_node_limit(
     edge_rows: list[dict[str, Any]],
     config: RecommendationGraphConfig,
 ) -> list[dict[str, Any]]:
+    if config.max_nodes is None:
+        return edge_rows
+
     node_ids = {str(row["item_id"]) for row in edge_rows}
     node_ids.update(str(row["similar_item_id"]) for row in edge_rows)
     if len(node_ids) <= config.max_nodes:
@@ -396,6 +406,155 @@ def _edge_payload(index: int, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _apply_layout(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    config: RecommendationGraphConfig,
+) -> None:
+    if not nodes:
+        return
+
+    width = 1200.0
+    height = 860.0
+    center_x = width / 2
+    center_y = height / 2
+    node_by_id = {str(node["id"]): node for node in nodes}
+    max_degree = max(1, *(int(node.get("degree") or 0) for node in nodes))
+    center_id = str(config.selected_item_id) if config.selected_item_id is not None else None
+
+    if config.mode == "ego" and center_id is not None:
+        _apply_ego_layout(nodes, edges, center_id, center_x, center_y, max_degree)
+    else:
+        for index, node in enumerate(nodes):
+            degree_ratio = (int(node.get("degree") or 0) + 1) / (max_degree + 1)
+            angle = (index / max(1, len(nodes))) * math.tau
+            radius = 90 + (1 - degree_ratio) * 330 + (index % 11) * 11
+            node["x"] = center_x + math.cos(angle) * radius
+            node["y"] = center_y + math.sin(angle) * radius
+
+    if len(nodes) <= 320:
+        _relax_layout(nodes, edges, node_by_id, width, height, center_id)
+
+    for node in nodes:
+        node["x"] = round(_clamp(_float_or_zero(node.get("x")), 24, width - 24), 2)
+        node["y"] = round(_clamp(_float_or_zero(node.get("y")), 24, height - 24), 2)
+
+
+def _apply_ego_layout(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    center_id: str,
+    center_x: float,
+    center_y: float,
+    max_degree: int,
+) -> None:
+    first_hop = {str(edge["target"]) for edge in edges if str(edge["source"]) == center_id}
+    first_hop.add(center_id)
+    for index, node in enumerate(nodes):
+        node_id = str(node["id"])
+        if node_id == center_id:
+            node["x"] = center_x
+            node["y"] = center_y
+            continue
+        degree_ratio = (int(node.get("degree") or 0) + 1) / (max_degree + 1)
+        angle = (index / max(1, len(nodes) - 1)) * math.tau
+        radius_base = 205 if node_id in first_hop else 345
+        radius = radius_base + (1 - degree_ratio) * 70 + (index % 5) * 12
+        node["x"] = center_x + math.cos(angle) * radius
+        node["y"] = center_y + math.sin(angle) * radius
+
+
+def _relax_layout(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+    width: float,
+    height: float,
+    center_id: str | None,
+) -> None:
+    area = width * height
+    ideal_distance = math.sqrt(area / max(1, len(nodes))) * 0.55
+    velocities = {str(node["id"]): [0.0, 0.0] for node in nodes}
+
+    for _ in range(80):
+        for index, left in enumerate(nodes):
+            left_id = str(left["id"])
+            for right in nodes[index + 1 :]:
+                right_id = str(right["id"])
+                dx = _float_or_zero(left.get("x")) - _float_or_zero(right.get("x"))
+                dy = _float_or_zero(left.get("y")) - _float_or_zero(right.get("y"))
+                distance_sq = max(dx * dx + dy * dy, 16.0)
+                force = min(5.0, (ideal_distance * ideal_distance) / distance_sq)
+                distance = math.sqrt(distance_sq)
+                fx = (dx / distance) * force
+                fy = (dy / distance) * force
+                velocities[left_id][0] += fx
+                velocities[left_id][1] += fy
+                velocities[right_id][0] -= fx
+                velocities[right_id][1] -= fy
+
+        for edge in edges:
+            source = node_by_id.get(str(edge["source"]))
+            target = node_by_id.get(str(edge["target"]))
+            if source is None or target is None:
+                continue
+            source_id = str(source["id"])
+            target_id = str(target["id"])
+            dx = _float_or_zero(target.get("x")) - _float_or_zero(source.get("x"))
+            dy = _float_or_zero(target.get("y")) - _float_or_zero(source.get("y"))
+            distance = max(math.sqrt(dx * dx + dy * dy), 1.0)
+            force = min(3.5, (distance - ideal_distance) * 0.018)
+            fx = (dx / distance) * force
+            fy = (dy / distance) * force
+            velocities[source_id][0] += fx
+            velocities[source_id][1] += fy
+            velocities[target_id][0] -= fx
+            velocities[target_id][1] -= fy
+
+        for node in nodes:
+            node_id = str(node["id"])
+            if center_id is not None and node_id == center_id:
+                node["x"] = width / 2
+                node["y"] = height / 2
+                velocities[node_id] = [0.0, 0.0]
+                continue
+            vx, vy = velocities[node_id]
+            node["x"] = _clamp(_float_or_zero(node.get("x")) + vx * 0.55, 28, width - 28)
+            node["y"] = _clamp(_float_or_zero(node.get("y")) + vy * 0.55, 28, height - 28)
+            velocities[node_id] = [vx * 0.62, vy * 0.62]
+
+
+def _apply_label_visibility(
+    nodes: list[dict[str, Any]],
+    config: RecommendationGraphConfig,
+) -> None:
+    if config.labels_mode == "off":
+        for node in nodes:
+            node["label_visible"] = False
+        return
+    if config.labels_mode == "all":
+        for node in nodes:
+            node["label_visible"] = True
+        return
+
+    label_limit = 80 if config.mode == "ego" else 45
+    important_ids = {
+        str(node["id"])
+        for node in sorted(
+            nodes,
+            key=lambda node: (
+                bool(node.get("is_center")),
+                int(node.get("degree") or 0),
+                int(node.get("out_degree") or 0),
+                str(node.get("id")),
+            ),
+            reverse=True,
+        )[:label_limit]
+    }
+    for node in nodes:
+        node["label_visible"] = bool(node.get("is_center")) or str(node["id"]) in important_ids
+
+
 def recommendation_source_group(source: str | None) -> str:
     """Group detailed recommendation source labels for visualization colors."""
 
@@ -469,6 +628,10 @@ def _write_gexf(path: Path, graph: RecommendationGraphData) -> None:
         ("in_degree", "in_degree", "integer"),
         ("out_degree", "out_degree", "integer"),
         ("degree", "degree", "integer"),
+        ("is_center", "is_center", "boolean"),
+        ("label_visible", "label_visible", "boolean"),
+        ("x", "x", "double"),
+        ("y", "y", "double"),
     ):
         ET.SubElement(
             node_attrs, f"{{{ns}}}attribute", {"id": attr_id, "title": title, "type": attr_type}
@@ -480,6 +643,7 @@ def _write_gexf(path: Path, graph: RecommendationGraphData) -> None:
         ("rank", "rank", "integer"),
         ("source", "source", "string"),
         ("source_group", "source_group", "string"),
+        ("color", "color", "string"),
     ):
         ET.SubElement(
             edge_attrs, f"{{{ns}}}attribute", {"id": attr_id, "title": title, "type": attr_type}
@@ -500,11 +664,15 @@ def _write_gexf(path: Path, graph: RecommendationGraphData) -> None:
             "in_degree",
             "out_degree",
             "degree",
+            "is_center",
+            "label_visible",
+            "x",
+            "y",
         ):
             ET.SubElement(
                 values,
                 f"{{{ns}}}attvalue",
-                {"for": attr_id, "value": str(_json_value(node.get(attr_id)) or "")},
+                {"for": attr_id, "value": _gexf_attr_value(node.get(attr_id))},
             )
 
     edges_node = ET.SubElement(graph_node, f"{{{ns}}}edges")
@@ -525,11 +693,12 @@ def _write_gexf(path: Path, graph: RecommendationGraphData) -> None:
             ("rank", "rank"),
             ("source", "recommendation_source"),
             ("source_group", "source_group"),
+            ("color", "color"),
         ):
             ET.SubElement(
                 values,
                 f"{{{ns}}}attvalue",
-                {"for": attr_id, "value": str(_json_value(edge.get(key)) or "")},
+                {"for": attr_id, "value": _gexf_attr_value(edge.get(key))},
             )
 
     ET.indent(root)
@@ -563,12 +732,25 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _gexf_attr_value(value: Any) -> str:
+    normalized = _json_value(value)
+    if normalized is None:
+        return ""
+    if isinstance(normalized, bool):
+        return str(normalized).lower()
+    return str(normalized)
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
 def _float_or_zero(value: Any) -> float:
     if value is None:
         return 0.0
     try:
         parsed = float(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return 0.0
     return parsed if math.isfinite(parsed) else 0.0
 
@@ -578,7 +760,7 @@ def _int_or_none(value: Any) -> int | None:
         return None
     try:
         return int(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -590,44 +772,114 @@ _HTML_TEMPLATE = """<!doctype html>
   <title>Recommendation graph</title>
   <style>
     :root {
-      --ink: #17202a;
-      --muted: #667085;
-      --line: #d8dee9;
-      --panel: #ffffff;
-      --soft: #f6f8fb;
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-2: #eef2f7;
+      --ink: #142033;
+      --muted: #5f6f85;
+      --line: #d6dde8;
+      --shadow: rgba(15, 23, 42, 0.12);
+      --label-stroke: rgba(255, 255, 255, 0.9);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #090d14;
+        --surface: #111827;
+        --surface-2: #182235;
+        --ink: #edf2f7;
+        --muted: #a6b3c4;
+        --line: #2f3b4e;
+        --shadow: rgba(0, 0, 0, 0.35);
+        --label-stroke: rgba(8, 13, 21, 0.9);
+      }
+    }
+    body.theme-light {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-2: #eef2f7;
+      --ink: #142033;
+      --muted: #5f6f85;
+      --line: #d6dde8;
+      --shadow: rgba(15, 23, 42, 0.12);
+      --label-stroke: rgba(255, 255, 255, 0.9);
+    }
+    body.theme-dark {
+      --bg: #090d14;
+      --surface: #111827;
+      --surface-2: #182235;
+      --ink: #edf2f7;
+      --muted: #a6b3c4;
+      --line: #2f3b4e;
+      --shadow: rgba(0, 0, 0, 0.35);
+      --label-stroke: rgba(8, 13, 21, 0.9);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--soft);
+      min-height: 100vh;
+      background: var(--bg);
       color: var(--ink);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     .toolbar {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(220px, 380px) minmax(150px, auto) auto auto;
       align-items: center;
-      gap: 12px;
-      padding: 14px 16px;
-      background: var(--panel);
+      gap: 10px;
+      padding: 12px 14px;
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
       border-bottom: 1px solid var(--line);
+      box-shadow: 0 8px 30px var(--shadow);
       position: sticky;
       top: 0;
-      z-index: 2;
+      z-index: 4;
+      backdrop-filter: blur(10px);
     }
-    .toolbar input {
-      width: min(360px, 60vw);
+    .title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      font-weight: 700;
+    }
+    .title small {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    input, select, button {
       border: 1px solid var(--line);
       border-radius: 6px;
-      padding: 8px 10px;
-      font-size: 14px;
+      background: var(--surface);
+      color: var(--ink);
+      font: inherit;
+      min-height: 36px;
     }
-    .counts { color: var(--muted); font-size: 13px; margin-left: auto; }
+    input, select { padding: 7px 10px; }
+    button {
+      cursor: pointer;
+      padding: 7px 12px;
+      font-weight: 650;
+    }
+    button:hover, input:focus, select:focus {
+      outline: 2px solid color-mix(in srgb, #38bdf8 38%, transparent);
+      outline-offset: 1px;
+    }
+    .counts {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+      text-align: right;
+    }
     .legend {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      padding: 10px 16px;
-      background: #fbfcfe;
+      padding: 9px 14px;
+      background: color-mix(in srgb, var(--surface-2) 72%, transparent);
       border-bottom: 1px solid var(--line);
     }
     .legend span {
@@ -637,122 +889,209 @@ _HTML_TEMPLATE = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
-    .swatch { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
     #canvas {
       width: 100%;
-      height: 720px;
-      background: radial-gradient(circle at center, #ffffff 0, #f8fafc 68%, #eef2f7 100%);
+      height: calc(100vh - 96px);
+      min-height: 760px;
+      background:
+        radial-gradient(circle at center, color-mix(in srgb, var(--surface-2) 74%, transparent), transparent 66%),
+        var(--bg);
       display: block;
+      cursor: grab;
+      touch-action: none;
     }
-    .edge { stroke-opacity: 0.36; }
-    .node { stroke: #fff; stroke-width: 1.5; cursor: pointer; }
-    .node.dimmed, .edge.dimmed, .label.dimmed { opacity: 0.12; }
-    .node.highlight { stroke: #111827; stroke-width: 3; }
+    #canvas.dragging { cursor: grabbing; }
+    .edge {
+      stroke-opacity: 0.2;
+      vector-effect: non-scaling-stroke;
+      transition: opacity 120ms ease, stroke-opacity 120ms ease;
+    }
+    .node {
+      stroke: color-mix(in srgb, var(--surface) 88%, var(--ink));
+      stroke-width: 1.4;
+      cursor: pointer;
+      vector-effect: non-scaling-stroke;
+      transition: opacity 120ms ease, stroke-width 120ms ease;
+    }
+    .node.center { stroke: #f8fafc; stroke-width: 3; }
+    .node.dimmed, .edge.dimmed, .label.dimmed { opacity: 0.1; }
+    .node.highlight { stroke: #38bdf8; stroke-width: 4; opacity: 1; }
+    .edge.highlight { stroke-opacity: 0.72; }
     .label {
-      fill: #334155;
-      font-size: 10px;
+      fill: var(--ink);
+      font-size: 10.5px;
+      font-weight: 560;
       paint-order: stroke;
-      stroke: white;
+      stroke: var(--label-stroke);
       stroke-width: 3px;
       stroke-linejoin: round;
       pointer-events: none;
     }
+    .label.hidden { display: none; }
     #tooltip {
       position: fixed;
       pointer-events: none;
-      background: rgba(15, 23, 42, 0.94);
+      background: rgba(8, 13, 21, 0.95);
       color: white;
-      border-radius: 6px;
-      padding: 8px 10px;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 7px;
+      padding: 9px 10px;
       font-size: 12px;
-      line-height: 1.35;
-      max-width: 280px;
+      line-height: 1.38;
+      max-width: 310px;
       display: none;
       z-index: 5;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+    }
+    @media (max-width: 760px) {
+      .toolbar { grid-template-columns: 1fr; align-items: stretch; }
+      .counts { text-align: left; }
+      #canvas { height: 820px; }
     }
   </style>
 </head>
 <body>
   <div class="toolbar">
-    <strong>Recommendation graph</strong>
+    <div class="title">
+      <span>Recommendation graph</span>
+      <small id="subtitle"></small>
+    </div>
     <input id="search" type="search" placeholder="Search item_id or name">
+    <select id="labels-mode" aria-label="Label mode">
+      <option value="auto">Auto labels</option>
+      <option value="important">Important labels</option>
+      <option value="all">All labels</option>
+      <option value="off">No labels</option>
+    </select>
+    <button id="reset-view" type="button">Reset</button>
     <span class="counts" id="counts"></span>
   </div>
   <div class="legend" id="legend"></div>
-  <svg id="canvas" viewBox="0 0 1200 720" role="img" aria-label="Recommendation graph"></svg>
+  <svg id="canvas" viewBox="0 0 1200 860" role="img" aria-label="Recommendation graph">
+    <g id="viewport"></g>
+  </svg>
   <div id="tooltip"></div>
   <script type="application/json" id="graph-data">__GRAPH_DATA__</script>
   <script>
     const graph = JSON.parse(document.getElementById("graph-data").textContent);
     const svg = document.getElementById("canvas");
+    const viewport = document.getElementById("viewport");
     const tooltip = document.getElementById("tooltip");
     const counts = document.getElementById("counts");
+    const subtitle = document.getElementById("subtitle");
     const search = document.getElementById("search");
+    const resetButton = document.getElementById("reset-view");
+    const labelsMode = document.getElementById("labels-mode");
     const width = 1200;
-    const height = 720;
-    const cx = width / 2;
-    const cy = height / 2;
+    const height = 860;
     const nodes = graph.nodes.map((node, index) => ({...node, index}));
     const edges = graph.edges;
     const byId = new Map(nodes.map(node => [String(node.id), node]));
-    const maxDegree = Math.max(1, ...nodes.map(node => Number(node.degree || 0)));
+    const neighbors = new Map(nodes.map(node => [String(node.id), new Set([String(node.id)])]));
+    let transform = {x: 0, y: 0, k: 1};
+    let dragStart = null;
 
-    nodes.forEach((node, index) => {
-      const degreeRank = Number(node.degree || 0) / maxDegree;
-      if (node.is_center) {
-        node.x = cx;
-        node.y = cy;
-      } else {
-        const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
-        const radius = 80 + (1 - degreeRank) * 250 + (index % 7) * 16;
-        node.x = cx + Math.cos(angle) * radius;
-        node.y = cy + Math.sin(angle) * radius;
-      }
+    applyTheme(graph.metadata.theme || "auto");
+    labelsMode.value = graph.metadata.labels_mode || "important";
+    counts.textContent = `${nodes.length} nodes / ${edges.length} edges`;
+    subtitle.textContent = `${graph.metadata.mode || "overview"} · max_rank=${graph.metadata.max_rank}`;
+
+    edges.forEach(edge => {
+      const source = String(edge.source);
+      const target = String(edge.target);
+      if (neighbors.has(source)) neighbors.get(source).add(target);
+      if (neighbors.has(target)) neighbors.get(target).add(source);
     });
 
-    counts.textContent = `${nodes.length} nodes · ${edges.length} edges`;
     const groups = graph.metadata.source_groups || {};
     document.getElementById("legend").innerHTML = Object.entries(groups)
-      .map(([name, color]) => `<span><i class="swatch" style="background:${color}"></i>${name}</span>`)
+      .map(([name, color]) => `<span><i class="swatch" style="background:${color}"></i>${escapeHtml(name)}</span>`)
       .join("");
 
-    function line(edge) {
+    function applyTheme(theme) {
+      if (theme === "dark") document.body.classList.add("theme-dark");
+      if (theme === "light") document.body.classList.add("theme-light");
+    }
+
+    function edgeLine(edge) {
       const source = byId.get(String(edge.source));
       const target = byId.get(String(edge.target));
       if (!source || !target) return "";
-      return `<line class="edge" data-source="${edge.source}" data-target="${edge.target}" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" stroke="${edge.color || "#94a3b8"}" stroke-width="${Math.max(0.8, Math.min(5, Number(edge.score || 0) * 4 + 0.8))}"></line>`;
+      const width = Math.max(0.45, Math.min(2.3, Number(edge.score || 0) * 1.6 + 0.35));
+      return `<line class="edge" data-source="${escapeAttr(edge.source)}" data-target="${escapeAttr(edge.target)}" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" stroke="${escapeAttr(edge.color || "#94a3b8")}" stroke-width="${width}"></line>`;
     }
 
-    function circle(node) {
-      const radius = Math.max(5, Math.min(18, 5 + Math.sqrt(Number(node.degree || 0)) * 2.2));
-      const fill = node.is_center ? "#4f46e5" : "#0f766e";
-      return `<circle class="node" data-id="${node.id}" cx="${node.x}" cy="${node.y}" r="${radius}" fill="${fill}"></circle>`;
+    function nodeCircle(node) {
+      const radius = Math.max(4.8, Math.min(19, 5.2 + Math.sqrt(Number(node.degree || 0)) * 2.05));
+      const fill = node.is_center ? "#4f46e5" : nodeFill(node);
+      const centerClass = node.is_center ? " center" : "";
+      return `<circle class="node${centerClass}" data-id="${escapeAttr(node.id)}" cx="${node.x}" cy="${node.y}" r="${radius}" fill="${fill}"></circle>`;
     }
 
-    function label(node) {
-      if (node.index > 40 && !node.is_center && Number(node.degree || 0) < 3) return "";
-      const text = String(node.label || node.id).slice(0, 34);
-      return `<text class="label" data-id="${node.id}" x="${node.x + 8}" y="${node.y - 8}">${escapeHtml(text)}</text>`;
+    function nodeFill(node) {
+      if (Number(node.out_degree || 0) > Number(node.in_degree || 0)) return "#159895";
+      if (Number(node.in_degree || 0) > 2) return "#2563eb";
+      return "#64748b";
     }
 
-    function escapeHtml(value) {
-      return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    function nodeLabel(node) {
+      const text = String(node.label || node.id).slice(0, 38);
+      const hidden = node.label_visible ? "" : " hidden";
+      return `<text class="label${hidden}" data-id="${escapeAttr(node.id)}" x="${Number(node.x) + 8}" y="${Number(node.y) - 8}">${escapeHtml(text)}</text>`;
     }
 
-    svg.innerHTML = `<g>${edges.map(line).join("")}</g><g>${nodes.map(circle).join("")}</g><g>${nodes.map(label).join("")}</g>`;
+    function render() {
+      viewport.innerHTML = `<g class="edges">${edges.map(edgeLine).join("")}</g><g class="nodes">${nodes.map(nodeCircle).join("")}</g><g class="labels">${nodes.map(nodeLabel).join("")}</g>`;
+      bindNodeEvents();
+      applyLabels();
+      applySearch();
+    }
 
-    svg.querySelectorAll(".node").forEach(element => {
-      element.addEventListener("mousemove", event => {
-        const node = byId.get(String(element.dataset.id));
-        tooltip.innerHTML = `<strong>${escapeHtml(node.label || node.id)}</strong><br>item_id: ${escapeHtml(node.item_id)}<br>degree: ${node.degree}<br>out: ${node.out_degree} · in: ${node.in_degree}`;
-        tooltip.style.left = `${event.clientX + 14}px`;
-        tooltip.style.top = `${event.clientY + 14}px`;
-        tooltip.style.display = "block";
+    function bindNodeEvents() {
+      viewport.querySelectorAll(".node").forEach(element => {
+        element.addEventListener("mousemove", event => {
+          const node = byId.get(String(element.dataset.id));
+          if (!node) return;
+          showTooltip(node, event);
+          highlightNeighborhood(String(node.id));
+        });
+        element.addEventListener("mouseleave", () => {
+          tooltip.style.display = "none";
+          clearHighlights();
+          applySearch();
+        });
       });
-      element.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
-    });
+    }
 
-    search.addEventListener("input", () => {
+    function showTooltip(node, event) {
+      tooltip.innerHTML = `<strong>${escapeHtml(node.label || node.id)}</strong><br>item_id: ${escapeHtml(node.item_id)}<br>degree: ${node.degree}<br>out: ${node.out_degree} / in: ${node.in_degree}`;
+      tooltip.style.left = `${event.clientX + 14}px`;
+      tooltip.style.top = `${event.clientY + 14}px`;
+      tooltip.style.display = "block";
+    }
+
+    function highlightNeighborhood(nodeId) {
+      const visible = neighbors.get(nodeId) || new Set([nodeId]);
+      viewport.querySelectorAll(".node, .label").forEach(element => {
+        const isVisible = visible.has(String(element.dataset.id));
+        element.classList.toggle("dimmed", !isVisible);
+        element.classList.toggle("highlight", String(element.dataset.id) === nodeId);
+      });
+      viewport.querySelectorAll(".edge").forEach(element => {
+        const isVisible = visible.has(String(element.dataset.source)) && visible.has(String(element.dataset.target));
+        element.classList.toggle("dimmed", !isVisible);
+        element.classList.toggle("highlight", isVisible);
+      });
+    }
+
+    function clearHighlights() {
+      viewport.querySelectorAll(".node, .label, .edge").forEach(element => {
+        element.classList.remove("dimmed", "highlight");
+      });
+    }
+
+    function applySearch() {
       const query = search.value.trim().toLowerCase();
       const matches = new Set();
       if (query) {
@@ -761,18 +1100,103 @@ _HTML_TEMPLATE = """<!doctype html>
           if (haystack.includes(query)) matches.add(String(node.id));
         });
       }
-      svg.querySelectorAll(".node, .label, .edge").forEach(element => {
+      viewport.querySelectorAll(".node, .label, .edge").forEach(element => {
         element.classList.remove("dimmed", "highlight");
         if (!query) return;
         if (element.classList.contains("edge")) {
           const visible = matches.has(String(element.dataset.source)) || matches.has(String(element.dataset.target));
-          if (!visible) element.classList.add("dimmed");
+          element.classList.toggle("dimmed", !visible);
+          element.classList.toggle("highlight", visible);
         } else {
           const isMatch = matches.has(String(element.dataset.id));
-          if (isMatch) element.classList.add("highlight"); else element.classList.add("dimmed");
+          element.classList.toggle("highlight", isMatch);
+          element.classList.toggle("dimmed", !isMatch);
         }
       });
+    }
+
+    function applyLabels() {
+      const mode = labelsMode.value;
+      const important = new Set(
+        [...nodes]
+          .sort((left, right) => Number(right.is_center) - Number(left.is_center) || Number(right.degree || 0) - Number(left.degree || 0))
+          .slice(0, graph.metadata.mode === "ego" ? 80 : 45)
+          .map(node => String(node.id))
+      );
+      viewport.querySelectorAll(".label").forEach(element => {
+        const node = byId.get(String(element.dataset.id));
+        let visible = Boolean(node && node.label_visible);
+        if (mode === "all") visible = true;
+        if (mode === "off") visible = false;
+        if (mode === "auto") visible = Boolean(node && (node.is_center || important.has(String(node.id))));
+        if (mode === "important") visible = Boolean(node && (node.is_center || node.label_visible));
+        element.classList.toggle("hidden", !visible);
+      });
+    }
+
+    function updateTransform() {
+      viewport.setAttribute("transform", `translate(${transform.x} ${transform.y}) scale(${transform.k})`);
+    }
+
+    function resetView() {
+      transform = {x: 0, y: 0, k: 1};
+      updateTransform();
+    }
+
+    function clientPoint(event) {
+      const rect = svg.getBoundingClientRect();
+      return {
+        x: ((event.clientX - rect.left) / rect.width) * width,
+        y: ((event.clientY - rect.top) / rect.height) * height,
+      };
+    }
+
+    svg.addEventListener("wheel", event => {
+      event.preventDefault();
+      const point = clientPoint(event);
+      const previousScale = transform.k;
+      const nextScale = Math.max(0.22, Math.min(6, previousScale * (event.deltaY < 0 ? 1.12 : 0.88)));
+      transform.x = point.x - ((point.x - transform.x) / previousScale) * nextScale;
+      transform.y = point.y - ((point.y - transform.y) / previousScale) * nextScale;
+      transform.k = nextScale;
+      updateTransform();
+    }, {passive: false});
+
+    svg.addEventListener("pointerdown", event => {
+      svg.setPointerCapture(event.pointerId);
+      svg.classList.add("dragging");
+      dragStart = {clientX: event.clientX, clientY: event.clientY, x: transform.x, y: transform.y};
     });
+    svg.addEventListener("pointermove", event => {
+      if (!dragStart) return;
+      const rect = svg.getBoundingClientRect();
+      transform.x = dragStart.x + ((event.clientX - dragStart.clientX) / rect.width) * width;
+      transform.y = dragStart.y + ((event.clientY - dragStart.clientY) / rect.height) * height;
+      updateTransform();
+    });
+    svg.addEventListener("pointerup", event => {
+      svg.releasePointerCapture(event.pointerId);
+      svg.classList.remove("dragging");
+      dragStart = null;
+    });
+    svg.addEventListener("pointercancel", () => {
+      svg.classList.remove("dragging");
+      dragStart = null;
+    });
+    svg.addEventListener("dblclick", resetView);
+    resetButton.addEventListener("click", resetView);
+    search.addEventListener("input", applySearch);
+    labelsMode.addEventListener("change", applyLabels);
+
+    function escapeHtml(value) {
+      return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    }
+    function escapeAttr(value) {
+      return escapeHtml(value).replaceAll("'", "&#39;");
+    }
+
+    render();
+    updateTransform();
   </script>
 </body>
 </html>
