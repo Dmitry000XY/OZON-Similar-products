@@ -79,7 +79,7 @@ parameters:
 
   scoring.business_weights.favorite:
     type: choice
-    values: [0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
+    values: [0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0]
 
   scoring.business_weights.to_cart:
     type: choice
@@ -113,46 +113,46 @@ parameters:
     type: choice
     values: [15.0, 20.0, 30.0, 40.0, 60.0]
 
-  # Noise filtering.
-  scoring.min_pair_count:
-    type: choice
-    values: [1, 2, 3, 5]
+#  # Noise filtering.
+#  scoring.min_pair_count:
+#    type: choice
+#    values: [1, 2, 3, 5]
+#
+#  scoring.min_unique_users:
+#    type: choice
+#    values: [1, 2, 3]
+#
+#  scoring.min_unique_sessions:
+#    type: choice
+#    values: [1, 2, 3, 5]
 
-  scoring.min_unique_users:
-    type: choice
-    values: [1, 2, 3]
-
-  scoring.min_unique_sessions:
-    type: choice
-    values: [1, 2, 3, 5]
-
-  # Useful only when count_source=weighted, but safe otherwise.
-  scoring.min_weighted_pair_count:
-    type: choice
-    values: [null, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0]
-
-  # Score threshold scale depends on transform and weights,
-  # so keep values conservative.
-  scoring.min_score:
-    type: choice
-    values: [null, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+#  # Useful only when count_source=weighted, but safe otherwise.
+#  scoring.min_weighted_pair_count:
+#    type: choice
+#    values: [null, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0]
+#
+#  # Score threshold scale depends on transform and weights,
+#  # so keep values conservative.
+#  scoring.min_score:
+#    type: choice
+#    values: [null, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
 
   # Popularity normalization inside scorer.
-  scoring.normalize_by_item_popularity:
-    type: choice
-    values: [false, true]
-
-  scoring.popularity_normalization.popularity_column:
-    type: choice
-    values: [unique_users, events_count]
-
-  scoring.popularity_normalization.smoothing:
-    type: choice
-    values: [0.1, 1.0, 5.0, 10.0, 50.0]
-
-  scoring.popularity_normalization.power:
-    type: choice
-    values: [0.0, 0.25, 0.5, 0.75, 1.0]
+#  scoring.normalize_by_item_popularity:
+#    type: choice
+#    values: [false, true]
+#
+#  scoring.popularity_normalization.popularity_column:
+#    type: choice
+#    values: [unique_users, events_count]
+#
+#  scoring.popularity_normalization.smoothing:
+#    type: choice
+#    values: [0.1, 1.0, 5.0, 10.0, 50.0]
+#
+#  scoring.popularity_normalization.power:
+#    type: choice
+#    values: [0.0, 0.25, 0.5, 0.75, 1.0]
 
   # Keep top-K stable for defense metrics.
   # If you pass --top-k 20 in CLI, it will also force top_k=20.
