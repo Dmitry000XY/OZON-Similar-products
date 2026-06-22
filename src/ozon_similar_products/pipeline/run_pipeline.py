@@ -1458,6 +1458,7 @@ def _build_streaming_sessions_and_pair_stats(
 
         next_active_session_chunks: list[pl.DataFrame] = []
         completed_session_chunks_for_output: list[pl.DataFrame] = []
+        daily_stats_by_partition: dict[str, list[DailyPairStats]] = {}
 
         for bucket_id in range(session_user_buckets):
             bucket_filter = _user_bucket_filter(bucket_id, session_user_buckets)
@@ -1548,92 +1549,10 @@ def _build_streaming_sessions_and_pair_stats(
                     )
 
                     if daily_stats.raw_pair_rows > 0 or not daily_stats.counts.is_empty():
-                        merge_existing = stats_partition_date in written_pair_dates
-                        manifest_path = _daily_pair_stats_manifest_path(
-                            daily_pairs_output_dir,
+                        daily_stats_by_partition.setdefault(
                             stats_partition_date,
-                        )
-                        previous_manifest = (
-                            read_manifest(manifest_path)
-                            if merge_existing and config is not None and action_types is not None
-                            else None
-                        )
-                        count_path, widget_count_path, user_key_path, session_key_path = (
-                            _write_daily_pair_stats(
-                                stats=daily_stats,
-                                partition_date=stats_partition_date,
-                                output_dir=daily_pairs_output_dir,
-                                merge_existing=merge_existing,
-                            )
-                        )
-
-                        if config is not None and action_types is not None:
-                            raw_pair_rows_for_date = daily_stats.raw_pair_rows
-                            processed_through_date = partition_date
-                            if previous_manifest is not None:
-                                raw_pair_rows_for_date += int(
-                                    previous_manifest.rows.get("raw_pair_rows", 0)
-                                )
-                                previous_processed_through_date = previous_manifest.metadata.get(
-                                    "processed_through_date"
-                                )
-                                if isinstance(previous_processed_through_date, str):
-                                    processed_through_date = max(
-                                        previous_processed_through_date,
-                                        partition_date,
-                                    )
-
-                            manifest = ArtifactManifest(
-                                artifact_type="daily_pair_stats",
-                                date=stats_partition_date,
-                                fingerprint=_daily_pair_stats_fingerprint(
-                                    config=config,
-                                    action_types=action_types,
-                                    partition_date=stats_partition_date,
-                                    processed_through_date=processed_through_date,
-                                    raw_input_identity=(raw_input_identity_by_date or {}).get(
-                                        stats_partition_date,
-                                        [],
-                                    ),
-                                ),
-                                paths={
-                                    "counts": _relative_to_root(
-                                        count_path,
-                                        daily_pairs_output_dir,
-                                    ),
-                                    "widget_counts": _relative_to_root(
-                                        widget_count_path,
-                                        daily_pairs_output_dir,
-                                    ),
-                                    "user_keys": _relative_to_root(
-                                        user_key_path,
-                                        daily_pairs_output_dir,
-                                    ),
-                                    "session_keys": _relative_to_root(
-                                        session_key_path,
-                                        daily_pairs_output_dir,
-                                    ),
-                                },
-                                rows={
-                                    "counts": int(pl.read_parquet(count_path).height),
-                                    "widget_counts": int(
-                                        pl.read_parquet(widget_count_path).height
-                                    ),
-                                    "user_keys": int(pl.read_parquet(user_key_path).height),
-                                    "session_keys": int(
-                                        pl.read_parquet(session_key_path).height
-                                    ),
-                                    "raw_pair_rows": raw_pair_rows_for_date,
-                                },
-                                metadata={"processed_through_date": processed_through_date},
-                            )
-                            write_manifest(manifest_path, manifest)
-
-                        written_pair_dates.add(stats_partition_date)
-                        count_paths.append(count_path)
-                        widget_count_paths.append(widget_count_path)
-                        user_key_paths.append(user_key_path)
-                        session_key_paths.append(session_key_path)
+                            [],
+                        ).append(daily_stats)
                         raw_pair_rows += daily_stats.raw_pair_rows
 
                 sessions_rows += completed_sessions.height
@@ -1651,6 +1570,100 @@ def _build_streaming_sessions_and_pair_stats(
                 pl.concat(completed_session_chunks_for_output, how="vertical"),
                 sessions_output_dir,
             )
+
+        for stats_partition_date, stats_list in sorted(daily_stats_by_partition.items()):
+            progress_logger.info(
+                "[run_pipeline] write combined daily pair stats date=%s parts=%s raw_pairs=%s",
+                stats_partition_date,
+                len(stats_list),
+                sum(stats.raw_pair_rows for stats in stats_list),
+            )
+
+            combined_stats = _combine_daily_pair_stats(stats_list)
+            merge_existing = stats_partition_date in written_pair_dates
+            manifest_path = _daily_pair_stats_manifest_path(
+                daily_pairs_output_dir,
+                stats_partition_date,
+            )
+            previous_manifest = (
+                read_manifest(manifest_path)
+                if merge_existing and config is not None and action_types is not None
+                else None
+            )
+            count_path, widget_count_path, user_key_path, session_key_path = (
+                _write_daily_pair_stats(
+                    stats=combined_stats,
+                    partition_date=stats_partition_date,
+                    output_dir=daily_pairs_output_dir,
+                    merge_existing=merge_existing,
+                )
+            )
+
+            if config is not None and action_types is not None:
+                raw_pair_rows_for_date = sum(stats.raw_pair_rows for stats in stats_list)
+                processed_through_date = partition_date
+                if previous_manifest is not None:
+                    raw_pair_rows_for_date += int(
+                        previous_manifest.rows.get("raw_pair_rows", 0)
+                    )
+                    previous_processed_through_date = previous_manifest.metadata.get(
+                        "processed_through_date"
+                    )
+                    if isinstance(previous_processed_through_date, str):
+                        processed_through_date = max(
+                            previous_processed_through_date,
+                            partition_date,
+                        )
+
+                manifest = ArtifactManifest(
+                    artifact_type="daily_pair_stats",
+                    date=stats_partition_date,
+                    fingerprint=_daily_pair_stats_fingerprint(
+                        config=config,
+                        action_types=action_types,
+                        partition_date=stats_partition_date,
+                        processed_through_date=processed_through_date,
+                        raw_input_identity=(raw_input_identity_by_date or {}).get(
+                            stats_partition_date,
+                            [],
+                        ),
+                    ),
+                    paths={
+                        "counts": _relative_to_root(
+                            count_path,
+                            daily_pairs_output_dir,
+                        ),
+                        "widget_counts": _relative_to_root(
+                            widget_count_path,
+                            daily_pairs_output_dir,
+                        ),
+                        "user_keys": _relative_to_root(
+                            user_key_path,
+                            daily_pairs_output_dir,
+                        ),
+                        "session_keys": _relative_to_root(
+                            session_key_path,
+                            daily_pairs_output_dir,
+                        ),
+                    },
+                    rows={
+                        "counts": int(pl.read_parquet(count_path).height),
+                        "widget_counts": int(pl.read_parquet(widget_count_path).height),
+                        "user_keys": int(pl.read_parquet(user_key_path).height),
+                        "session_keys": int(pl.read_parquet(session_key_path).height),
+                        "raw_pair_rows": raw_pair_rows_for_date,
+                    },
+                    metadata={"processed_through_date": processed_through_date},
+                )
+                write_manifest(manifest_path, manifest)
+
+            written_pair_dates.add(stats_partition_date)
+            count_paths.append(count_path)
+            widget_count_paths.append(widget_count_path)
+            user_key_paths.append(user_key_path)
+            session_key_paths.append(session_key_path)
+
+            del combined_stats
 
         active_sessions = (
             pl.concat(next_active_session_chunks, how="vertical")
