@@ -1411,6 +1411,7 @@ def _build_streaming_sessions_and_pair_stats(
         raw_input_identity_by_date: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
         session_batch_size: int = 10_000,
         session_user_buckets: int = 256,
+        logger: logging.Logger | None = None,
 ) -> tuple[int, DailyPairStatsPaths]:
     """Stream clean-event partitions into sessions and compact pair stats.
 
@@ -1438,6 +1439,7 @@ def _build_streaming_sessions_and_pair_stats(
     active_clean_events = empty_contract_frame(schemas.CLEAN_EVENTS_COLUMNS)
     active_sessions = empty_contract_frame(schemas.SESSIONS_COLUMNS)
     max_session_indices = _empty_session_index_state()
+    progress_logger = logger or logging.getLogger(__name__)
 
     sorted_clean_event_paths = sorted(clean_event_paths)
 
@@ -1446,6 +1448,13 @@ def _build_streaming_sessions_and_pair_stats(
         is_final_partition = index == len(sorted_clean_event_paths) - 1
 
         clean_day = pl.read_parquet(clean_event_path).select(schemas.CLEAN_EVENTS_COLUMNS)
+        progress_logger.info(
+            "[run_pipeline] pair-stat partition date=%s clean_rows=%s buckets=%s final=%s",
+            partition_date,
+            clean_day.height,
+            session_user_buckets,
+            is_final_partition,
+        )
 
         next_active_session_chunks: list[pl.DataFrame] = []
         completed_session_chunks_for_output: list[pl.DataFrame] = []
@@ -1462,6 +1471,21 @@ def _build_streaming_sessions_and_pair_stats(
 
             if clean_bucket.is_empty() and active_clean_bucket.is_empty():
                 continue
+
+            should_log_bucket = (
+                bucket_id == 0
+                or (bucket_id + 1) % 32 == 0
+                or bucket_id + 1 == session_user_buckets
+            )
+            if should_log_bucket:
+                progress_logger.info(
+                    "[run_pipeline] pair-stat partition date=%s bucket=%s/%s clean_rows=%s active_rows=%s",
+                    partition_date,
+                    bucket_id + 1,
+                    session_user_buckets,
+                    clean_bucket.height,
+                    active_clean_bucket.height,
+                )
 
             if active_clean_bucket.is_empty():
                 session_input = clean_bucket
@@ -1512,6 +1536,15 @@ def _build_streaming_sessions_and_pair_stats(
                         daily_sessions=[(stats_partition_date, partition_sessions)],
                         pair_builder=pair_builder,
                         session_batch_size=session_batch_size,
+                    )
+                    progress_logger.info(
+                        "[run_pipeline] pair-stat built date=%s source_partition=%s bucket=%s/%s sessions=%s raw_pairs=%s",
+                        stats_partition_date,
+                        partition_date,
+                        bucket_id + 1,
+                        session_user_buckets,
+                        partition_sessions.height,
+                        daily_stats.raw_pair_rows,
                     )
 
                     if daily_stats.raw_pair_rows > 0 or not daily_stats.counts.is_empty():
@@ -1643,6 +1676,14 @@ def _build_streaming_sessions_and_pair_stats(
                     [],
                 ),
             )
+
+        progress_logger.info(
+            "[run_pipeline] pair-stat partition done date=%s sessions_rows_total=%s raw_pairs_total=%s active_sessions=%s",
+            partition_date,
+            sessions_rows,
+            raw_pair_rows,
+            active_sessions.height,
+        )
 
     return sessions_rows, DailyPairStatsPaths(
         count_paths=_unique_paths(count_paths),
@@ -1917,6 +1958,7 @@ def run_pipeline(
             raw_input_identity_by_date=raw_input_identity_by_date,
             session_batch_size=session_batch_size,
             session_user_buckets=session_user_buckets,
+            logger=logger,
         )
         _finalize_daily_pair_stat_manifests(
             count_paths=daily_pair_stats_paths.count_paths,
