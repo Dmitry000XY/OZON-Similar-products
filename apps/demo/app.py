@@ -12,7 +12,11 @@ import polars as pl
 import streamlit as st
 import streamlit.components.v1 as components
 
-from apps.demo.demo_data import (
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from apps.demo.demo_data import (  # noqa: E402
     METRIC_KEYS,
     build_item_catalog,
     choose_random_item,
