@@ -1271,6 +1271,88 @@ def test_build_streaming_sessions_and_pair_stats_keeps_cross_midnight_session(
     assert counts["pair_count"].sum() == 2
 
 
+def test_build_streaming_sessions_and_pair_stats_writes_once_per_stats_date(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+) -> None:
+    rows: list[dict[str, object]] = []
+    for user_id in (1, 2, 3, 4):
+        rows.extend(
+            [
+                {
+                    "user_id": user_id,
+                    "event_date": date(2026, 5, 10),
+                    "timestamp": f"2026-05-10 10:{user_id:02d}:00",
+                    "action_type": "view",
+                    "item_id": user_id * 10,
+                    "search_query": None,
+                    "widget_name": "catalog",
+                },
+                {
+                    "user_id": user_id,
+                    "event_date": date(2026, 5, 10),
+                    "timestamp": f"2026-05-10 10:{user_id:02d}:30",
+                    "action_type": "click",
+                    "item_id": user_id * 10 + 1,
+                    "search_query": None,
+                    "widget_name": "catalog",
+                },
+            ]
+        )
+    clean_day = (
+        pl.DataFrame(rows)
+        .with_columns(pl.col("timestamp").str.to_datetime())
+        .select(schemas.CLEAN_EVENTS_COLUMNS)
+    )
+
+    clean_dir = tmp_path / "events_clean"
+    clean_dir.mkdir()
+    clean_path = clean_dir / "date=2026-05-10.parquet"
+    clean_day.write_parquet(clean_path)
+
+    original_write_daily_pair_stats = run_pipeline._write_daily_pair_stats
+    write_calls: list[tuple[str, bool, int]] = []
+
+    def spy_write_daily_pair_stats(
+            *,
+            stats: run_pipeline.DailyPairStats,
+            partition_date: str,
+            output_dir: Path,
+            merge_existing: bool = False,
+    ) -> tuple[Path, Path, Path, Path]:
+        write_calls.append((partition_date, merge_existing, stats.raw_pair_rows))
+        return original_write_daily_pair_stats(
+            stats=stats,
+            partition_date=partition_date,
+            output_dir=output_dir,
+            merge_existing=merge_existing,
+        )
+
+    monkeypatch.setattr(
+        run_pipeline,
+        "_write_daily_pair_stats",
+        spy_write_daily_pair_stats,
+    )
+
+    sessions_rows, stats_paths = run_pipeline._build_streaming_sessions_and_pair_stats(
+        clean_event_paths=[clean_path],
+        session_builder=run_pipeline.SessionBuilder(timeout_minutes=30),
+        pair_builder=run_pipeline.ItemPairBuilder(),
+        daily_pairs_output_dir=tmp_path / "item_pairs",
+        sessions_output_dir=None,
+        session_user_buckets=4,
+    )
+
+    assert sessions_rows == 8
+    assert stats_paths.raw_pair_rows == 8
+    assert write_calls == [("2026-05-10", False, 8)]
+
+    counts = pl.read_parquet(stats_paths.count_paths[0])
+    widget_counts = pl.read_parquet(stats_paths.widget_count_paths[0])
+    assert counts["pair_count"].sum() == 8
+    assert widget_counts["pair_count"].sum() == 8
+
+
 def test_build_streaming_sessions_and_pair_stats_splits_after_timeout(
         tmp_path: Path,
 ) -> None:
