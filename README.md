@@ -19,8 +19,69 @@
 | Основной результат                   | список похожих товаров для каждого исходного товара |
 | Тип решения                          | пакетный пересчёт по временному окну                |
 
-В коде проекта используется колонка `item_id`, потому что так товар называется в локальных данных. В финальной выгрузке
-результат можно привести к формату из постановки задачи: `sku | similar_items_sku_list`.
+## Быстрый запуск
+
+### 1. Установить зависимости
+
+Проект использует `uv`.
+
+```bash
+uv sync
+```
+
+### 2. Подготовить данные
+
+Исходные архивы нужно положить в папку:
+
+```text
+data/raw/archives/
+```
+
+Ожидаемые архивы:
+
+```text
+product_information.tar.gz
+user_actions.tar.gz
+```
+
+Подготовить данные в формате parquet:
+
+```bash
+uv run python scripts/prepare_raw_data.py
+```
+
+Проверить структуру проекта и наличие данных:
+
+```bash
+uv run python scripts/check_project_structure.py
+```
+
+### 3. Построить рекомендации
+
+```bash
+uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
+```
+
+### 4. Запустить полный сценарий с оценкой качества
+
+```bash
+uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
+```
+
+В этом режиме проект сначала строит рекомендации на обучающем периоде, а затем проверяет качество на следующем временном
+периоде.
+
+### 5. Посмотреть результат
+
+```bash
+uv run python scripts/preview_latest_recommendations.py
+```
+
+Посмотреть рекомендации для конкретного товара:
+
+```bash
+uv run python scripts/preview_latest_recommendations.py --item-id 113
+```
 
 ## Основная идея
 
@@ -95,70 +156,6 @@ outputs/latest/
 | `manifest.json`    | параметры запуска, даты периода, пути к результатам и служебная информация |
 
 Файл `outputs/latest/manifest.json` указывает на последнюю опубликованную версию результата.
-
-## Быстрый запуск
-
-### 1. Установить зависимости
-
-Проект использует `uv`.
-
-```bash
-uv sync
-```
-
-### 2. Подготовить данные
-
-Исходные архивы нужно положить в папку:
-
-```text
-data/raw/archives/
-```
-
-Ожидаемые архивы:
-
-```text
-product_information.tar.gz
-user_actions.tar.gz
-```
-
-Подготовить данные в формате parquet:
-
-```bash
-uv run python scripts/prepare_raw_data.py
-```
-
-Проверить структуру проекта и наличие данных:
-
-```bash
-uv run python scripts/check_project_structure.py
-```
-
-### 3. Построить рекомендации
-
-```bash
-uv run python scripts/run_pipeline.py 2024-04-23 --lookback-days 7 --top-k 20 --config-path configs/baseline.yaml
-```
-
-### 4. Запустить полный сценарий с оценкой качества
-
-```bash
-uv run python scripts/run_full.py 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
-```
-
-В этом режиме проект сначала строит рекомендации на обучающем периоде, а затем проверяет качество на следующем временном
-периоде.
-
-### 5. Посмотреть результат
-
-```bash
-uv run python scripts/preview_latest_recommendations.py
-```
-
-Посмотреть рекомендации для конкретного товара:
-
-```bash
-uv run python scripts/preview_latest_recommendations.py --item-id 113
-```
 
 ## Как устроен проект
 
