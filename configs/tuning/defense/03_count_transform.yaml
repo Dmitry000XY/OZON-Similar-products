@@ -17,13 +17,13 @@ objective:
 parameters:
   scoring.method:
     type: choice
-    values: [calibrated_multichannel]
+    values: [ calibrated_multichannel ]
   scoring.count_source:
     type: choice
-    values: [raw]
+    values: [ raw ]
   scoring.count_transform.method:
     type: choice
-    values: [linear, sqrt, log]
+    values: [ linear, sqrt, log ]
   scoring.count_transform.smoothing:
     type: choice
-    values: [1.0, 2.0]
+    values: [ 1.0, 2.0 ]

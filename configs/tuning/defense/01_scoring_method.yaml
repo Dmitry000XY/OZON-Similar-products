@@ -20,13 +20,13 @@ objective:
 parameters:
   scoring.method:
     type: choice
-    values: [pair_count, calibrated_multichannel]
+    values: [ pair_count, calibrated_multichannel ]
   scoring.count_source:
     type: choice
-    values: [raw]
+    values: [ raw ]
   scoring.count_transform.method:
     type: choice
-    values: [log]
+    values: [ log ]
   scoring.beta:
     type: choice
-    values: [0.0, 0.25, 0.5]
+    values: [ 0.0, 0.25, 0.5 ]

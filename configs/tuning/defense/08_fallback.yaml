@@ -18,34 +18,34 @@ objective:
 parameters:
   business.fallback.enabled:
     type: choice
-    values: [true]
+    values: [ true ]
   business.fallback.candidate_pool_size:
     type: choice
-    values: [100, 200, 500]
+    values: [ 100, 200, 500 ]
   business.fallback.metadata_candidate_pool_size:
     type: choice
-    values: [100, 200, 500]
+    values: [ 100, 200, 500 ]
   business.fallback.global_candidate_pool_size:
     type: choice
-    values: [100, 500, 1000]
+    values: [ 100, 500, 1000 ]
   business.fallback.min_item_events:
     type: choice
-    values: [1, 2, 5]
+    values: [ 1, 2, 5 ]
   business.fallback.enable_category_type:
     type: choice
-    values: [true]
+    values: [ true ]
   business.fallback.enable_category:
     type: choice
-    values: [true]
+    values: [ true ]
   business.fallback.enable_type:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
   business.fallback.enable_brand:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
   business.fallback.enable_global:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
   business.fallback.include_cold_start_items:
     type: choice
-    values: [false, true]
+    values: [ false, true ]

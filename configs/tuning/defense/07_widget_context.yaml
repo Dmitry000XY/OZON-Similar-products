@@ -17,22 +17,22 @@ objective:
 parameters:
   graph.widget_context.enabled:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
   graph.widget_context.use:
     type: choice
-    values: [target]
+    values: [ target ]
   graph.widget_context.default_weight:
     type: choice
-    values: [0.8, 1.0, 1.2]
+    values: [ 0.8, 1.0, 1.2 ]
   graph.widget_context.unknown_weight:
     type: choice
-    values: [0.5, 0.8, 1.0]
+    values: [ 0.5, 0.8, 1.0 ]
   graph.widget_context.weights.search:
     type: choice
-    values: [0.7, 0.9, 1.0]
+    values: [ 0.7, 0.9, 1.0 ]
   graph.widget_context.weights.product_card:
     type: choice
-    values: [1.0, 1.1, 1.2]
+    values: [ 1.0, 1.1, 1.2 ]
   graph.widget_context.weights.similar_items:
     type: choice
-    values: [1.0, 1.2, 1.5]
+    values: [ 1.0, 1.2, 1.5 ]

@@ -64,7 +64,7 @@ graph:
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
-    weights: {}
+    weights: { }
 
 # Experiment purpose:
 # Action-aware baseline: calibrated_multichannel over raw channel counts; no popularity normalization, no decay, no fallback.

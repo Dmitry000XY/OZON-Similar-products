@@ -36,42 +36,42 @@ parameters:
   # it is only for tuning calibrated_multichannel.
   scoring.method:
     type: choice
-    values: [calibrated_multichannel]
+    values: [ calibrated_multichannel ]
 
   # Keep raw counts fixed here.
   # Distance/time decay should be a separate experiment.
   scoring.count_source:
     type: choice
-    values: [raw]
+    values: [ raw ]
 
   # Keep transform fixed here.
   # Count transform should be tuned separately after weights.
   scoring.count_transform.method:
     type: choice
-    values: [log]
+    values: [ log ]
 
   scoring.count_transform.smoothing:
     type: choice
-    values: [1.0]
+    values: [ 1.0 ]
 
   # The ranges are deliberately monotonic by business intent:
   # view is weak, click is medium, favorite is strong, to_cart is strongest.
   # This avoids many nonsense trials like view > to_cart.
   scoring.business_weights.view:
     type: choice
-    values: [0.0, 0.05, 0.1, 0.2, 0.3]
+    values: [ 0.0, 0.05, 0.1, 0.2, 0.3 ]
 
   scoring.business_weights.click:
     type: choice
-    values: [0.5, 1.0, 1.5, 2.0, 3.0]
+    values: [ 0.5, 1.0, 1.5, 2.0, 3.0 ]
 
   scoring.business_weights.favorite:
     type: choice
-    values: [2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0]
+    values: [ 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0 ]
 
   scoring.business_weights.to_cart:
     type: choice
-    values: [2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0]
+    values: [ 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0 ]
 
   # beta controls frequency compensation:
   # 0.0 = only business weights
@@ -79,54 +79,54 @@ parameters:
   # 0.75 = aggressive rare-action boost
   scoring.beta:
     type: choice
-    values: [0.0, 0.25, 0.5, 0.75]
+    values: [ 0.0, 0.25, 0.5, 0.75 ]
 
   scoring.reference_action_type:
     type: choice
-    values: [view]
+    values: [ view ]
 
   # Caps prevent rare actions from receiving absurd frequency boosts.
   scoring.max_frequency_boost.view:
     type: choice
-    values: [1.0]
+    values: [ 1.0 ]
 
   scoring.max_frequency_boost.click:
     type: choice
-    values: [8.0, 10.0, 12.0]
+    values: [ 8.0, 10.0, 12.0 ]
 
   scoring.max_frequency_boost.favorite:
     type: choice
-    values: [12.0, 15.0, 20.0]
+    values: [ 12.0, 15.0, 20.0 ]
 
   scoring.max_frequency_boost.to_cart:
     type: choice
-    values: [20.0, 30.0, 40.0]
+    values: [ 20.0, 30.0, 40.0 ]
 
   # Keep thresholds mostly fixed during weight tuning.
   # Thresholds should be a separate experiment.
   scoring.min_pair_count:
     type: choice
-    values: [2]
+    values: [ 2 ]
 
   scoring.min_unique_users:
     type: choice
-    values: [1]
+    values: [ 1 ]
 
   scoring.min_unique_sessions:
     type: choice
-    values: [1]
+    values: [ 1 ]
 
   scoring.min_weighted_pair_count:
     type: choice
-    values: [null]
+    values: [ null ]
 
   scoring.min_score:
     type: choice
-    values: [null]
+    values: [ null ]
 
   # Keep popularity normalization off while tuning weights.
   # Otherwise it becomes unclear whether improvements came from weights
   # or from popularity correction.
   scoring.normalize_by_item_popularity:
     type: choice
-    values: [false]
+    values: [ false ]

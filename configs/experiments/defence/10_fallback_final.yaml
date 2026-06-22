@@ -64,7 +64,7 @@ graph:
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
-    weights: {}
+    weights: { }
 
 # Experiment purpose:
 # Final fallback ablation: use tuned behavioral scoring and fill missing slots through metadata/global cascade.

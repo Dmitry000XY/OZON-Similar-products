@@ -17,25 +17,25 @@ objective:
 parameters:
   scoring.method:
     type: choice
-    values: [calibrated_multichannel]
+    values: [ calibrated_multichannel ]
   scoring.count_source:
     type: choice
-    values: [raw]
+    values: [ raw ]
   scoring.count_transform.method:
     type: choice
-    values: [log]
+    values: [ log ]
   scoring.business_weights.view:
     type: choice
-    values: [0.0, 0.1, 0.25, 0.5, 1.0]
+    values: [ 0.0, 0.1, 0.25, 0.5, 1.0 ]
   scoring.business_weights.click:
     type: choice
-    values: [1.0, 2.0, 3.0, 4.0]
+    values: [ 1.0, 2.0, 3.0, 4.0 ]
   scoring.business_weights.favorite:
     type: choice
-    values: [1.0, 4.0, 8.0, 12.0, 16.0]
+    values: [ 1.0, 4.0, 8.0, 12.0, 16.0 ]
   scoring.business_weights.to_cart:
     type: choice
-    values: [1.0, 4.0, 8.0, 12.0, 16.0]
+    values: [ 1.0, 4.0, 8.0, 12.0, 16.0 ]
   scoring.beta:
     type: choice
-    values: [0.0, 0.25, 0.5, 0.75, 1.0]
+    values: [ 0.0, 0.25, 0.5, 0.75, 1.0 ]
