@@ -17,7 +17,7 @@ objective:
 parameters:
   graph.widget_context.enabled:
     type: choice
-    values: [ false, true ]
+    values: [ true ]
   graph.widget_context.use:
     type: choice
     values: [ target ]
