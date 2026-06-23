@@ -39,3 +39,7 @@ parameters:
   scoring.count_source:
     type: choice
     values: [ raw, weighted ]
+
+  business.fallback.enabled:
+    type: choice
+    values: [ false ]

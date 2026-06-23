@@ -26,3 +26,7 @@ parameters:
   scoring.popularity_normalization.power:
     type: choice
     values: [ 0.25, 0.5, 0.75, 1.0 ]
+
+  business.fallback.enabled:
+    type: choice
+    values: [ false ]

@@ -54,7 +54,7 @@ graph:
 
   widget_context:
     # Widget weights affect scoring when scoring.count_source is set to weighted.
-    enabled: true
+    enabled: false
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
@@ -111,7 +111,7 @@ outputs:
   latest_dir: outputs/latest
 
 evaluation:
-  relevance_mode: graded
+  relevance_mode: binary
   relevance_weights:
     view: 0.1
     click: 0.3
