@@ -110,9 +110,16 @@ def _language_selector() -> str:
 
 def _render_hero(texts: Mapping[str, Any]) -> None:
     with st.container(border=True):
-        st.caption(str(texts["hero_eyebrow"]).upper())
-        st.title(str(texts["hero_title"]))
-        st.write(str(texts["hero_copy"]))
+        st.markdown(
+            f"""
+            <div class="hero-content">
+              <p class="hero-eyebrow">{_escape(str(texts["hero_eyebrow"]).upper())}</p>
+              <h1 class="hero-title">{_escape(str(texts["hero_title"]))}</h1>
+              <p class="hero-copy">{_escape(str(texts["hero_copy"]))}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 @st.cache_data(show_spinner=False)
@@ -505,6 +512,28 @@ def _inject_css() -> None:
         .block-container {
           padding-top: 1.4rem;
           padding-bottom: 3rem;
+        }
+        .hero-content {
+          padding: 0.15rem 0 0.2rem;
+        }
+        .hero-eyebrow {
+          color: var(--primary-color, #1f7a8c) !important;
+          font-size: 0.78rem;
+          font-weight: 800;
+          letter-spacing: 0.035em;
+          line-height: 1.1;
+          margin: 0 0 0.55rem 0 !important;
+          text-transform: uppercase;
+        }
+        .hero-title {
+          color: var(--text-color) !important;
+          font-size: 2.35rem;
+          line-height: 1.08;
+          margin: 0 0 0.9rem 0 !important;
+        }
+        .hero-copy {
+          color: color-mix(in srgb, var(--text-color) 62%, transparent) !important;
+          margin: 0 !important;
         }
         .badge-row {
           display: flex;
