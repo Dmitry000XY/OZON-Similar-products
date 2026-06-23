@@ -9,15 +9,8 @@ import pytest
 import yaml
 
 from ozon_similar_products.cli import run_tune
-from ozon_similar_products.config import load_yaml_config
 from ozon_similar_products.evaluation import metrics_to_flat_dict
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
-from ozon_similar_products.retrieval.decay import (
-    DistanceDecayConfig,
-    TimeDecayConfig,
-    WidgetContextConfig,
-)
-from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 
 
 def test_set_by_dot_path_updates_nested_config_without_mutation() -> None:
