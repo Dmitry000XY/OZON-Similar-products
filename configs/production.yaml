@@ -140,4 +140,4 @@ business:
     include_catalog_only_sources: false
 
 topk:
-  top_k: 50
+  top_k: 20
