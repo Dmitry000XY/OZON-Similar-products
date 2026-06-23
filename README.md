@@ -73,6 +73,17 @@ uv run ozon-preview-recommendations
 uv run ozon-preview-recommendations --item-id 113
 ```
 
+### Demo UI
+
+Для интерактивного просмотра рекомендаций можно открыть Streamlit-приложение:
+
+```bash
+uv run streamlit run apps/demo/app.py
+```
+
+Приложение позволяет искать товар по `item_id` или названию, выбирать случайный товар, смотреть похожие товары,
+источники рекомендаций и сведения о запуске.
+
 ### 5. Запустить полный сценарий с оценкой качества
 
 ```bash
@@ -122,6 +133,12 @@ outputs/runs/<run_id>/
     detailed.parquet
     enriched.parquet
     lookup.parquet
+  demo/
+    graph/
+      recommendations_graph.html
+      recommendations_graph.json
+      recommendations_graph.gexf
+      manifest.json
   manifest.json
 
 outputs/latest/
@@ -185,6 +202,7 @@ outputs/latest/
 * [`scripts/README.md`](scripts/README.md) — команды запуска;
 * [`configs/README.md`](configs/README.md) — настройки проекта;
 * [`docs/evaluation_metrics.md`](docs/evaluation_metrics.md) — метрики качества;
+* [`docs/demo_site_graph.md`](docs/demo_site_graph.md) — demo site и graph artifacts;
 * [`docs/incremental_update.md`](docs/incremental_update.md) — incremental-режим;
 * [`docs/local_runner.md`](docs/local_runner.md) — локальный self-hosted runner для тяжёлых запусков.
 
