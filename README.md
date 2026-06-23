@@ -135,18 +135,22 @@ outputs/runs/<run_id>/
     detailed.parquet
     enriched.parquet
     lookup.parquet
-  demo/
-    graph/
-      recommendations_graph.html
-      recommendations_graph.json
-      recommendations_graph.gexf
-      manifest.json
+  evaluation/
+    evaluation_manifest.json
+    metrics.json
+    scorecard.json
+  config.yaml
+  manifest.json
 
 outputs/latest/
   recommendations/
     detailed.parquet
     enriched.parquet
     lookup.parquet
+  evaluation/
+    evaluation_manifest.json
+    metrics.json
+    scorecard.json
   manifest.json
 ```
 
@@ -219,3 +223,75 @@ README по модулям:
 * [`output`](src/ozon_similar_products/output/README.md);
 * [`serving`](src/ozon_similar_products/serving/README.md);
 * [`diagnostics`](src/ozon_similar_products/diagnostics/README.md).
+
+## Подбор параметров
+
+Для подбора параметров есть отдельный сценарий:
+
+```bash
+uv run ozon-run-tune 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml --search-space-path configs/tuning/search_space.yaml --max-trials 30 --tuning-strategy random
+```
+
+Результаты сохраняются в:
+
+```text
+outputs/tuning/<sweep_id>/
+  results.csv
+  best_config.yaml
+  best_metrics.json
+```
+
+Подробнее:
+
+* [`scripts/README.md`](scripts/README.md);
+* [`configs/README.md`](configs/README.md);
+* [`docs/evaluation_metrics.md`](docs/evaluation_metrics.md);
+* [`evaluation/README.md`](src/ozon_similar_products/evaluation/README.md).
+
+## Тесты и проверки
+
+Запустить тесты:
+
+```bash
+uv run pytest
+```
+
+Проверить стиль кода:
+
+```bash
+uv run ruff check src scripts tests
+```
+
+Проверить типы:
+
+```bash
+uv run pyrefly check src scripts tests
+```
+
+## Ограничения текущей версии
+
+* Проект рассчитан на пакетный пересчёт, а не на мгновенную онлайн-выдачу.
+* Качество рекомендаций зависит от плотности пользовательских событий.
+* Слой fallback-рекомендаций является базовой реализацией и требует отдельной настройки для больших каталогов.
+* Проект пока не использует персонализацию под конкретного пользователя.
+* Более сложные методы, например товарные эмбеддинги или отдельная модель ранжирования, остаются возможным направлением
+  развития.
+
+## Коротко
+
+Проект строит похожие товары через поведенческий граф:
+
+```text
+события пользователей
+→ сессии
+→ пары товаров
+→ score
+→ top-K
+→ fallback
+→ lookup
+```
+
+Для первого запуска достаточно подготовить данные, запустить `ozon-run-pipeline` и посмотреть результат через
+`ozon-preview-recommendations`.
+
+За подробностями переходите в [`docs/README.md`](docs/README.md).
