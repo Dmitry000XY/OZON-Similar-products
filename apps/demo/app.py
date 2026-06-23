@@ -532,8 +532,9 @@ def _inject_css() -> None:
           margin: 0 0 0.9rem 0 !important;
         }
         .hero-copy {
-          color: color-mix(in srgb, var(--text-color) 62%, transparent) !important;
-          margin: 0 !important;
+          color: var(--demo-muted) !important;
+          font-size: 0.98rem;
+          margin: -0.85rem 0 0.85rem !important;
         }
         .badge-row {
           display: flex;
