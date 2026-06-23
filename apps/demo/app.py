@@ -39,6 +39,7 @@ from apps.demo.texts import (  # noqa: E402
 
 PAGE_TITLE = "Ozon Similar Products Demo"
 DEFAULT_MANIFEST_PATH = Path("outputs/latest/manifest.json")
+RECOMMENDATION_TABLE_ROWS = 20
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -76,11 +77,14 @@ def main() -> None:
         return
 
     tabs = texts["tabs"]
-    tab_similar, tab_summary, tab_about = st.tabs(
-        [tabs["similar"], tabs["summary"], tabs["about"]]
-    )
+    tab_similar, tab_summary, tab_about = st.tabs([tabs["similar"], tabs["summary"], tabs["about"]])
     with tab_similar:
-        _render_similar_items_tab(state=state, top_k=args.top_k, texts=texts, language=language)
+        _render_similar_items_tab(
+            state=state,
+            top_k=min(args.top_k, RECOMMENDATION_TABLE_ROWS),
+            texts=texts,
+            language=language,
+        )
     with tab_summary:
         _render_run_summary_tab(state=state, top_k=args.top_k, texts=texts)
     with tab_about:
@@ -90,6 +94,7 @@ def main() -> None:
 def _language_selector() -> str:
     if "demo_language" not in st.session_state:
         st.session_state.demo_language = "EN"
+
     st.markdown('<div class="language-offset"></div>', unsafe_allow_html=True)
     _, right = st.columns([0.84, 0.16], vertical_alignment="bottom")
     with right:
@@ -104,16 +109,10 @@ def _language_selector() -> str:
 
 
 def _render_hero(texts: Mapping[str, Any]) -> None:
-    st.markdown(
-        f"""
-        <section class="demo-hero">
-          <p class="eyebrow">{_escape(texts["hero_eyebrow"])}</p>
-          <h1>{_escape(texts["hero_title"])}</h1>
-          <p class="hero-copy">{_escape(texts["hero_copy"])}</p>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
+    with st.container(border=True):
+        st.caption(str(texts["hero_eyebrow"]).upper())
+        st.title(str(texts["hero_title"]))
+        st.write(str(texts["hero_copy"]))
 
 
 @st.cache_data(show_spinner=False)
@@ -185,15 +184,9 @@ def _render_similar_items_tab(
     elif query.strip():
         st.warning(similar_texts["no_matches"])
     elif st.session_state.selected_item_id is None:
-        st.markdown(
-            f"""
-            <div class="empty-state">
-              <h3>{_escape(similar_texts["empty_title"])}</h3>
-              <p>{_escape(similar_texts["empty_body"])}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        with st.container(border=True):
+            st.subheader(similar_texts["empty_title"])
+            st.write(similar_texts["empty_body"])
 
     selected_item_id = st.session_state.selected_item_id
     if selected_item_id is None:
@@ -217,7 +210,7 @@ def _render_similar_items_tab(
         _display_recommendations(recommendations, language=language),
         use_container_width=True,
         hide_index=True,
-        height=720,
+        height=_recommendation_table_height(RECOMMENDATION_TABLE_ROWS),
     )
 
 
@@ -237,24 +230,25 @@ def _render_selected_item_card(
     item_name = _display_name(item.get("item_name"))
     item_id = _display_name(item.get("item_id"))
 
-    st.markdown(
-        f"""
-        <section class="selected-card">
-          <div class="selected-main">
-            <p class="eyebrow">{_escape(similar_texts["selected"])}</p>
-            <h2 title="{_escape(item_name)}">{_escape(item_name)}</h2>
-            <p class="item-id">{_escape(similar_texts["item_id"])}: <strong>{_escape(item_id)}</strong></p>
-          </div>
-          <div class="metric-grid">
-            <div class="mini-metric"><span>{_escape(similar_texts["recommendations"])}</span><strong>{recommendations.height}</strong></div>
-            <div class="mini-metric"><span>{_escape(similar_texts["behavioral"])}</span><strong>{behavioral_count}</strong></div>
-            <div class="mini-metric"><span>{_escape(similar_texts["fallback"])}</span><strong>{fallback_count}</strong></div>
-            <div class="mini-metric"><span>{_escape(similar_texts["top_score"])}</span><strong>{_format_score(top_score)}</strong></div>
-          </div>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
+    with st.container(border=True):
+        left, right = st.columns([0.44, 0.56], vertical_alignment="center")
+        with left:
+            st.caption(str(similar_texts["selected"]).upper())
+            st.subheader(item_name)
+            st.caption(f"{similar_texts['item_id']}: {item_id}")
+        with right:
+            cols = st.columns(4)
+            metric_values = [
+                (similar_texts["recommendations"], recommendations.height),
+                (similar_texts["behavioral"], behavioral_count),
+                (similar_texts["fallback"], fallback_count),
+                (similar_texts["top_score"], _format_score(top_score)),
+            ]
+            for column, (label, value) in zip(cols, metric_values, strict=True):
+                with column:
+                    with st.container(border=True):
+                        st.caption(str(label))
+                        st.markdown(f"**{value}**")
 
 
 def _render_source_badges(distribution: pl.DataFrame, *, language: str) -> None:
@@ -273,20 +267,17 @@ def _render_source_badges(distribution: pl.DataFrame, *, language: str) -> None:
 
 
 def _display_recommendations(recommendations: pl.DataFrame, *, language: str) -> pl.DataFrame:
-    display = (
-        recommendations.with_columns(
-            pl.col("score").round(6).alias("score"),
-            pl.col("source")
-            .fill_null("")
-            .map_elements(lambda value: source_label(value, language), return_dtype=pl.Utf8)
-            .alias("source"),
-            pl.col("source")
-            .fill_null("")
-            .map_elements(lambda value: source_explanation(value, language), return_dtype=pl.Utf8)
-            .alias("explanation"),
-        )
-        .select("rank", "similar_item_id", "similar_item_name", "score", "source", "explanation")
-    )
+    display = recommendations.with_columns(
+        pl.col("score").round(6).alias("score"),
+        pl.col("source")
+        .fill_null("")
+        .map_elements(lambda value: source_label(value, language), return_dtype=pl.Utf8)
+        .alias("source"),
+        pl.col("source")
+        .fill_null("")
+        .map_elements(lambda value: source_explanation(value, language), return_dtype=pl.Utf8)
+        .alias("explanation"),
+    ).select("rank", "similar_item_id", "similar_item_name", "score", "source", "explanation")
     return display.rename(recommendation_column_names(language))
 
 
@@ -297,8 +288,12 @@ def _render_run_summary_tab(*, state: dict[str, Any], top_k: int, texts: Mapping
     recommendation_path: Path = state["recommendation_path"]
     run_dir: Path = state["run_dir"]
 
+    st.subheader(summary_texts.get("run_information", "Run information"))
+
     summary = {
-        summary_texts["cards"]["run_id"]: _manifest_value(manifest, "run_id", summary_texts["unknown"]),
+        summary_texts["cards"]["run_id"]: _manifest_value(
+            manifest, "run_id", summary_texts["unknown"]
+        ),
         summary_texts["cards"]["manifest_path"]: (
             manifest_path.as_posix() if manifest_path else summary_texts["not_provided"]
         ),
@@ -320,11 +315,11 @@ def _render_run_summary_tab(*, state: dict[str, Any], top_k: int, texts: Mapping
             {summary_texts["stage"]: key, summary_texts["rows"]: _format_int_like(value)}
             for key, value in rows.items()
         ]
-        _render_html_table(row_data, [summary_texts["stage"], summary_texts["rows"]])
+        _render_dataframe_table(row_data)
 
     config_path = _config_path(manifest)
     if config_path is not None:
-        st.markdown(f"**{_escape(summary_texts['config'])}:** `{config_path}`")
+        st.markdown(f"**{summary_texts['config']}:** `{config_path}`")
 
     metrics = _load_metrics(run_dir)
     if metrics is None:
@@ -342,48 +337,30 @@ def _render_run_summary_tab(*, state: dict[str, Any], top_k: int, texts: Mapping
         if key in flattened
     ]
     if metric_rows:
-        _render_html_table(metric_rows, [summary_texts["metric"], summary_texts["value"]])
+        _render_dataframe_table(metric_rows)
     else:
         st.info(summary_texts["metrics_unexpected"])
 
 
 def _render_summary_cards(summary: Mapping[str, Any]) -> None:
-    cards = []
-    for label, value in summary.items():
-        cards.append(
-            f"""
-            <div class="summary-card">
-              <div class="summary-label">{_escape(str(label))}</div>
-              <code class="summary-value">{_escape(str(value))}</code>
-            </div>
-            """
-        )
-    st.markdown(f'<section class="summary-grid">{"".join(cards)}</section>', unsafe_allow_html=True)
+    items = list(summary.items())
+    for start in range(0, len(items), 3):
+        columns = st.columns(3)
+        for column, (label, value) in zip(columns, items[start : start + 3], strict=False):
+            with column:
+                with st.container(border=True):
+                    st.caption(str(label))
+                    st.code(str(value), language=None)
 
 
-def _render_html_table(rows: list[dict[str, Any]], columns: list[str]) -> None:
-    header = "".join(f"<th>{_escape(column)}</th>" for column in columns)
-    body = []
-    for row in rows:
-        body.append(
-            "<tr>"
-            + "".join(f"<td>{_escape(str(row.get(column, '—')))}</td>" for column in columns)
-            + "</tr>"
-        )
-    st.markdown(
-        f"""
-        <div class="table-wrap">
-          <table class="demo-table">
-            <colgroup>
-              <col style="width:50%">
-              <col style="width:50%">
-            </colgroup>
-            <thead><tr>{header}</tr></thead>
-            <tbody>{''.join(body)}</tbody>
-          </table>
-        </div>
-        """,
-        unsafe_allow_html=True,
+def _render_dataframe_table(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    st.dataframe(
+        pl.DataFrame(rows),
+        use_container_width=True,
+        hide_index=True,
+        height=_compact_table_height(len(rows)),
     )
 
 
@@ -497,15 +474,23 @@ def _format_metric_value(value: Any) -> str:
         return str(value)
     try:
         return f"{float(value):.6f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(value)
 
 
 def _format_int_like(value: Any) -> str:
     try:
         return f"{int(value):,}".replace(",", " ")
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(value)
+
+
+def _recommendation_table_height(row_count: int) -> int:
+    return 640 if row_count >= RECOMMENDATION_TABLE_ROWS else _compact_table_height(row_count)
+
+
+def _compact_table_height(row_count: int) -> int:
+    return min(380, max(112, 32 * row_count + 40))
 
 
 def _escape(value: str) -> str:
@@ -516,99 +501,10 @@ def _inject_css() -> None:
     st.markdown(
         """
         <style>
-        :root {
-          --demo-card: var(--secondary-background-color, #f8fafc);
-          --demo-panel: var(--secondary-background-color, #f8fafc);
-          --demo-ink: var(--text-color, #17202a);
-          --demo-muted: color-mix(in srgb, var(--text-color, #17202a) 62%, transparent);
-          --demo-line: color-mix(in srgb, var(--text-color, #17202a) 16%, transparent);
-          --demo-accent: var(--primary-color, #1f7a8c);
-          --demo-shadow: rgba(16, 24, 40, 0.08);
-        }
         .language-offset { height: 0.85rem; }
         .block-container {
           padding-top: 1.4rem;
           padding-bottom: 3rem;
-        }
-        .demo-hero,
-        .selected-card,
-        .summary-card,
-        .empty-state,
-        .mini-metric,
-        .table-wrap {
-          background: var(--demo-card);
-          color: var(--demo-ink);
-          border: 1px solid var(--demo-line);
-        }
-        .demo-hero {
-          border-radius: 12px;
-          padding: 26px 30px;
-          margin: 12px 0 18px;
-        }
-        .demo-hero h1 {
-          color: var(--demo-ink);
-          font-size: 2.35rem;
-          line-height: 1.1;
-          margin: 0.15rem 0 0.55rem;
-        }
-        .hero-copy,
-        .muted,
-        .empty-state p,
-        .item-id,
-        .summary-label {
-          color: var(--demo-muted);
-        }
-        .eyebrow {
-          color: var(--demo-accent);
-          font-size: 0.78rem;
-          font-weight: 800;
-          letter-spacing: 0.035em;
-          margin: 0;
-          text-transform: uppercase;
-        }
-        .selected-card {
-          display: grid;
-          gap: 20px;
-          grid-template-columns: minmax(360px, 1.35fr) minmax(360px, 1.65fr);
-          align-items: stretch;
-          border-radius: 12px;
-          padding: 22px;
-          margin: 18px 0;
-          box-shadow: 0 12px 32px var(--demo-shadow);
-        }
-        .selected-main h2 {
-          color: var(--demo-ink);
-          font-size: clamp(1.35rem, 1.8vw, 2.1rem);
-          line-height: 1.18;
-          margin: 0.35rem 0 0.55rem;
-          overflow-wrap: anywhere;
-          word-break: break-word;
-          max-height: 5.2em;
-          overflow-y: auto;
-          padding-right: 4px;
-        }
-        .item-id {
-          font-size: 0.96rem;
-          margin: 0;
-        }
-        .metric-grid {
-          display: grid;
-          gap: 10px;
-          grid-template-columns: repeat(4, minmax(120px, 1fr));
-        }
-        .mini-metric {
-          border-radius: 10px;
-          padding: 14px;
-        }
-        .mini-metric span {
-          color: var(--demo-muted);
-          display: block;
-          font-size: 0.78rem;
-          margin-bottom: 6px;
-        }
-        .mini-metric strong {
-          color: var(--demo-ink);
-          font-size: 1.25rem;
         }
         .badge-row {
           display: flex;
@@ -624,99 +520,29 @@ def _inject_css() -> None:
           padding: 7px 10px;
         }
         .source-badge.behavioral {
-          background: color-mix(in srgb, #14b8a6 20%, transparent);
-          color: color-mix(in srgb, #14b8a6 70%, var(--demo-ink));
+          background: rgba(20, 184, 166, 0.18);
+          color: #14b8a6;
         }
         .source-badge.fallback {
-          background: color-mix(in srgb, #94a3b8 22%, transparent);
-          color: color-mix(in srgb, #94a3b8 70%, var(--demo-ink));
+          background: rgba(148, 163, 184, 0.18);
+          color: #94a3b8;
         }
         .source-badge.brand {
-          background: color-mix(in srgb, #f59e0b 22%, transparent);
-          color: color-mix(in srgb, #f59e0b 72%, var(--demo-ink));
+          background: rgba(245, 158, 11, 0.18);
+          color: #f59e0b;
         }
         .source-badge.popular {
-          background: color-mix(in srgb, #fb7185 22%, transparent);
-          color: color-mix(in srgb, #fb7185 72%, var(--demo-ink));
+          background: rgba(251, 113, 133, 0.18);
+          color: #fb7185;
         }
         .source-badge.unknown {
-          background: color-mix(in srgb, var(--demo-ink) 10%, transparent);
-          color: var(--demo-muted);
+          background: rgba(148, 163, 184, 0.18);
+          color: #94a3b8;
         }
-        .empty-state {
-          border-style: dashed;
-          border-radius: 12px;
-          padding: 26px;
-          margin-top: 18px;
-        }
-        .empty-state h2,
-        .empty-state h3 {
-          color: var(--demo-ink);
-          margin-top: 0;
-        }
-        .summary-grid {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 12px;
-          margin: 10px 0 22px;
-        }
-        .summary-card {
-          border-radius: 10px;
-          padding: 12px 14px;
-          min-width: 0;
-        }
-        .summary-label {
-          font-size: 0.72rem;
-          font-weight: 800;
-          letter-spacing: 0.03em;
-          text-transform: uppercase;
-          margin-bottom: 8px;
-        }
-        .summary-value {
-          display: block;
-          color: var(--demo-ink);
-          background: color-mix(in srgb, var(--demo-ink) 7%, transparent);
-          border: 1px solid var(--demo-line);
-          border-radius: 8px;
-          padding: 8px;
-          font-size: 0.8rem;
-          line-height: 1.35;
-          max-width: 100%;
-          overflow-x: auto;
-          white-space: nowrap;
-        }
-        .table-wrap {
-          border-radius: 10px;
-          overflow: hidden;
-          margin: 8px 0 22px;
-        }
-        .demo-table {
-          width: 100%;
-          border-collapse: collapse;
-          table-layout: fixed;
-          font-size: 0.92rem;
-        }
-        .demo-table th,
-        .demo-table td {
-          border-bottom: 1px solid var(--demo-line);
-          color: var(--demo-ink);
-          padding: 9px 12px;
-          text-align: left;
-          vertical-align: top;
-          overflow-wrap: anywhere;
-        }
-        .demo-table th {
-          color: var(--demo-muted);
-          font-size: 0.78rem;
-          font-weight: 800;
-          text-transform: uppercase;
-        }
-        @media (max-width: 900px) {
-          .selected-card,
-          .metric-grid,
-          .summary-grid {
-            grid-template-columns: 1fr;
-          }
+        [data-testid="stCodeBlock"] pre,
+        [data-testid="stCodeBlock"] code {
+          white-space: pre-wrap !important;
+          overflow-wrap: anywhere !important;
         }
         </style>
         """,

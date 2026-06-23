@@ -85,6 +85,7 @@ TEXTS: dict[str, dict[str, Any]] = {
             },
             "not_provided": "not provided",
             "unknown": "unknown",
+            "run_information": "Run information",
             "pipeline_rows": "Pipeline rows",
             "stage": "stage",
             "rows": "rows",
@@ -193,6 +194,7 @@ TEXTS: dict[str, dict[str, Any]] = {
             },
             "not_provided": "не задано",
             "unknown": "неизвестно",
+            "run_information": "Сведения о запуске",
             "pipeline_rows": "Строки по этапам pipeline",
             "stage": "этап",
             "rows": "строки",
@@ -250,7 +252,9 @@ def source_explanation(source: str | None, language: str = "EN") -> str:
     return explanations.get(source or "", explanations["unknown"])
 
 
-def recommendation_column_names(language: str = "EN") -> dict[str, str]:
+def recommendation_column_names(
+    language: str = "EN",
+) -> dict[Any, Any] | dict[str, Any] | dict[str, str] | dict[bytes, bytes]:
     """Return localized display names for recommendation table columns."""
 
     return dict(get_texts(language)["recommendation_columns"])

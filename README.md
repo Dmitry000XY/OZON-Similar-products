@@ -73,22 +73,16 @@ uv run ozon-preview-recommendations
 uv run ozon-preview-recommendations --item-id 113
 ```
 
-### Demo site
+### Demo UI
 
-Для защиты и ручного просмотра run artifacts можно запустить Streamlit demo:
+Для интерактивного просмотра рекомендаций можно открыть Streamlit-приложение:
 
 ```bash
 uv run streamlit run apps/demo/app.py
 ```
 
-По умолчанию сайт читает `outputs/latest/manifest.json` и показывает похожие товары, summary run-а, метрики и
-интерактивный граф рекомендаций. В интерфейсе есть переключатель `EN/RU`, overview graph, ego graph выбранного товара,
-поиск по графу, zoom/pan/reset и опциональный приоритет polished Gephi export. Graph artifacts обычного
-production/full run сохраняются внутри run-а:
-
-```text
-outputs/runs/<run_id>/demo/graph/
-```
+Приложение позволяет искать товар по `item_id` или названию, выбирать случайный товар, смотреть похожие товары,
+источники рекомендаций и сведения о запуске.
 
 ### 5. Запустить полный сценарий с оценкой качества
 
