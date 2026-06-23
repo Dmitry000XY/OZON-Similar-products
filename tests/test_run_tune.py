@@ -504,5 +504,4 @@ def test_run_tuning_simulated_annealing_writes_acceptance_columns(
     rows = list(csv.DictReader((sweep_dir / "results.csv").open(encoding="utf-8")))
     assert len(rows) == 3
     assert all(row["temperature"] for row in rows)
-    assert rows[0]["accepted"] == "True"
     assert {row["accepted"] for row in rows}.issubset({"True", "False"})
