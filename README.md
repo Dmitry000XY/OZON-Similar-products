@@ -121,7 +121,9 @@ uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20
 * [архитектура проекта](docs/architecture.md);
 * [контракты данных](docs/data_contract.md);
 * [README модуля `retrieval`](src/ozon_similar_products/retrieval/README.md);
-* [README модуля `pipeline`](src/ozon_similar_products/pipeline/README.md).
+* [README модуля `pipeline`](src/ozon_similar_products/pipeline/README.md);
+* [презентация с защиты](docs/Ozon_similar_products.pdf) — итоговая презентация проекта;
+* [презентация с предзащиты](docs/Ozon_similar_products_midterm.pdf) — версия презентации для промежуточной защиты.
 
 ## Что появляется после запуска
 
@@ -133,12 +135,11 @@ outputs/runs/<run_id>/
     detailed.parquet
     enriched.parquet
     lookup.parquet
-  demo/
-    graph/
-      recommendations_graph.html
-      recommendations_graph.json
-      recommendations_graph.gexf
-      manifest.json
+  evaluation/
+    evaluation_manifest.json
+    metrics.json
+    scorecard.json
+  config.yaml
   manifest.json
 
 outputs/latest/
@@ -146,6 +147,10 @@ outputs/latest/
     detailed.parquet
     enriched.parquet
     lookup.parquet
+  evaluation/
+    evaluation_manifest.json
+    metrics.json
+    scorecard.json
   manifest.json
 ```
 

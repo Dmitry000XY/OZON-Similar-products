@@ -1,0 +1,25 @@
+# Tune min score
+objective:
+  # Main business metric: whether recommendations catch future to_cart relations.
+  primary_metric: to_cart_hit_rate_at_k
+  supporting_metrics:
+    - strong_ndcg_at_k
+    - strong_recall_at_k
+    - strong_mrr_at_k
+    - coverage_at_k
+    - to_cart_recall_at_k
+  penalty_metrics:
+    - popularity_bias_at_k
+  constraints:
+    min_coverage_at_k: 0.10
+
+parameters:
+  scoring.min_score:
+    type: float_range
+    min: 0.05
+    max: 2.0
+    step: 0.025
+
+  business.fallback.enabled:
+    type: choice
+    values: [ false ]

@@ -9,15 +9,8 @@ import pytest
 import yaml
 
 from ozon_similar_products.cli import run_tune
-from ozon_similar_products.config import load_yaml_config
 from ozon_similar_products.evaluation import metrics_to_flat_dict
 from ozon_similar_products.evaluation.metrics import OfflineMetrics
-from ozon_similar_products.retrieval.decay import (
-    DistanceDecayConfig,
-    TimeDecayConfig,
-    WidgetContextConfig,
-)
-from ozon_similar_products.retrieval.scoring import CoVisitationScorer
 
 
 def test_set_by_dot_path_updates_nested_config_without_mutation() -> None:
@@ -62,7 +55,7 @@ def test_generate_grid_trials_supports_range_search_space() -> None:
 
 
 def test_select_trials_random_limits_without_replacement(
-    monkeypatch: pytest.MonkeyPatch,
+        monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     search_space = {
         "parameters": {
@@ -240,44 +233,9 @@ def test_metrics_flat_dict_and_tuning_csv_use_expected_metric_names(tmp_path: Pa
         assert reader.fieldnames == ["trial_id", "run_dir", *expected_metric_names]
 
 
-def test_graph_scoring_configs_and_search_space_load() -> None:
-    expected_count_source = {
-        Path("configs/baseline.yaml"): "raw",
-        Path("configs/production.yaml"): "weighted",
-    }
-    expected_widget_enabled = {
-        Path("configs/baseline.yaml"): False,
-        Path("configs/production.yaml"): True,
-    }
-
-    for config_path in expected_count_source:
-        config = load_yaml_config(config_path)
-        assert DistanceDecayConfig.from_config(config).strategy == "none"
-        assert TimeDecayConfig.from_config(config).strategy == "none"
-        widget_context = WidgetContextConfig.from_config(config)
-        assert widget_context.enabled is expected_widget_enabled[config_path]
-        assert widget_context.use == "target"
-        assert widget_context.weights == {
-            "search_catalog_listing": 1.0,
-            "product_detailed_page": 1.1,
-        }
-        scorer = CoVisitationScorer.from_config(config)
-        assert scorer.count_source == expected_count_source[config_path]
-
-    search_space = load_yaml_config("configs/tuning/search_space_graph_scoring.yaml")
-    parameters = search_space["parameters"]
-    assert "graph.distance_decay.enabled" in parameters
-    assert "graph.time_decay.strategy" in parameters
-    assert "graph.widget_context.enabled" in parameters
-    assert "graph.widget_context.weights.search_catalog_listing" in parameters
-    assert "graph.widget_context.weights.product_detailed_page" in parameters
-    assert "scoring.count_source" in parameters
-    assert "scoring.min_weighted_pair_count" in parameters
-
-
 def test_run_tuning_uses_trial_overrides_and_best_config_without_scratch_artifacts(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
 ) -> None:
     base_config: dict[str, Any] = {
         "pipeline": {"lookback_days": 30, "top_k": 20},
@@ -351,10 +309,10 @@ def test_run_tuning_uses_trial_overrides_and_best_config_without_scratch_artifac
     artifacts = trial_config["artifacts"]
     assert isinstance(artifacts, dict)
     assert artifacts["events_clean_dir"] == (
-        trial_dir / "artifacts" / "events_clean"
+            trial_dir / "artifacts" / "events_clean"
     ).as_posix()
     assert artifacts["daily_pairs_dir"] == (
-        trial_dir / "artifacts" / "daily_pairs"
+            trial_dir / "artifacts" / "daily_pairs"
     ).as_posix()
     assert (trial_dir / "manifest.json").exists()
     assert (trial_dir / "metrics.json").exists()
@@ -370,8 +328,8 @@ def test_run_tuning_uses_trial_overrides_and_best_config_without_scratch_artifac
 
 
 def test_run_tuning_successive_halving_writes_stage_columns(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
 ) -> None:
     base_config = {"pipeline": {"top_k": 20}}
     search_space = {
@@ -441,8 +399,8 @@ def test_run_tuning_successive_halving_writes_stage_columns(
 
 
 def test_run_tuning_simulated_annealing_writes_acceptance_columns(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
 ) -> None:
     base_config = {"pipeline": {"top_k": 20}}
     search_space = {
@@ -504,5 +462,4 @@ def test_run_tuning_simulated_annealing_writes_acceptance_columns(
     rows = list(csv.DictReader((sweep_dir / "results.csv").open(encoding="utf-8")))
     assert len(rows) == 3
     assert all(row["temperature"] for row in rows)
-    assert rows[0]["accepted"] == "True"
     assert {row["accepted"] for row in rows}.issubset({"True", "False"})

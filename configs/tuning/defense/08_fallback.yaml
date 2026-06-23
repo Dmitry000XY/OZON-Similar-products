@@ -49,3 +49,15 @@ parameters:
   business.fallback.include_cold_start_items:
     type: choice
     values: [ false, true ]
+  scoring.min_pair_count:
+    type: choice
+    values: [ 1, 2, 3 ]
+  scoring.min_unique_users:
+    type: choice
+    values: [ 1, 2, 3 ]
+  scoring.min_unique_sessions:
+    type: choice
+    values: [ 1, 2, 3 ]
+  scoring.min_score:
+    type: choice
+    values: [ null, 0.01, 0.05 ]
