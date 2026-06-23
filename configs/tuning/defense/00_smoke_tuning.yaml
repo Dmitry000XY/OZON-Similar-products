@@ -16,7 +16,7 @@ objective:
 parameters:
   scoring.method:
     type: choice
-    values: [calibrated_multichannel]
+    values: [ calibrated_multichannel ]
   scoring.beta:
     type: choice
-    values: [0.25, 0.5]
+    values: [ 0.25, 0.5 ]

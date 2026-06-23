@@ -16,13 +16,13 @@ objective:
 parameters:
   scoring.min_pair_count:
     type: choice
-    values: [1, 2, 3, 5]
+    values: [ 1, 2, 3, 5 ]
   scoring.min_unique_users:
     type: choice
-    values: [1, 2, 3]
+    values: [ 1, 2, 3 ]
   scoring.min_unique_sessions:
     type: choice
-    values: [1, 2, 3, 5]
+    values: [ 1, 2, 3, 5 ]
   scoring.min_score:
     type: choice
-    values: [null, 0.01, 0.05]
+    values: [ null, 0.01, 0.05 ]

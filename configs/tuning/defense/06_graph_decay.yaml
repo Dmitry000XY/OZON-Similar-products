@@ -17,25 +17,25 @@ objective:
 parameters:
   graph.distance_decay.enabled:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
   graph.distance_decay.strategy:
     type: choice
-    values: [none, exponential]
+    values: [ none, exponential ]
   graph.distance_decay.max_distance:
     type: choice
-    values: [null, 5, 10]
+    values: [ null, 5, 10 ]
   graph.distance_decay.exponential.alpha:
     type: choice
-    values: [0.25, 0.5, 0.75, 1.0]
+    values: [ 0.25, 0.5, 0.75, 1.0 ]
   graph.time_decay.enabled:
     type: choice
-    values: [false, true]
+    values: [ false, true ]
   graph.time_decay.strategy:
     type: choice
-    values: [none, exponential]
+    values: [ none, exponential ]
   graph.time_decay.exponential.half_life_days:
     type: choice
-    values: [3, 7, 14]
+    values: [ 3, 7, 14 ]
   scoring.count_source:
     type: choice
-    values: [raw, weighted]
+    values: [ raw, weighted ]

@@ -1,0 +1,166 @@
+# Maximum fast scorer tuner config.
+#
+# Purpose:
+#   Broad search over scoring-only parameters for calibrated_multichannel.
+#
+# Use with:
+#   --fast-scoring-only
+#   --tuning-strategy random
+#   --max-trials 80..150
+#
+# Recommended base configs:
+#   1) Pure raw scorer tuning:
+#      configs/experiments/defense/02_calibrated_multichannel_raw.yaml
+#
+#   2) Scorer tuning on already weighted graph artifacts:
+#      configs/experiments/defense/08_calibrated_weighted_decay.yaml
+#
+# Important:
+#   This config changes only scoring.*, topk.*, and business.fallback.*,
+#   so it is valid for fast scoring-only mode.
+#
+#   It does NOT tune graph.distance_decay.*, widget_context, sessions, or pair building.
+#   Those change pair artifacts and must be tuned separately without fast-scoring-only.
+
+objective:
+  primary_metric: to_cart_hit_rate_at_k
+
+  supporting_metrics:
+    - to_cart_recall_at_k
+    - to_cart_ndcg_at_k
+    - to_cart_mrr_at_k
+    - strong_ndcg_at_k
+    - strong_mrr_at_k
+    - strong_recall_at_k
+    - coverage_at_k
+
+  penalty_metrics:
+    - popularity_bias_at_k
+    - fallback_share_at_k
+    - fallback_global_share_at_k
+
+  constraints:
+    min_coverage_at_k: 0.0
+
+parameters:
+  # Keep the scorer type fixed.
+  # Pair_count should be compared as a separate baseline, not mixed into this sweep.
+  scoring.method:
+    type: choice
+    values: [ calibrated_multichannel ]
+
+  # raw = normal channel counts.
+  # weighted = uses weighted_* counts already present in pair aggregates.
+  # If base graph has no decay/widget weighting, weighted is effectively close to raw.
+  scoring.count_source:
+    type: choice
+    values: [ raw, weighted ]
+
+  # Main count transform experiment inside the scorer.
+  scoring.count_transform.method:
+    type: choice
+    values: [ linear, sqrt, log ]
+
+  # Only matters for log, harmless for linear/sqrt.
+  scoring.count_transform.smoothing:
+    type: choice
+    values: [ 0.1, 0.5, 1.0, 2.0, 5.0 ]
+
+  # Business action weights.
+  # Ranges are broad but still biased toward the intended business order:
+  # view < click < favorite < to_cart.
+  scoring.business_weights.view:
+    type: choice
+    values: [ 0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5 ]
+
+  scoring.business_weights.click:
+    type: choice
+    values: [ 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0 ]
+
+  scoring.business_weights.favorite:
+    type: choice
+    values: [ 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0 ]
+
+  scoring.business_weights.to_cart:
+    type: choice
+    values: [ 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0 ]
+
+  # Frequency calibration strength.
+  # 0.0 = no frequency boost, only business weights.
+  # 1.0 = full inverse-frequency style boost.
+  scoring.beta:
+    type: choice
+    values: [ 0.0, 0.1, 0.25, 0.4, 0.5, 0.65, 0.75, 1.0 ]
+
+  scoring.reference_action_type:
+    type: choice
+    values: [ view ]
+
+  # Caps for frequency boost. These prevent rare actions from exploding too much.
+  scoring.max_frequency_boost.view:
+    type: choice
+    values: [ 1.0 ]
+
+  scoring.max_frequency_boost.click:
+    type: choice
+    values: [ 4.0, 8.0, 10.0, 12.0, 15.0 ]
+
+  scoring.max_frequency_boost.favorite:
+    type: choice
+    values: [ 8.0, 12.0, 15.0, 20.0, 25.0 ]
+
+  scoring.max_frequency_boost.to_cart:
+    type: choice
+    values: [ 15.0, 20.0, 30.0, 40.0, 60.0 ]
+
+  #  # Noise filtering.
+  #  scoring.min_pair_count:
+  #    type: choice
+  #    values: [1, 2, 3, 5]
+  #
+  #  scoring.min_unique_users:
+  #    type: choice
+  #    values: [1, 2, 3]
+  #
+  #  scoring.min_unique_sessions:
+  #    type: choice
+  #    values: [1, 2, 3, 5]
+
+  #  # Useful only when count_source=weighted, but safe otherwise.
+  #  scoring.min_weighted_pair_count:
+  #    type: choice
+  #    values: [null, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0]
+  #
+  #  # Score threshold scale depends on transform and weights,
+  #  # so keep values conservative.
+  #  scoring.min_score:
+  #    type: choice
+  #    values: [null, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+
+  # Popularity normalization inside scorer.
+  #  scoring.normalize_by_item_popularity:
+  #    type: choice
+  #    values: [false, true]
+  #
+  #  scoring.popularity_normalization.popularity_column:
+  #    type: choice
+  #    values: [unique_users, events_count]
+  #
+  #  scoring.popularity_normalization.smoothing:
+  #    type: choice
+  #    values: [0.1, 1.0, 5.0, 10.0, 50.0]
+  #
+  #  scoring.popularity_normalization.power:
+  #    type: choice
+  #    values: [0.0, 0.25, 0.5, 0.75, 1.0]
+
+  # Keep top-K stable for defense metrics.
+  # If you pass --top-k 20 in CLI, it will also force top_k=20.
+  topk.top_k:
+    type: choice
+    values: [ 20 ]
+
+  # Keep fallback off. This is a scorer sweep, not a fallback sweep.
+  business.fallback.enabled:
+    type: choice
+    values: [ false ]

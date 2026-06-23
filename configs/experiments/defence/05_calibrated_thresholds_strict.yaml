@@ -62,7 +62,7 @@ graph:
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
-    weights: {}
+    weights: { }
 
 # Experiment purpose:
 # Threshold ablation: stricter pair/session/user thresholds should remove noise but may reduce coverage.

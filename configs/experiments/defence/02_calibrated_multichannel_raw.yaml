@@ -64,7 +64,7 @@ graph:
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
-    weights: {}
+    weights: { }
 
 # Experiment purpose:
 # Action-aware baseline: calibrated_multichannel over raw channel counts; no popularity normalization, no decay, no fallback.
@@ -76,10 +76,10 @@ scoring:
     method: log
     smoothing: 1.0
   business_weights:
-    view: 0.25
-    click: 1.0
-    favorite: 1.0
-    to_cart: 1.0
+    view: 1.0
+    click: 3.0
+    favorite: 6.0
+    to_cart: 8.0
   beta: 0.25
   reference_action_type: view
   max_frequency_boost:
@@ -87,9 +87,9 @@ scoring:
     click: 10.0
     favorite: 15.0
     to_cart: 30.0
-  min_pair_count: 2
+  min_pair_count: 1
   min_unique_users: 1
-  min_unique_sessions: 3
+  min_unique_sessions: 1
   min_weighted_pair_count: null
   min_score: null
   calibration:

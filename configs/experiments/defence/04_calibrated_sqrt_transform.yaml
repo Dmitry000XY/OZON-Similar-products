@@ -63,7 +63,7 @@ graph:
     use: target
     default_weight: 1.0
     unknown_weight: 1.0
-    weights: {}
+    weights: { }
 
 # Experiment purpose:
 # Count-transform ablation: sqrt smooths high counts less aggressively than log; compare quality and popularity bias.
