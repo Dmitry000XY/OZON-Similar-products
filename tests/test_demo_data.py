@@ -150,8 +150,8 @@ def test_source_explanation_maps_known_and_unknown_sources() -> None:
 
 
 def test_localized_source_texts_cover_english_and_russian() -> None:
-    assert source_label("behavioral", "EN") == "Behavioral"
-    assert source_label("behavioral", "RU") == "Поведенческий"
+    assert "behavioral" in source_label("behavioral", "EN")
+    assert "behavioral" in source_label("behavioral", "RU")
     assert "sessions" in localized_source_explanation("behavioral", "EN")
     assert "сессиях" in localized_source_explanation("behavioral", "RU")
     assert localized_source_explanation("not_a_real_source", "RU") == "Неизвестный источник"
@@ -161,10 +161,10 @@ def test_recommendation_column_names_are_localized() -> None:
     english = recommendation_column_names("EN")
     russian = recommendation_column_names("RU")
 
-    assert english["similar_item_name"] == "Recommendation"
-    assert russian["similar_item_name"] == "Рекомендация"
-    assert english["source_label"] == "Source"
-    assert russian["source_label"] == "Источник"
+    assert english["similar_item_name"] == "similar product"
+    assert russian["similar_item_name"] == "похожий товар"
+    assert english["source"] == "source"
+    assert russian["source"] == "источник"
 
 
 def test_get_texts_falls_back_to_english_and_returns_copy() -> None:

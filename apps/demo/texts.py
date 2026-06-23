@@ -10,16 +10,15 @@ LANGUAGES = ("EN", "RU")
 TEXTS: dict[str, dict[str, Any]] = {
     "EN": {
         "language": "Language",
-        "hero_eyebrow": "Offline recommender presentation",
+        "hero_eyebrow": "Offline recommender demo",
         "hero_title": "Ozon Similar Products Demo",
         "hero_copy": (
-            "Search products, inspect similar items, explain recommendation sources, "
-            "and explore the final recommendation graph."
+            "Search products, inspect similar items, and explain how each recommendation "
+            "was produced by the offline pipeline."
         ),
         "tabs": {
             "similar": "🔎 Similar items",
             "summary": "📊 Run summary",
-            "graph": "🕸 Graph view",
             "about": "ℹ️ About",
         },
         "errors": {
@@ -29,7 +28,7 @@ TEXTS: dict[str, dict[str, Any]] = {
             ),
         },
         "similar": {
-            "search_label": "Search item by item_id or product name",
+            "search_label": "Search by item_id or product name",
             "search_placeholder": "Example: 123456 or milk",
             "random_button": "🎲 Random item",
             "matches": "Matching products",
@@ -48,32 +47,31 @@ TEXTS: dict[str, dict[str, Any]] = {
             ),
         },
         "recommendation_columns": {
-            "rank": "Rank",
-            "similar_item_id": "Item ID",
-            "similar_item_name": "Recommendation",
-            "score": "Score",
-            "source": "Raw source",
-            "source_label": "Source",
-            "explanation": "Explanation",
+            "rank": "rank",
+            "similar_item_id": "similar item_id",
+            "similar_item_name": "similar product",
+            "score": "score",
+            "source": "source",
+            "explanation": "explanation",
         },
         "sources": {
             "labels": {
-                "behavioral": "Behavioral",
-                "fallback_category_type_popular": "Category/type fallback",
-                "fallback_category_popular": "Category fallback",
-                "fallback_type_popular": "Type fallback",
-                "fallback_brand_popular": "Brand fallback",
-                "fallback_global_popular": "Popular fallback",
-                "unknown": "Unknown source",
+                "behavioral": "🧠 behavioral",
+                "fallback_category_type_popular": "🧩 category/type fallback",
+                "fallback_category_popular": "🧩 category fallback",
+                "fallback_type_popular": "🧩 type fallback",
+                "fallback_brand_popular": "🏷 brand fallback",
+                "fallback_global_popular": "🔥 popular fallback",
+                "unknown": "❔ unknown source",
             },
             "explanations": {
                 "behavioral": "Users interacted with these items in similar sessions",
-                "fallback_category_type_popular": "Fallback from same category/type",
-                "fallback_category_popular": "Fallback from same category",
-                "fallback_type_popular": "Fallback from same type",
-                "fallback_brand_popular": "Fallback from same brand",
-                "fallback_global_popular": "Popular fallback",
-                "unknown": "Unknown source",
+                "fallback_category_type_popular": "Added from the same category and product type",
+                "fallback_category_popular": "Added from the same category",
+                "fallback_type_popular": "Added from the same product type",
+                "fallback_brand_popular": "Added from the same brand",
+                "fallback_global_popular": "Added from globally popular products",
+                "unknown": "Unknown recommendation source",
             },
         },
         "summary": {
@@ -97,91 +95,48 @@ TEXTS: dict[str, dict[str, Any]] = {
             "metrics_missing": "Metrics file was not found for this run.",
             "metrics_unexpected": "Metrics file exists, but expected demo metrics were not found.",
         },
-        "graph": {
-            "type": "Graph type",
-            "overview": "Overview",
-            "ego": "Selected item neighborhood",
-            "max_rank": "Max rank",
-            "max_edges": "Max edges",
-            "max_nodes": "Max nodes",
-            "all": "All",
-            "sources": "Sources",
-            "behavioral": "behavioral",
-            "fallback": "fallback",
-            "labels": "Labels",
-            "label_options": {
-                "auto": "Auto",
-                "all": "All",
-                "important": "Important only",
-                "off": "Off",
-            },
-            "theme": "Theme",
-            "theme_options": {
-                "auto": "Auto",
-                "dark": "Dark",
-                "light": "Light",
-            },
-            "build": "Build graph",
-            "reload": "Reload graph",
-            "artifact": "Graph artifact",
-            "select_first": "Select an item first in the Similar items tab.",
-            "select_before_build": "Select an item before building a selected item graph.",
-            "select_source": "Select at least one source type.",
-            "large_warning": "Large graphs may be slow in browser.",
-            "placeholder_title": "Graph visualization placeholder",
-            "placeholder_body": (
-                "Build a recommendation graph for this run or place a polished Gephi export here:"
-            ),
-            "expected": "Expected graph artifacts:",
-            "expected_items": [
-                "recommendations_graph.gexf for Gephi",
-                "recommendations_graph.html for browser embedding",
-                "recommendations_graph.json for inspection",
-            ],
-        },
         "about": {
             "title": "What this demo shows",
             "body": (
-                "This demo visualizes item-to-item recommendations produced by the offline "
+                "This demo shows item-to-item recommendations produced by the offline "
                 "Ozon Similar Products pipeline.\n\n"
-                "Behavioral recommendations are based on user co-visitation inside sessions. "
-                "Fallback recommendations are added when behavioral candidates are not enough. "
-                "Scores are produced by the graph/scoring pipeline and ranked into top-K "
-                "similar products."
+                "The main recommendation source is behavioral co-visitation: products are connected "
+                "when users interact with them in similar sessions. If behavioral candidates are not enough, "
+                "the fallback layer adds products from related catalogue groups or globally popular products. "
+                "The final list is ranked by the graph/scoring pipeline and saved as reusable parquet artifacts."
             ),
             "source_title": "Source labels",
             "sources": [
-                "behavioral: session co-visitation signal",
-                "category/type fallback: popular item from the same category/type",
-                "category fallback: popular item from the same category",
-                "type fallback: popular item from the same type",
-                "brand fallback: popular item from the same brand",
-                "popular fallback: global popular item",
+                "🧠 behavioral — session co-visitation signal",
+                "🧩 category/type fallback — popular product from the same category and type",
+                "🧩 category fallback — popular product from the same category",
+                "🧩 type fallback — popular product from the same type",
+                "🏷 brand fallback — popular product from the same brand",
+                "🔥 popular fallback — globally popular product",
             ],
         },
     },
     "RU": {
         "language": "Язык",
-        "hero_eyebrow": "Презентация offline-рекомендателя",
+        "hero_eyebrow": "Демо offline-рекомендателя",
         "hero_title": "Демо похожих товаров Ozon",
         "hero_copy": (
-            "Ищите товары, смотрите похожие позиции, объясняйте источники рекомендаций "
-            "и показывайте итоговый граф связей."
+            "Ищите товары, смотрите похожие позиции и объясняйте, почему конкретная "
+            "рекомендация появилась в результате работы offline-pipeline."
         ),
         "tabs": {
             "similar": "🔎 Похожие товары",
             "summary": "📊 Сводка запуска",
-            "graph": "🕸 Граф",
             "about": "ℹ️ О демо",
         },
         "errors": {
             "load_failed_hint": (
-                "Сначала постройте рекомендации или передайте parquet явно через "
+                "Сначала постройте рекомендации или передайте parquet-файл явно через "
                 "`-- --enriched-path ...`."
             ),
         },
         "similar": {
-            "search_label": "Поиск товара по item_id или названию",
+            "search_label": "Поиск по item_id или названию товара",
             "search_placeholder": "Например: 123456 или молоко",
             "random_button": "🎲 Случайный товар",
             "matches": "Найденные товары",
@@ -200,115 +155,73 @@ TEXTS: dict[str, dict[str, Any]] = {
             ),
         },
         "recommendation_columns": {
-            "rank": "Ранг",
-            "similar_item_id": "Item ID",
-            "similar_item_name": "Рекомендация",
-            "score": "Score",
-            "source": "Raw source",
-            "source_label": "Источник",
-            "explanation": "Объяснение",
+            "rank": "ранг",
+            "similar_item_id": "item_id похожего товара",
+            "similar_item_name": "похожий товар",
+            "score": "score",
+            "source": "источник",
+            "explanation": "объяснение",
         },
         "sources": {
             "labels": {
-                "behavioral": "Поведенческий",
-                "fallback_category_type_popular": "Fallback категория/тип",
-                "fallback_category_popular": "Fallback категория",
-                "fallback_type_popular": "Fallback тип",
-                "fallback_brand_popular": "Fallback бренд",
-                "fallback_global_popular": "Популярный fallback",
-                "unknown": "Неизвестный источник",
+                "behavioral": "🧠 behavioral",
+                "fallback_category_type_popular": "🧩 fallback по категории и типу",
+                "fallback_category_popular": "🧩 fallback по категории",
+                "fallback_type_popular": "🧩 fallback по типу",
+                "fallback_brand_popular": "🏷 fallback по бренду",
+                "fallback_global_popular": "🔥 популярный fallback",
+                "unknown": "❔ неизвестный источник",
             },
             "explanations": {
                 "behavioral": "Пользователи взаимодействовали с этими товарами в похожих сессиях",
-                "fallback_category_type_popular": "Fallback из той же категории и типа",
-                "fallback_category_popular": "Fallback из той же категории",
-                "fallback_type_popular": "Fallback из того же типа",
-                "fallback_brand_popular": "Fallback по тому же бренду",
-                "fallback_global_popular": "Популярный fallback-товар",
+                "fallback_category_type_popular": "Товар добавлен из той же категории и того же типа",
+                "fallback_category_popular": "Товар добавлен из той же категории",
+                "fallback_type_popular": "Товар добавлен из того же типа",
+                "fallback_brand_popular": "Товар добавлен по тому же бренду",
+                "fallback_global_popular": "Товар добавлен из глобально популярных позиций",
                 "unknown": "Неизвестный источник",
             },
         },
         "summary": {
             "cards": {
                 "run_id": "run_id",
-                "manifest_path": "manifest path",
-                "recommendation_artifact": "recommendation artifact",
+                "manifest_path": "путь к manifest",
+                "recommendation_artifact": "артефакт рекомендаций",
                 "train_window": "train window",
                 "top_k": "top_k",
-                "created_at": "created_at",
+                "created_at": "создано",
             },
             "not_provided": "не задано",
             "unknown": "неизвестно",
-            "pipeline_rows": "Строки pipeline",
+            "pipeline_rows": "Строки по этапам pipeline",
             "stage": "этап",
             "rows": "строки",
-            "config": "Config",
+            "config": "Конфиг",
             "metrics": "Метрики",
             "metric": "метрика",
             "value": "значение",
             "metrics_missing": "Файл с метриками для этого запуска не найден.",
             "metrics_unexpected": "Файл метрик найден, но ожидаемые demo-метрики отсутствуют.",
         },
-        "graph": {
-            "type": "Тип графа",
-            "overview": "Обзорный граф",
-            "ego": "Окрестность выбранного товара",
-            "max_rank": "Max rank",
-            "max_edges": "Max edges",
-            "max_nodes": "Max nodes",
-            "all": "All",
-            "sources": "Источники",
-            "behavioral": "behavioral",
-            "fallback": "fallback",
-            "labels": "Подписи",
-            "label_options": {
-                "auto": "Auto",
-                "all": "Все",
-                "important": "Только важные",
-                "off": "Выкл",
-            },
-            "theme": "Тема",
-            "theme_options": {
-                "auto": "Auto",
-                "dark": "Dark",
-                "light": "Light",
-            },
-            "build": "Построить граф",
-            "reload": "Перезагрузить граф",
-            "artifact": "Graph artifact",
-            "select_first": "Сначала выберите товар на вкладке похожих товаров.",
-            "select_before_build": "Выберите товар перед построением ego-графа.",
-            "select_source": "Выберите хотя бы один тип источника.",
-            "large_warning": "Большой граф может работать медленно в браузере.",
-            "placeholder_title": "Заглушка визуализации графа",
-            "placeholder_body": (
-                "Постройте граф для этого запуска или положите сюда polished Gephi export:"
-            ),
-            "expected": "Ожидаемые graph artifacts:",
-            "expected_items": [
-                "recommendations_graph.gexf для Gephi",
-                "recommendations_graph.html для встраивания в браузер",
-                "recommendations_graph.json для проверки данных",
-            ],
-        },
         "about": {
             "title": "Что показывает демо",
             "body": (
-                "Это демо визуализирует item-to-item рекомендации, построенные offline "
-                "pipeline проекта Ozon Similar Products.\n\n"
-                "Behavioral-рекомендации основаны на совместных действиях пользователей "
-                "внутри сессий. Fallback-рекомендации добавляются, когда behavioral-кандидатов "
-                "недостаточно. Score рассчитывается graph/scoring pipeline и затем ранжируется "
-                "в top-K похожих товаров."
+                "Это демо показывает item-to-item рекомендации, построенные offline-pipeline "
+                "проекта Ozon Similar Products.\n\n"
+                "Основной источник рекомендаций — поведенческие связи между товарами: товары "
+                "считаются похожими, если пользователи взаимодействовали с ними в похожих сессиях. "
+                "Если таких кандидатов недостаточно, fallback-слой добавляет товары из близких "
+                "каталожных групп или глобально популярные позиции. Финальный список ранжируется "
+                "scoring-слоем и сохраняется в parquet-артефакты."
             ),
             "source_title": "Источники рекомендаций",
             "sources": [
-                "behavioral: совместные действия пользователей в сессиях",
-                "category/type fallback: популярный товар той же категории и типа",
-                "category fallback: популярный товар той же категории",
-                "type fallback: популярный товар того же типа",
-                "brand fallback: популярный товар того же бренда",
-                "popular fallback: глобально популярный товар",
+                "🧠 behavioral — связь по пользовательскому поведению в сессиях",
+                "🧩 fallback по категории и типу — популярный товар из той же категории и типа",
+                "🧩 fallback по категории — популярный товар из той же категории",
+                "🧩 fallback по типу — популярный товар того же типа",
+                "🏷 fallback по бренду — популярный товар того же бренда",
+                "🔥 популярный fallback — глобально популярный товар",
             ],
         },
     },

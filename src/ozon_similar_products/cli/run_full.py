@@ -402,7 +402,6 @@ def execute_full_run(
     validation_cache_key: str | None = None,
     validation_cache_dir: Path | None = None,
     used_scoring_only_mode: bool = False,
-    export_demo_graph: bool = True,
 ) -> FullRunResult:
     """Run train recommendations, build validation ground truth, and compute metrics."""
     logger = logging.getLogger(__name__)
@@ -450,7 +449,6 @@ def execute_full_run(
         output_dir=resolved_run_dir,
         run_id=resolved_run_id,
         update_latest=False,
-        export_demo_graph=export_demo_graph,
     )
 
     recommendations = pl.read_parquet(pipeline_result.detailed_recommendations_path)

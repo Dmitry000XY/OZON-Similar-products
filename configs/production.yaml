@@ -110,21 +110,6 @@ outputs:
   root_dir: outputs
   latest_dir: outputs/latest
 
-demo:
-  graph:
-    enabled: true
-    mode: overview
-    max_rank: 10
-    max_edges: 2000
-    max_nodes: null
-    labels_mode: important
-    theme: auto
-    include_behavioral: true
-    include_fallback: true
-    export_html: true
-    export_json: true
-    export_gexf: true
-
 evaluation:
   relevance_mode: graded
   relevance_weights:

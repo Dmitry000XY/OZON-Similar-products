@@ -1,72 +1,61 @@
-# Demo UI для похожих товаров Ozon
+# Demo UI похожих товаров
 
-Streamlit-приложение показывает результаты offline pipeline в формате,
-удобном для защиты и ручного просмотра. Это презентационный слой: он читает
-готовые artifacts run-а и не меняет алгоритм рекомендаций.
+Streamlit-приложение для просмотра рекомендаций, которые строит offline-pipeline проекта.
 
-## Запуск
+Приложение читает готовые parquet-артефакты рекомендаций, позволяет найти товар по `item_id` или названию и показывает
+список похожих товаров с рангом, score, источником рекомендации и кратким объяснением.
 
-По умолчанию приложение читает `outputs/latest/manifest.json`:
+## Установка
+
+```bash
+uv sync
+```
+
+## Запуск latest-артефакта
+
+По умолчанию приложение читает `outputs/latest/manifest.json`.
 
 ```bash
 uv run streamlit run apps/demo/app.py
 ```
 
-Явно указать manifest:
+То же самое с явным manifest:
 
-```bash
-uv run streamlit run apps/demo/app.py -- \
-  --manifest-path outputs/latest/manifest.json
+```powershell
+uv run streamlit run apps/demo/app.py -- ^
+--manifest-path outputs/latest/manifest.json
 ```
 
-Открыть конкретный parquet с enriched-рекомендациями:
+## Запуск конкретного parquet-файла
 
-```bash
-uv run streamlit run apps/demo/app.py -- \
-  --enriched-path outputs/runs/<run_id>/recommendations/enriched.parquet
+Открыть enriched-рекомендации:
+
+```powershell
+uv run streamlit run apps/demo/app.py -- ^
+--enriched-path outputs/runs/<run_id>/recommendations/enriched.parquet
 ```
 
-Открыть detailed parquet, если enriched-файл не был собран:
+Открыть detailed-рекомендации:
 
-```bash
-uv run streamlit run apps/demo/app.py -- \
-  --detailed-path outputs/runs/<run_id>/recommendations/detailed.parquet
+```powershell
+uv run streamlit run apps/demo/app.py -- ^
+--detailed-path outputs/runs/<run_id>/recommendations/detailed.parquet
 ```
 
-Ограничить число рекомендаций в таблице выбранного товара:
+Ограничить количество показываемых рекомендаций:
 
-```bash
-uv run streamlit run apps/demo/app.py -- \
-  --manifest-path outputs/latest/manifest.json \
-  --top-k 20
+```powershell
+uv run streamlit run apps/demo/app.py -- ^
+--manifest-path outputs/latest/manifest.json ^
+--top-k 20
 ```
 
-Приоритет источников такой: `--enriched-path`, затем `--manifest-path`, затем
-`--detailed-path`.
+`--enriched-path` имеет приоритет над `--manifest-path`. Если передан только manifest, приложение сначала ищет
+`enriched.parquet`, затем использует `detailed.parquet`.
 
-## Интерфейс
+## Ожидаемые артефакты
 
-В правом верхнем углу есть переключатель языка `EN/RU`. По умолчанию выбран
-английский язык, чтобы демо сразу выглядело нейтрально для защиты; русский
-перевод покрывает вкладки, подписи таблиц, подсказки и объяснения источников.
-
-Основные вкладки:
-
-- `Similar items`: поиск по `item_id` или названию, случайный товар, карточка
-  выбранного товара и таблица похожих товаров.
-- `Run summary`: параметры run-а, пути к artifacts, число строк по этапам и
-  demo/evaluation metrics.
-- `Graph view`: обзорный граф рекомендаций, ego-граф выбранного товара,
-  фильтры источников, лимиты, режим подписей и тема.
-- `About`: короткое объяснение behavioral и fallback сигналов.
-
-Карточка выбранного товара показывает название крупно, а `item_id` вторичным
-текстом. Таблица рекомендаций использует человекочитаемые названия колонок и
-объясняет источник каждой рекомендации.
-
-## Входные данные
-
-Лучший вариант для демо:
+Основной вариант:
 
 ```text
 outputs/runs/<run_id>/recommendations/enriched.parquet
@@ -84,61 +73,49 @@ score
 source
 ```
 
-Если `enriched.parquet` отсутствует, можно открыть `detailed.parquet`. В этом
-режиме рекомендации будут работать, но названия товаров могут быть пустыми.
-
-## Граф
-
-Вкладка `Graph view` ищет готовый HTML в таком порядке:
+Если `enriched.parquet` отсутствует, можно использовать:
 
 ```text
-outputs/runs/<run_id>/demo/gephi/index.html
-outputs/runs/<run_id>/demo/graph/ego/item_id=<item_id>/ego_graph.html
-outputs/runs/<run_id>/demo/graph/recommendations_graph.html
-outputs/runs/<run_id>/demo/graph.html
-apps/demo/assets/graph/index.html
+outputs/runs/<run_id>/recommendations/detailed.parquet
 ```
 
-Если существует polished Gephi/Sigma export, приложение покажет его первым.
-Если HTML нет, нажмите `Build graph`: Streamlit вызовет общий exporter из
-`ozon_similar_products.visualization.recommendation_graph`.
+В этом случае названия товаров будут показаны как `None`.
 
-Обзорный граф сохраняется здесь:
+## Вкладки
+
+- `Похожие товары` / `Similar items`: поиск, случайный товар, карточка выбранного товара и таблица похожих товаров.
+- `Сводка запуска` / `Run summary`: параметры запуска, пути к артефактам, строки по этапам pipeline и метрики, если они
+  есть.
+- `О демо` / `About`: краткое описание логики рекомендаций и источников.
+
+## Язык интерфейса
+
+В верхней части страницы есть переключатель `EN / RU`. Он меняет основные подписи, объяснения источников и названия
+колонок.
+
+## Возможные проблемы
+
+### `ModuleNotFoundError: No module named 'apps'`
+
+Запускайте приложение из корня репозитория:
+
+```bash
+uv run streamlit run apps/demo/app.py
+```
+
+Также проверьте, что в ветке есть файлы:
 
 ```text
-outputs/runs/<run_id>/demo/graph/
-  recommendations_graph.html
-  recommendations_graph.json
-  recommendations_graph.gexf
-  manifest.json
+apps/__init__.py
+apps/demo/__init__.py
 ```
 
-Ego-граф выбранного товара создаётся по требованию:
+### Не найден `outputs/latest/manifest.json`
 
-```text
-outputs/runs/<run_id>/demo/graph/ego/item_id=<item_id>/
-  ego_graph.html
-  ego_graph.json
-  ego_graph.gexf
-  manifest.json
+Сначала постройте рекомендации:
+
+```bash
+uv run ozon-run-full 2024-04-23 --lookback-days 1 --validation-days 1 --top-k 20 --config-path configs/production.yaml
 ```
 
-В HTML-графе доступны zoom колесом, pan мышью, reset view, поиск, tooltip по
-узлу, подсветка соседей и переключение подписей. Значение `All` для
-`max_edges` или `max_nodes` означает отсутствие соответствующего лимита; на
-больших графах браузер может работать медленнее.
-
-## Gephi
-
-Gephi не обязателен, но полезен для финальной ручной доводки:
-
-1. Запустите production/full pipeline.
-2. Откройте `outputs/runs/<run_id>/demo/graph/recommendations_graph.gexf`.
-3. Примените ForceAtlas2 или похожий layout, включите prevent overlap.
-4. Размер узлов задайте по `degree` или `recommendation_count`.
-5. Толщину рёбер задайте по `score`, цвет рёбер по `source_group`.
-6. Экспортируйте интерактивный HTML через Gephi/Sigma plugin.
-7. Положите export в `outputs/runs/<run_id>/demo/gephi/index.html`.
-8. Обновите вкладку `Graph view`.
-
-Автоматические HTML/JSON/GEXF artifacts достаточны для работы демо без Gephi.
+Или передайте конкретный parquet-файл через `--enriched-path`.
