@@ -252,9 +252,7 @@ def source_explanation(source: str | None, language: str = "EN") -> str:
     return explanations.get(source or "", explanations["unknown"])
 
 
-def recommendation_column_names(
-    language: str = "EN",
-) -> dict[Any, Any] | dict[str, Any] | dict[str, str] | dict[bytes, bytes]:
+def recommendation_column_names(language: str = "EN"):
     """Return localized display names for recommendation table columns."""
 
     return dict(get_texts(language)["recommendation_columns"])

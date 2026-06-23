@@ -486,11 +486,11 @@ def _format_int_like(value: Any) -> str:
 
 
 def _recommendation_table_height(row_count: int) -> int:
-    return 640 if row_count >= RECOMMENDATION_TABLE_ROWS else _compact_table_height(row_count)
+    return 737 if row_count >= RECOMMENDATION_TABLE_ROWS else _compact_table_height(row_count)
 
 
 def _compact_table_height(row_count: int) -> int:
-    return min(380, max(112, 32 * row_count + 40))
+    return min(380, max(112, 39 * row_count + 5))
 
 
 def _escape(value: str) -> str:
